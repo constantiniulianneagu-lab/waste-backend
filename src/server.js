@@ -3,11 +3,12 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
+import userRoutes from './routes/users.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS - permite toate origin-urile
+// CORS
 app.use(cors({
   origin: true,
   credentials: true,
@@ -20,7 +21,7 @@ app.use(express.json());
 
 // Logging middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);  // ← FIXAT
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
   next();
 });
 
@@ -40,16 +41,18 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       health: '/health',
-      auth: '/api/auth/*'
+      auth: '/api/auth/*',
+      users: '/api/users/*'  // ← ADAUGĂ
     }
   });
 });
 
-// Debug - verify routes are loaded
-console.log('📍 Mounting auth routes at /api/auth');
-
 // API Routes
+console.log('📍 Mounting auth routes at /api/auth');
 app.use('/api/auth', authRoutes);
+
+console.log('📍 Mounting user routes at /api/users');  // ← ADAUGĂ
+app.use('/api/users', userRoutes);  // ← ADAUGĂ
 
 // Debug - list all routes
 console.log('📋 Registered routes:');
@@ -58,9 +61,6 @@ app._router.stack.forEach((middleware) => {
     console.log(`  ${Object.keys(middleware.route.methods)} ${middleware.route.path}`);
   }
 });
-
-// API Routes
-app.use('/api/auth', authRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -81,7 +81,7 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);  // ← FIXAT
-  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);  // ← FIXAT
-  console.log(`🌐 Health check: http://localhost:${PORT}/health`);  // ← FIXAT
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🌐 Health check: http://localhost:${PORT}/health`);
 });
