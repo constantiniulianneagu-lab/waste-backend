@@ -25,13 +25,18 @@ export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    console.log('🔐 Login attempt:', { email, password: '***' });
+
     // Validare input
     if (!email || !password) {
+      console.log('❌ Missing email or password');
       return res.status(400).json({
         success: false,
         message: 'Email și parola sunt obligatorii'
       });
     }
+
+    console.log('🔍 Searching for user in database...');
 
     // Găsește user în DB
     const result = await pool.query(
@@ -39,7 +44,13 @@ export const login = async (req, res) => {
       [email.toLowerCase()]
     );
 
+    console.log('📊 Database query result:', {
+      rowCount: result.rows.length,
+      userFound: result.rows.length > 0
+    });
+
     if (result.rows.length === 0) {
+      console.log('❌ User not found with email:', email);
       return res.status(401).json({
         success: false,
         message: 'Email sau parolă greșită'
@@ -47,24 +58,41 @@ export const login = async (req, res) => {
     }
 
     const user = result.rows[0];
+    console.log('✅ User found:', {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      is_active: user.is_active,
+      hash_preview: user.password_hash?.substring(0, 20)
+    });
 
     // Verifică dacă user e activ
     if (!user.is_active) {
+      console.log('❌ User is not active');
       return res.status(403).json({
         success: false,
         message: 'Contul este dezactivat. Contactați administratorul.'
       });
     }
 
+    console.log('🔒 Comparing passwords...');
+    console.log('  Password from request:', password);
+    console.log('  Hash from database:', user.password_hash?.substring(0, 30));
+
     // Verifică parola
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
+    console.log('🔑 Password comparison result:', isPasswordValid);
+
     if (!isPasswordValid) {
+      console.log('❌ Password does not match');
       return res.status(401).json({
         success: false,
         message: 'Email sau parolă greșită'
       });
     }
+
+    console.log('✅ Password matches! Generating tokens...');
 
     // Generează tokens
     const { accessToken, refreshToken } = generateTokens(
@@ -79,6 +107,8 @@ export const login = async (req, res) => {
        VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
       [user.id, refreshToken]
     );
+
+    console.log('🎉 Login successful for user:', user.email);
 
     // Returnează user info + tokens
     res.json({
@@ -98,7 +128,7 @@ export const login = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('💥 Login error:', error);
     res.status(500).json({
       success: false,
       message: 'Eroare la autentificare'
