@@ -20,7 +20,7 @@ app.use(express.json());
 
 // Logging middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);  // ← FIXAT
   next();
 });
 
@@ -67,7 +67,7 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🌐 Health check: http://localhost:${PORT}/health`);
+  console.log(`🚀 Server running on port ${PORT}`);  // ← FIXAT
+  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);  // ← FIXAT
+  console.log(`🌐 Health check: http://localhost:${PORT}/health`);  // ← FIXAT
 });
