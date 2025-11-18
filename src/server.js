@@ -8,7 +8,7 @@ import userRoutes from './routes/users.js';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS
+// CORS - permite toate origin-urile
 app.use(cors({
   origin: true,
   credentials: true,
@@ -42,7 +42,7 @@ app.get('/', (req, res) => {
     endpoints: {
       health: '/health',
       auth: '/api/auth/*',
-      users: '/api/users/*'  // ← ADAUGĂ
+      users: '/api/users/*'
     }
   });
 });
@@ -51,8 +51,8 @@ app.get('/', (req, res) => {
 console.log('📍 Mounting auth routes at /api/auth');
 app.use('/api/auth', authRoutes);
 
-console.log('📍 Mounting user routes at /api/users');  // ← ADAUGĂ
-app.use('/api/users', userRoutes);  // ← ADAUGĂ
+console.log('📍 Mounting user routes at /api/users');
+app.use('/api/users', userRoutes);
 
 // Debug - list all routes
 console.log('📋 Registered routes:');
