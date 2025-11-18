@@ -45,6 +45,20 @@ app.get('/', (req, res) => {
   });
 });
 
+// Debug - verify routes are loaded
+console.log('📍 Mounting auth routes at /api/auth');
+
+// API Routes
+app.use('/api/auth', authRoutes);
+
+// Debug - list all routes
+console.log('📋 Registered routes:');
+app._router.stack.forEach((middleware) => {
+  if (middleware.route) {
+    console.log(`  ${Object.keys(middleware.route.methods)} ${middleware.route.path}`);
+  }
+});
+
 // API Routes
 app.use('/api/auth', authRoutes);
 
