@@ -71,18 +71,3 @@ app.listen(PORT, () => {
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🌐 Health check: http://localhost:${PORT}/health`);
 });
-```
-
-**Salvează!**
-
----
-
-## **PASUL 6: TESTEAZĂ ÎN STACKBLITZ (5 min)**
-
-### **În StackBlitz:**
-
-1. **Preview-ul ar trebui să reload automat**
-2. **Verifică console-ul** (jos în StackBlitz) - ar trebui să vezi:
-```
-   🚀 Server running on port 3000
-   ✅ Connected to Supabase PostgreSQL
