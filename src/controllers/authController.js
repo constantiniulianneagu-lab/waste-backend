@@ -1,5 +1,5 @@
 // src/controllers/authController.js
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';  // ✅ Nou
 import jwt from 'jsonwebtoken';
 import pool from '../config/database.js';
 
