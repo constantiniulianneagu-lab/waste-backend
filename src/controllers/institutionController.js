@@ -1,0 +1,307 @@
+// src/controllers/institutionController.js
+import pool from '../config/database.js';
+
+// GET ALL INSTITUTIONS
+export const getAllInstitutions = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, type, sector, search } = req.query;
+    const offset = (page - 1) * limit;
+
+    let query = `
+      SELECT id, name, type, sector, contact_email, is_active, 
+             created_at, updated_at
+      FROM institutions 
+      WHERE deleted_at IS NULL
+    `;
+    const params = [];
+    let paramCount = 1;
+
+    // Filter by type
+    if (type) {
+      query += ` AND type = $${paramCount}`;
+      params.push(type);
+      paramCount++;
+    }
+
+    // Filter by sector
+    if (sector) {
+      query += ` AND sector = $${paramCount}`;
+      params.push(sector);
+      paramCount++;
+    }
+
+    // Search by name or email
+    if (search) {
+      query += ` AND (name ILIKE $${paramCount} OR contact_email ILIKE $${paramCount})`;
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    // Get total count
+    const countResult = await pool.query(
+      query.replace('SELECT id, name, type, sector, contact_email, is_active, created_at, updated_at', 'SELECT COUNT(*)'),
+      params
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    // Add pagination
+    query += ` ORDER BY created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    params.push(limit, offset);
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      data: {
+        institutions: result.rows,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(total / limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get institutions error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la obținerea instituțiilor'
+    });
+  }
+};
+
+// GET SINGLE INSTITUTION
+export const getInstitutionById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `SELECT id, name, type, sector, contact_email, is_active, 
+              created_at, updated_at
+       FROM institutions 
+       WHERE id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instituție negăsită'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Get institution error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la obținerea instituției'
+    });
+  }
+};
+
+// CREATE INSTITUTION
+export const createInstitution = async (req, res) => {
+  try {
+    const { name, type, sector, contactEmail } = req.body;
+
+    // Validare
+    if (!name || !type || !sector || !contactEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'Toate câmpurile sunt obligatorii'
+      });
+    }
+
+    // Verifică dacă numele există
+    const existingInstitution = await pool.query(
+      'SELECT id FROM institutions WHERE name = $1 AND deleted_at IS NULL',
+      [name]
+    );
+
+    if (existingInstitution.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'O instituție cu acest nume există deja'
+      });
+    }
+
+    // Inserează instituție
+    const result = await pool.query(
+      `INSERT INTO institutions (name, type, sector, contact_email, is_active)
+       VALUES ($1, $2, $3, $4, true)
+       RETURNING id, name, type, sector, contact_email, is_active, created_at`,
+      [name, type, sector, contactEmail.toLowerCase()]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Instituție creată cu succes',
+      data: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Create institution error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la crearea instituției'
+    });
+  }
+};
+
+// UPDATE INSTITUTION
+export const updateInstitution = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, type, sector, contactEmail, isActive } = req.body;
+
+    // Verifică dacă instituția există
+    const existingInstitution = await pool.query(
+      'SELECT id FROM institutions WHERE id = $1 AND deleted_at IS NULL',
+      [id]
+    );
+
+    if (existingInstitution.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instituție negăsită'
+      });
+    }
+
+    // Verifică dacă noul nume e deja folosit
+    if (name) {
+      const nameCheck = await pool.query(
+        'SELECT id FROM institutions WHERE name = $1 AND id != $2 AND deleted_at IS NULL',
+        [name, id]
+      );
+
+      if (nameCheck.rows.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'O instituție cu acest nume există deja'
+        });
+      }
+    }
+
+    // Construiește query dinamic
+    const updates = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (name) {
+      updates.push(`name = $${paramCount}`);
+      params.push(name);
+      paramCount++;
+    }
+    if (type) {
+      updates.push(`type = $${paramCount}`);
+      params.push(type);
+      paramCount++;
+    }
+    if (sector) {
+      updates.push(`sector = $${paramCount}`);
+      params.push(sector);
+      paramCount++;
+    }
+    if (contactEmail) {
+      updates.push(`contact_email = $${paramCount}`);
+      params.push(contactEmail.toLowerCase());
+      paramCount++;
+    }
+    if (isActive !== undefined) {
+      updates.push(`is_active = $${paramCount}`);
+      params.push(isActive);
+      paramCount++;
+    }
+
+    updates.push(`updated_at = NOW()`);
+    params.push(id);
+
+    const query = `
+      UPDATE institutions 
+      SET ${updates.join(', ')}
+      WHERE id = $${paramCount}
+      RETURNING id, name, type, sector, contact_email, is_active, updated_at
+    `;
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      message: 'Instituție actualizată cu succes',
+      data: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Update institution error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la actualizarea instituției'
+    });
+  }
+};
+
+// DELETE INSTITUTION (soft delete)
+export const deleteInstitution = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verifică dacă instituția există
+    const existingInstitution = await pool.query(
+      'SELECT id FROM institutions WHERE id = $1 AND deleted_at IS NULL',
+      [id]
+    );
+
+    if (existingInstitution.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instituție negăsită'
+      });
+    }
+
+    // Soft delete
+    await pool.query(
+      'UPDATE institutions SET deleted_at = NOW() WHERE id = $1',
+      [id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Instituție ștearsă cu succes'
+    });
+  } catch (error) {
+    console.error('Delete institution error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la ștergerea instituției'
+    });
+  }
+};
+
+// GET INSTITUTION STATISTICS
+export const getInstitutionStats = async (req, res) => {
+  try {
+    const stats = await pool.query(`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE is_active = true) as active,
+        COUNT(*) FILTER (WHERE type = 'MUNICIPALITY') as municipalities,
+        COUNT(*) FILTER (WHERE type = 'WASTE_OPERATOR') as operators
+      FROM institutions
+      WHERE deleted_at IS NULL
+    `);
+
+    res.json({
+      success: true,
+      data: stats.rows[0]
+    });
+  } catch (error) {
+    console.error('Get stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la obținerea statisticilor'
+    });
+  }
+};

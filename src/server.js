@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
+import institutionRoutes from './routes/institutions.js';  // ← Adaugă import
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -42,7 +43,8 @@ app.get('/', (req, res) => {
     endpoints: {
       health: '/health',
       auth: '/api/auth/*',
-      users: '/api/users/*'
+      users: '/api/users/*',
+      institutions: '/api/institutions/*'  // ← Adaugă
     }
   });
 });
@@ -53,6 +55,9 @@ app.use('/api/auth', authRoutes);
 
 console.log('📍 Mounting user routes at /api/users');
 app.use('/api/users', userRoutes);
+
+console.log('📍 Mounting institution routes at /api/institutions');
+app.use('/api/institutions', institutionRoutes);
 
 // Debug - list all routes
 console.log('📋 Registered routes:');
