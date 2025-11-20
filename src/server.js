@@ -5,6 +5,8 @@ import cors from 'cors';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import institutionRoutes from './routes/institutions.js';  // ← Adaugă import
+import tmbTicketRoutes from './routes/tickets/tmb.js';
+import recyclingTicketRoutes from './routes/tickets/recycling.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -64,6 +66,12 @@ app.use('/api/users', userRoutes);
 
 console.log('📍 Mounting institution routes at /api/institutions');
 app.use('/api/institutions', institutionRoutes);
+
+console.log('📍 Mounting TMB ticket routes at /api/tickets/tmb');
+app.use('/api/tickets/tmb', tmbTicketRoutes);
+
+console.log('📍 Mounting recycling ticket routes at /api/tickets/recycling');
+app.use('/api/tickets/recycling', recyclingTicketRoutes);
 
 // Debug - list all routes
 console.log('📋 Registered routes:');
