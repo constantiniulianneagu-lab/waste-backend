@@ -15,14 +15,18 @@ const router = express.Router();
 // Toate route-urile necesită autentificare
 router.use(authenticateToken);
 
-// GET - orice user autentificat poate vedea
+// GET routes
 router.get('/', getAllUsers);
 router.get('/stats', getUserStats);
 router.get('/:id', getUserById);
 
-// POST/PUT/DELETE - doar PLATFORM_ADMIN
-router.post('/', authorizeRoles('PLATFORM_ADMIN'), createUser);
-router.put('/:id', authorizeRoles('PLATFORM_ADMIN'), updateUser);
-router.delete('/:id', authorizeRoles('PLATFORM_ADMIN'), deleteUser);
+// POST routes
+router.post('/', createUser);
+
+// PUT routes
+router.put('/:id', updateUser);
+
+// DELETE routes
+router.delete('/:id', deleteUser);
 
 export default router;
