@@ -9,11 +9,13 @@ import institutionRoutes from './routes/institutions.js';  // ← Adaugă import
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS - permite toate origin-urile
+// CORS - permite origin-uri specifice
 app.use(cors({
   origin: [
     'http://localhost:5173',
-    'https://waste-frontend-3bqgv76n0.vercel.app'  // ← ADAUGĂ URL-ul tău Vercel AICI!
+    'https://waste-frontend-3bqgv76n0.vercel.app',
+    /\.webcontainer\.io$/,  // ✅ Permite toate subdomeniile .webcontainer.io
+    /\.local-credentialless\.webcontainer\.io$/  // ✅ Specific pentru local credentialless
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
