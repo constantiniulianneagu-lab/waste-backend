@@ -8,7 +8,7 @@ import {
   deleteUser,
   getUserStats
 } from '../controllers/userController.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -16,17 +16,25 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // GET routes
-router.get('/', getAllUsers);
-router.get('/stats', getUserStats);
-router.get('/:id', getUserById);
+// Doar PLATFORM_ADMIN poate vedea lista de users
+router.get('/', authorizeRoles('PLATFORM_ADMIN'), getAllUsers);
+
+// Doar PLATFORM_ADMIN poate vedea stats
+router.get('/stats', authorizeRoles('PLATFORM_ADMIN'), getUserStats);
+
+// Doar PLATFORM_ADMIN poate vedea detalii user
+router.get('/:id', authorizeRoles('PLATFORM_ADMIN'), getUserById);
 
 // POST routes
-router.post('/', createUser);
+// Doar PLATFORM_ADMIN poate crea users
+router.post('/', authorizeRoles('PLATFORM_ADMIN'), createUser);
 
 // PUT routes
-router.put('/:id', updateUser);
+// Doar PLATFORM_ADMIN poate edita users
+router.put('/:id', authorizeRoles('PLATFORM_ADMIN'), updateUser);
 
 // DELETE routes
-router.delete('/:id', deleteUser);
+// Doar PLATFORM_ADMIN poate șterge users
+router.delete('/:id', authorizeRoles('PLATFORM_ADMIN'), deleteUser);
 
 export default router;
