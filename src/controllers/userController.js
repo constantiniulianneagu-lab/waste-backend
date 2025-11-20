@@ -36,8 +36,8 @@ export const getAllUsers = async (req, res) => {
       query.replace('SELECT id, email, first_name, last_name, role, is_active, created_at, updated_at', 'SELECT COUNT(*)'),
       params
     );
-    const total = parseInt(countResult.rows[0].count);
-
+    const total = parseInt(countResult.rows[0].count) || 0;
+    
     // Add pagination
     query += ` ORDER BY created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     params.push(limit, offset);
