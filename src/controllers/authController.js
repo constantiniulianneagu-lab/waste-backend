@@ -110,43 +110,22 @@ export const login = async (req, res) => {
 
     console.log('🎉 Login successful for user:', user.email);
 
-    console.log('📚 Fetching user institutions...');
-
-    // Găsește instituțiile userului
-    const institutionsResult = await pool.query(
-      `SELECT i.id, i.name, i.type, i.short_name, i.sector
-       FROM institutions i
-       JOIN user_institutions ui ON i.id = ui.institution_id
-       WHERE ui.user_id = $1 
-         AND ui.deleted_at IS NULL 
-         AND i.deleted_at IS NULL 
-         AND i.is_active = true
-       ORDER BY i.name`,
-      [user.id]
-    );
-    
-    console.log('✅ Found institutions:', institutionsResult.rows.length);
-    
-    // Returnează user info + tokens + institutions
-    res.json({
-      success: true,
-      message: 'Login successful',
-      data: {
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.first_name,
-          lastName: user.last_name,
-          role: user.role,
-          institutions: institutionsResult.rows
-        },
-        tokens: {
-          accessToken,
-          refreshToken,
-          expiresIn: '15m'
-        }
-      }
-    });
+  // Returnează user info + tokens
+res.json({
+  success: true,
+  message: 'Login successful',
+  data: {
+    user: {
+      id: user.id,
+      email: user.email,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      role: user.role
+    },
+    accessToken,
+    refreshToken
+  }
+});
 
   } catch (error) {
     console.error('💥 Login error:', error);
