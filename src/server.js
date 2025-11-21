@@ -5,7 +5,8 @@ import cors from 'cors';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import institutionRoutes from './routes/institutions.js';  // ← Adaugă import
-import tmbTicketRoutes from './routes/tickets/landfill.js';
+import landfillTicketRoutes from './routes/tickets/landfill.js';
+import tmbTicketRoutes from './routes/tickets/tmb.js';
 import recyclingTicketRoutes from './routes/tickets/recycling.js';
 
 const app = express();
@@ -66,6 +67,9 @@ app.use('/api/users', userRoutes);
 
 console.log('📍 Mounting institution routes at /api/institutions');
 app.use('/api/institutions', institutionRoutes);
+
+console.log('📍 Mounting landfill ticket routes at /api/tickets/landfill');
+app.use('/api/tickets/landfill', landfillTicketRoutes);
 
 console.log('📍 Mounting TMB ticket routes at /api/tickets/tmb');
 app.use('/api/tickets/tmb', tmbTicketRoutes);
