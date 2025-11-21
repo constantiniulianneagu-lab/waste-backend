@@ -11,6 +11,8 @@ import recyclingTicketRoutes from './routes/tickets/recycling.js';
 import recoveryTicketRoutes from './routes/tickets/recovery.js';
 import disposalTicketRoutes from './routes/tickets/disposal.js';
 import rejectedTicketRoutes from './routes/tickets/rejected.js';
+// Dashboard Routes
+import dashboardLandfillRoutes from './routes/dashboard/landfill.js'; // 🆕 NOU
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -88,6 +90,10 @@ app.use('/api/tickets/disposal', disposalTicketRoutes);
 
 console.log('📍 Mounting rejected ticket routes at /api/tickets/rejected');
 app.use('/api/tickets/rejected', rejectedTicketRoutes); 
+
+// Dashboard Routes
+console.log('📍 Mounting dashboard landfill routes at /api/dashboard/landfill');
+app.use('/api/dashboard/landfill', dashboardLandfillRoutes);
 
 // Debug - list all routes
 console.log('📋 Registered routes:');
