@@ -190,40 +190,40 @@ export const getStats = async (req, res) => {
     const categoriesQuery = `
       SELECT 
         CASE 
-          WHEN wc.waste_code = '20 03 01' THEN '20 03 01'
-          WHEN wc.waste_code = '20 03 03' THEN '20 03 03'
-          WHEN wc.waste_code LIKE '19%' THEN '19 * *'
-          WHEN wc.waste_code = '17 09 04' THEN '17 09 04'
+          WHEN wc.code = '20 03 01' THEN '20 03 01'
+          WHEN wc.code = '20 03 03' THEN '20 03 03'
+          WHEN wc.code LIKE '19%' THEN '19 * *'
+          WHEN wc.code = '17 09 04' THEN '17 09 04'
           ELSE 'ALTELE'
         END as category,
         CASE 
-          WHEN wc.waste_code = '20 03 01' THEN 'Deșeuri municipale'
-          WHEN wc.waste_code = '20 03 03' THEN 'Reziduuri străzi'
-          WHEN wc.waste_code LIKE '19%' THEN 'Deșeuri de sortare'
-          WHEN wc.waste_code = '17 09 04' THEN 'Construcții'
+          WHEN wc.code = '20 03 01' THEN 'Deșeuri municipale'
+          WHEN wc.code = '20 03 03' THEN 'Reziduuri străzi'
+          WHEN wc.code LIKE '19%' THEN 'Deșeuri de sortare'
+          WHEN wc.code = '17 09 04' THEN 'Construcții'
           ELSE 'Altele'
         END as description,
         COUNT(*) as ticket_count,
         COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
       FROM waste_tickets_landfill wtl
-      JOIN waste_codes wc ON wtl.waste_code = wc.waste_code
+      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
       WHERE wtl.deleted_at IS NULL
         AND wtl.ticket_date >= $1
         AND wtl.ticket_date <= $2
         ${sectorFilter}
       GROUP BY 
         CASE 
-          WHEN wc.waste_code = '20 03 01' THEN '20 03 01'
-          WHEN wc.waste_code = '20 03 03' THEN '20 03 03'
-          WHEN wc.waste_code LIKE '19%' THEN '19 * *'
-          WHEN wc.waste_code = '17 09 04' THEN '17 09 04'
+          WHEN wc.code = '20 03 01' THEN '20 03 01'
+          WHEN wc.code = '20 03 03' THEN '20 03 03'
+          WHEN wc.code LIKE '19%' THEN '19 * *'
+          WHEN wc.code = '17 09 04' THEN '17 09 04'
           ELSE 'ALTELE'
         END,
         CASE 
-          WHEN wc.waste_code = '20 03 01' THEN 'Deșeuri municipale'
-          WHEN wc.waste_code = '20 03 03' THEN 'Reziduuri străzi'
-          WHEN wc.waste_code LIKE '19%' THEN 'Deșeuri de sortare'
-          WHEN wc.waste_code = '17 09 04' THEN 'Construcții'
+          WHEN wc.code = '20 03 01' THEN 'Deșeuri municipale'
+          WHEN wc.code = '20 03 03' THEN 'Reziduuri străzi'
+          WHEN wc.code LIKE '19%' THEN 'Deșeuri de sortare'
+          WHEN wc.code = '17 09 04' THEN 'Construcții'
           ELSE 'Altele'
         END
       ORDER BY total_tons DESC
@@ -249,7 +249,8 @@ export const getStats = async (req, res) => {
     const perSectorQuery = `
       SELECT 
         s.id as sector_id,
-        s.name as sector_name,
+        s.sector_name,
+        s.sector_number,
         COUNT(*) as ticket_count,
         COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
       FROM waste_tickets_landfill wtl
@@ -258,7 +259,7 @@ export const getStats = async (req, res) => {
         AND wtl.ticket_date >= $1
         AND wtl.ticket_date <= $2
         ${sectorFilter}
-      GROUP BY s.id, s.name
+      GROUP BY s.id, s.sector_name, s.sector_number
       ORDER BY s.id
     `;
 
@@ -302,8 +303,8 @@ export const getStats = async (req, res) => {
         ? parseFloat((((currentTons - prevYearTons) / prevYearTons) * 100).toFixed(1))
         : 0;
 
-      // Extract sector number from sector name (ex: "Sector 1" -> 1)
-      const sectorNumber = parseInt(row.sector_name.replace(/\D/g, '')) || row.sector_id;
+      // Use sector_number directly from database
+      const sectorNumber = row.sector_number || row.sector_id;
 
       return {
         sector_id: row.sector_id,
@@ -406,11 +407,12 @@ export const getStats = async (req, res) => {
         i.id as institution_id,
         i.name as institution_name,
         ARRAY_AGG(DISTINCT s.id ORDER BY s.id) as sector_ids,
-        ARRAY_AGG(DISTINCT s.name ORDER BY s.id) as sector_names,
+        ARRAY_AGG(DISTINCT s.sector_name ORDER BY s.id) as sector_names,
+        ARRAY_AGG(DISTINCT s.sector_number ORDER BY s.id) as sector_numbers,
         COUNT(*) as ticket_count,
         COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
       FROM waste_tickets_landfill wtl
-      JOIN institutions i ON wtl.supplier_institution_id = i.id
+      JOIN institutions i ON wtl.supplier_id = i.id
       JOIN sectors s ON wtl.sector_id = s.id
       WHERE wtl.deleted_at IS NULL
         AND wtl.ticket_date >= $1
@@ -424,10 +426,7 @@ export const getStats = async (req, res) => {
 
     const topOperators = operatorsResult.rows.map(row => {
       const sectorIds = row.sector_ids || [];
-      const sectorNumbers = sectorIds.map(id => {
-        const sectorName = row.sector_names[sectorIds.indexOf(id)] || '';
-        return parseInt(sectorName.replace(/\D/g, '')) || id;
-      });
+      const sectorNumbers = row.sector_numbers || sectorIds; // Use sector_numbers from DB
 
       const currentTons = parseFloat(row.total_tons);
 
@@ -458,13 +457,14 @@ export const getStats = async (req, res) => {
         wtl.net_weight_tons,
         wtl.created_at,
         i.name as supplier_name,
-        wc.waste_code,
+        wc.code as waste_code,
         wc.description as waste_description,
         s.id as sector_id,
-        s.name as sector_name
+        s.sector_name,
+        s.sector_number
       FROM waste_tickets_landfill wtl
-      JOIN institutions i ON wtl.supplier_institution_id = i.id
-      JOIN waste_codes wc ON wtl.waste_code = wc.waste_code
+      JOIN institutions i ON wtl.supplier_id = i.id
+      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
       JOIN sectors s ON wtl.sector_id = s.id
       WHERE wtl.deleted_at IS NULL
         AND wtl.ticket_date >= $1
@@ -477,7 +477,7 @@ export const getStats = async (req, res) => {
     const recentTicketsResult = await db.query(recentTicketsQuery, baseParams);
 
     const recentTickets = recentTicketsResult.rows.map(row => {
-      const sectorNumber = parseInt(row.sector_name.replace(/\D/g, '')) || row.sector_id;
+      const sectorNumber = row.sector_number || row.sector_id;
 
       return {
         ticket_id: row.ticket_id,
