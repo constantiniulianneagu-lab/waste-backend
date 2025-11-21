@@ -8,6 +8,9 @@ import institutionRoutes from './routes/institutions.js';  // ← Adaugă import
 import landfillTicketRoutes from './routes/tickets/landfill.js';
 import tmbTicketRoutes from './routes/tickets/tmb.js';
 import recyclingTicketRoutes from './routes/tickets/recycling.js';
+import recoveryTicketRoutes from './routes/tickets/recovery.js';
+import disposalTicketRoutes from './routes/tickets/disposal.js';
+import rejectedTicketRoutes from './routes/tickets/rejected.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -76,6 +79,15 @@ app.use('/api/tickets/tmb', tmbTicketRoutes);
 
 console.log('📍 Mounting recycling ticket routes at /api/tickets/recycling');
 app.use('/api/tickets/recycling', recyclingTicketRoutes);
+
+console.log('📍 Mounting recovery ticket routes at /api/tickets/recovery');
+app.use('/api/tickets/recovery', recoveryTicketRoutes);
+
+console.log('📍 Mounting disposal ticket routes at /api/tickets/disposal');
+app.use('/api/tickets/disposal', disposalTicketRoutes);
+
+console.log('📍 Mounting rejected ticket routes at /api/tickets/rejected');
+app.use('/api/tickets/rejected', rejectedTicketRoutes); 
 
 // Debug - list all routes
 console.log('📋 Registered routes:');
