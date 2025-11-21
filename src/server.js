@@ -5,7 +5,7 @@ import cors from 'cors';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import institutionRoutes from './routes/institutions.js';  // ← Adaugă import
-import tmbTicketRoutes from './routes/tickets/tmb.js';
+import tmbTicketRoutes from './routes/tickets/landfill.js';
 import recyclingTicketRoutes from './routes/tickets/recycling.js';
 
 const app = express();
