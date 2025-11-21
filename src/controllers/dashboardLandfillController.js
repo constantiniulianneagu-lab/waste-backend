@@ -407,8 +407,8 @@ export const getStats = async (req, res) => {
         i.id as institution_id,
         i.name as institution_name,
         ARRAY_AGG(DISTINCT s.id ORDER BY s.id) as sector_ids,
-        ARRAY_AGG(DISTINCT s.sector_name ORDER BY s.id) as sector_names,
-        ARRAY_AGG(DISTINCT s.sector_number ORDER BY s.id) as sector_numbers,
+        ARRAY_AGG(DISTINCT s.sector_name ORDER BY s.sector_name) as sector_names,
+        ARRAY_AGG(DISTINCT s.sector_number ORDER BY s.sector_number) as sector_numbers,
         COUNT(*) as ticket_count,
         COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
       FROM waste_tickets_landfill wtl
