@@ -17,11 +17,12 @@ import dashboardLandfillRoutes from './routes/dashboard/landfill.js'; // 🆕 NO
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+
 // CORS - permite origin-uri specifice
 app.use(cors({
   origin: [
     'http://localhost:5173',
-    'https://waste-frontend-jcipdx758.vercel.app',
+    'https://waste-frontend-lp77kl82h.vercel.app',
     /\.webcontainer\.io$/,  // ✅ Permite toate subdomeniile .webcontainer.io
     /\.local-credentialless\.webcontainer\.io$/  // ✅ Specific pentru local credentialless
   ],
