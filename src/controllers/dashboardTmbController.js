@@ -268,54 +268,67 @@ export const getTmbStats = async (req, res) => {
       total: parseFloat(row.tmb_total || 0) + parseFloat(row.landfill_total || 0)
     }));
 
-    // ========================================================================
-    // 8. TOP OPERATORS (by TMB input)
-    // ========================================================================
-    const operatorsQuery = `
-      SELECT 
-        i.short_name as operator_name,
-        i.name as full_name,
-        s.sector_number,
-        COALESCE(SUM(tmb.accepted_quantity_tons), 0) as tmb_total,
-        COALESCE(SUM(landfill.net_weight_tons), 0) as landfill_total
-      FROM institutions i
-      LEFT JOIN waste_tickets_tmb tmb ON i.id = tmb.supplier_id 
-        AND tmb.${whereClause.replace('deleted_at', 'tmb.deleted_at')}
-        ${sector_id ? `AND tmb.sector_id = '${sector_id}'` : ''}
-        ${tmb_association_id ? `AND tmb.tmb_association_id = ${tmb_association_id}` : ''}
-      LEFT JOIN waste_tickets_landfill landfill ON i.id = landfill.supplier_id 
-        AND landfill.${whereClause.replace('deleted_at', 'landfill.deleted_at')}
-        ${wasteCode2003Id ? `AND landfill.waste_code_id = '${wasteCode2003Id}'` : ''}
-        ${sector_id ? `AND landfill.sector_id = '${sector_id}'` : ''}
-      LEFT JOIN sectors s ON s.sector_number::text = i.sector
-      WHERE i.type = 'WASTE_OPERATOR' 
-        AND i.is_active = true
-      GROUP BY i.id, i.short_name, i.name, s.sector_number
-      HAVING COALESCE(SUM(tmb.accepted_quantity_tons), 0) > 0 
-         OR COALESCE(SUM(landfill.net_weight_tons), 0) > 0
-      ORDER BY tmb_total DESC, landfill_total DESC
-      LIMIT 10
-    `;
+   // ========================================================================
+// 8. TOP OPERATORS (by TMB input)
+// ========================================================================
+const operatorsQuery = `
+SELECT 
+  i.short_name as operator_name,
+  i.name as full_name,
+  s.sector_number,
+  COALESCE(tmb_data.total, 0) as tmb_total,
+  COALESCE(landfill_data.total, 0) as landfill_total
+FROM institutions i
+LEFT JOIN (
+  SELECT 
+    supplier_id,
+    SUM(accepted_quantity_tons) as total
+  FROM waste_tickets_tmb
+  WHERE deleted_at IS NULL
+    ${start_date ? `AND ticket_date >= '${start_date}'` : ''}
+    ${end_date ? `AND ticket_date <= '${end_date}'` : ''}
+    ${sector_id ? `AND sector_id = '${sector_id}'` : ''}
+    ${tmb_association_id ? `AND tmb_association_id = ${tmb_association_id}` : ''}
+  GROUP BY supplier_id
+) tmb_data ON i.id = tmb_data.supplier_id
+LEFT JOIN (
+  SELECT 
+    supplier_id,
+    SUM(net_weight_tons) as total
+  FROM waste_tickets_landfill
+  WHERE deleted_at IS NULL
+    ${start_date ? `AND ticket_date >= '${start_date}'` : ''}
+    ${end_date ? `AND ticket_date <= '${end_date}'` : ''}
+    ${wasteCode2003Id ? `AND waste_code_id = '${wasteCode2003Id}'` : ''}
+    ${sector_id ? `AND sector_id = '${sector_id}'` : ''}
+  GROUP BY supplier_id
+) landfill_data ON i.id = landfill_data.supplier_id
+LEFT JOIN sectors s ON s.sector_number::text = i.sector
+WHERE i.type = 'WASTE_OPERATOR' 
+  AND i.is_active = true
+  AND (COALESCE(tmb_data.total, 0) > 0 OR COALESCE(landfill_data.total, 0) > 0)
+ORDER BY tmb_total DESC, landfill_total DESC
+LIMIT 10
+`;
 
-    const operatorsResult = await pool.query(operatorsQuery, queryParams);
-    const topOperators = operatorsResult.rows.map(row => ({
-      sector: row.sector_number || 'N/A',
-      operator: row.operator_name || row.full_name,
-      tmb_tons: parseFloat(row.tmb_total) || 0,
-      landfill_tons: parseFloat(row.landfill_total) || 0,
-      total_tons: (parseFloat(row.tmb_total) || 0) + (parseFloat(row.landfill_total) || 0),
-      tmb_percent: 0,
-      landfill_percent: 0
-    }));
+const operatorsResult = await pool.query(operatorsQuery);
+const topOperators = operatorsResult.rows.map(row => ({
+sector: row.sector_number || 'N/A',
+operator: row.operator_name || row.full_name,
+tmb_tons: parseFloat(row.tmb_total) || 0,
+landfill_tons: parseFloat(row.landfill_total) || 0,
+total_tons: (parseFloat(row.tmb_total) || 0) + (parseFloat(row.landfill_total) || 0),
+tmb_percent: 0,
+landfill_percent: 0
+}));
 
-    // Calculate percentages for operators
-    topOperators.forEach(op => {
-      if (op.total_tons > 0) {
-        op.tmb_percent = parseFloat(((op.tmb_tons / op.total_tons) * 100).toFixed(2));
-        op.landfill_percent = parseFloat(((op.landfill_tons / op.total_tons) * 100).toFixed(2));
-      }
-    });
-
+// Calculate percentages for operators
+topOperators.forEach(op => {
+if (op.total_tons > 0) {
+  op.tmb_percent = parseFloat(((op.tmb_tons / op.total_tons) * 100).toFixed(2));
+  op.landfill_percent = parseFloat(((op.landfill_tons / op.total_tons) * 100).toFixed(2));
+}
+});
     // ========================================================================
     // FINAL RESPONSE
     // ========================================================================
