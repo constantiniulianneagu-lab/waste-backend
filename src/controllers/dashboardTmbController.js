@@ -1,34 +1,24 @@
 // ============================================================================
-// TMB DASHBOARD CONTROLLER
+// TMB DASHBOARD CONTROLLER - FIXED FOR SECTOR_NUMBER
 // ============================================================================
-// Handles statistics and analytics for TMB (Mechanical-Biological Treatment)
-// 
-// BUSINESS LOGIC:
-// - Total Collected = Landfill direct (20 03 01) + TMB Input
-// - TMB Net = TMB Input - Rejected
-// - Output = Recycling + Recovery + Disposal (all SENT quantities)
-// - Stock/Difference = TMB Net - Total Output Sent
+// Now accepts sector_number (1-6) instead of sector_id (UUID)
 // ============================================================================
 
 import pool from '../config/database.js';
 
 /**
  * GET /api/dashboard/tmb/stats
- * Returns comprehensive TMB statistics including:
- * - Input metrics (collected, to TMB, rejected)
- * - Output metrics (recycling, recovery, disposal - sent & accepted)
- * - Acceptance rates for each output stream
- * - Stock/difference calculation
- * - Monthly trends
- * - Per sector breakdown
- * - Top operators
+ * Query params:
+ * - start_date: YYYY-MM-DD
+ * - end_date: YYYY-MM-DD
+ * - sector_id: 1-6 (sector_number, NOT UUID)
  */
 export const getTmbStats = async (req, res) => {
   try {
     const { 
       start_date, 
       end_date, 
-      sector_id,
+      sector_id, // This is actually sector_number (1-6)
       tmb_association_id 
     } = req.query;
 
@@ -50,6 +40,21 @@ export const getTmbStats = async (req, res) => {
     }
 
     const whereClause = whereConditions.join(' AND ');
+
+    // Get sector UUID if sector_number is provided
+    let sectorUuid = null;
+    if (sector_id) {
+      const sectorQuery = await pool.query(
+        `SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true`,
+        [parseInt(sector_id)]
+      );
+      if (sectorQuery.rows.length > 0) {
+        sectorUuid = sectorQuery.rows[0].id;
+        console.log(`✅ Sector ${sector_id} UUID: ${sectorUuid}`);
+      } else {
+        console.warn(`⚠️ Sector ${sector_id} not found`);
+      }
+    }
 
     // ========================================================================
     // 1. TOTAL COLLECTED (Landfill 20 03 01 + TMB Input)
@@ -73,8 +78,8 @@ export const getTmbStats = async (req, res) => {
       landfillQuery += ` AND waste_code_id = '${wasteCode2003Id}'`;
     }
 
-    if (sector_id) {
-      landfillQuery += ` AND sector_id = '${sector_id}'`;
+    if (sectorUuid) {
+      landfillQuery += ` AND sector_id = '${sectorUuid}'`;
     }
 
     const landfillResult = await pool.query(landfillQuery, queryParams);
@@ -88,8 +93,8 @@ export const getTmbStats = async (req, res) => {
       WHERE ${whereClause}
     `;
 
-    if (sector_id) {
-      tmbInputQuery += ` AND sector_id = '${sector_id}'`;
+    if (sectorUuid) {
+      tmbInputQuery += ` AND sector_id = '${sectorUuid}'`;
     }
 
     if (tmb_association_id) {
@@ -112,8 +117,8 @@ export const getTmbStats = async (req, res) => {
       WHERE ${whereClause}
     `;
 
-    if (sector_id) {
-      rejectedQuery += ` AND sector_id = '${sector_id}'`;
+    if (sectorUuid) {
+      rejectedQuery += ` AND sector_id = '${sectorUuid}'`;
     }
 
     if (tmb_association_id) {
@@ -140,8 +145,8 @@ export const getTmbStats = async (req, res) => {
         WHERE ${whereClause}
       `;
 
-      if (sector_id) {
-        query += ` AND sector_id = '${sector_id}'`;
+      if (sectorUuid) {
+        query += ` AND sector_id = '${sectorUuid}'`;
       }
 
       const result = await pool.query(query, queryParams);
@@ -184,7 +189,7 @@ export const getTmbStats = async (req, res) => {
           SUM(accepted_quantity_tons) as total_tons
         FROM waste_tickets_tmb
         WHERE ${whereClause}
-        ${sector_id ? `AND sector_id = '${sector_id}'` : ''}
+        ${sectorUuid ? `AND sector_id = '${sectorUuid}'` : ''}
         ${tmb_association_id ? `AND tmb_association_id = ${tmb_association_id}` : ''}
         GROUP BY DATE_TRUNC('month', ticket_date)
         
@@ -197,7 +202,7 @@ export const getTmbStats = async (req, res) => {
         FROM waste_tickets_landfill
         WHERE ${whereClause}
         ${wasteCode2003Id ? `AND waste_code_id = '${wasteCode2003Id}'` : ''}
-        ${sector_id ? `AND sector_id = '${sector_id}'` : ''}
+        ${sectorUuid ? `AND sector_id = '${sectorUuid}'` : ''}
         GROUP BY DATE_TRUNC('month', ticket_date)
       )
       SELECT 
@@ -256,6 +261,7 @@ export const getTmbStats = async (req, res) => {
         GROUP BY sector_id
       ) landfill ON s.id = landfill.sector_id
       WHERE s.is_active = true
+      ${sectorUuid ? `AND s.id = '${sectorUuid}'` : ''}
       ORDER BY s.sector_number
     `;
 
@@ -268,67 +274,68 @@ export const getTmbStats = async (req, res) => {
       total: parseFloat(row.tmb_total || 0) + parseFloat(row.landfill_total || 0)
     }));
 
-   // ========================================================================
-// 8. TOP OPERATORS (by TMB input)
-// ========================================================================
-const operatorsQuery = `
-SELECT 
-  i.short_name as operator_name,
-  i.name as full_name,
-  s.sector_number,
-  COALESCE(tmb_data.total, 0) as tmb_total,
-  COALESCE(landfill_data.total, 0) as landfill_total
-FROM institutions i
-LEFT JOIN (
-  SELECT 
-    supplier_id,
-    SUM(accepted_quantity_tons) as total
-  FROM waste_tickets_tmb
-  WHERE deleted_at IS NULL
-    ${start_date ? `AND ticket_date >= '${start_date}'` : ''}
-    ${end_date ? `AND ticket_date <= '${end_date}'` : ''}
-    ${sector_id ? `AND sector_id = '${sector_id}'` : ''}
-    ${tmb_association_id ? `AND tmb_association_id = ${tmb_association_id}` : ''}
-  GROUP BY supplier_id
-) tmb_data ON i.id = tmb_data.supplier_id
-LEFT JOIN (
-  SELECT 
-    supplier_id,
-    SUM(net_weight_tons) as total
-  FROM waste_tickets_landfill
-  WHERE deleted_at IS NULL
-    ${start_date ? `AND ticket_date >= '${start_date}'` : ''}
-    ${end_date ? `AND ticket_date <= '${end_date}'` : ''}
-    ${wasteCode2003Id ? `AND waste_code_id = '${wasteCode2003Id}'` : ''}
-    ${sector_id ? `AND sector_id = '${sector_id}'` : ''}
-  GROUP BY supplier_id
-) landfill_data ON i.id = landfill_data.supplier_id
-LEFT JOIN sectors s ON s.sector_number::text = i.sector
-WHERE i.type = 'WASTE_OPERATOR' 
-  AND i.is_active = true
-  AND (COALESCE(tmb_data.total, 0) > 0 OR COALESCE(landfill_data.total, 0) > 0)
-ORDER BY tmb_total DESC, landfill_total DESC
-LIMIT 10
-`;
+    // ========================================================================
+    // 8. TOP OPERATORS (by TMB input)
+    // ========================================================================
+    const operatorsQuery = `
+      SELECT 
+        i.short_name as operator_name,
+        i.name as full_name,
+        s.sector_number,
+        COALESCE(tmb_data.total, 0) as tmb_total,
+        COALESCE(landfill_data.total, 0) as landfill_total
+      FROM institutions i
+      LEFT JOIN (
+        SELECT 
+          supplier_id,
+          SUM(accepted_quantity_tons) as total
+        FROM waste_tickets_tmb
+        WHERE deleted_at IS NULL
+          ${start_date ? `AND ticket_date >= '${start_date}'` : ''}
+          ${end_date ? `AND ticket_date <= '${end_date}'` : ''}
+          ${sectorUuid ? `AND sector_id = '${sectorUuid}'` : ''}
+          ${tmb_association_id ? `AND tmb_association_id = ${tmb_association_id}` : ''}
+        GROUP BY supplier_id
+      ) tmb_data ON i.id = tmb_data.supplier_id
+      LEFT JOIN (
+        SELECT 
+          supplier_id,
+          SUM(net_weight_tons) as total
+        FROM waste_tickets_landfill
+        WHERE deleted_at IS NULL
+          ${start_date ? `AND ticket_date >= '${start_date}'` : ''}
+          ${end_date ? `AND ticket_date <= '${end_date}'` : ''}
+          ${wasteCode2003Id ? `AND waste_code_id = '${wasteCode2003Id}'` : ''}
+          ${sectorUuid ? `AND sector_id = '${sectorUuid}'` : ''}
+        GROUP BY supplier_id
+      ) landfill_data ON i.id = landfill_data.supplier_id
+      LEFT JOIN sectors s ON s.sector_number::text = i.sector
+      WHERE i.type = 'WASTE_OPERATOR' 
+        AND i.is_active = true
+        AND (COALESCE(tmb_data.total, 0) > 0 OR COALESCE(landfill_data.total, 0) > 0)
+      ORDER BY tmb_total DESC, landfill_total DESC
+      LIMIT 10
+    `;
 
-const operatorsResult = await pool.query(operatorsQuery);
-const topOperators = operatorsResult.rows.map(row => ({
-sector: row.sector_number || 'N/A',
-operator: row.operator_name || row.full_name,
-tmb_tons: parseFloat(row.tmb_total) || 0,
-landfill_tons: parseFloat(row.landfill_total) || 0,
-total_tons: (parseFloat(row.tmb_total) || 0) + (parseFloat(row.landfill_total) || 0),
-tmb_percent: 0,
-landfill_percent: 0
-}));
+    const operatorsResult = await pool.query(operatorsQuery);
+    const topOperators = operatorsResult.rows.map(row => ({
+      sector: row.sector_number || 'N/A',
+      operator: row.operator_name || row.full_name,
+      tmb_tons: parseFloat(row.tmb_total) || 0,
+      landfill_tons: parseFloat(row.landfill_total) || 0,
+      total_tons: (parseFloat(row.tmb_total) || 0) + (parseFloat(row.landfill_total) || 0),
+      tmb_percent: 0,
+      landfill_percent: 0
+    }));
 
-// Calculate percentages for operators
-topOperators.forEach(op => {
-if (op.total_tons > 0) {
-  op.tmb_percent = parseFloat(((op.tmb_tons / op.total_tons) * 100).toFixed(2));
-  op.landfill_percent = parseFloat(((op.landfill_tons / op.total_tons) * 100).toFixed(2));
-}
-});
+    // Calculate percentages for operators
+    topOperators.forEach(op => {
+      if (op.total_tons > 0) {
+        op.tmb_percent = parseFloat(((op.tmb_tons / op.total_tons) * 100).toFixed(2));
+        op.landfill_percent = parseFloat(((op.landfill_tons / op.total_tons) * 100).toFixed(2));
+      }
+    });
+
     // ========================================================================
     // FINAL RESPONSE
     // ========================================================================
@@ -375,7 +382,8 @@ if (op.total_tons > 0) {
         filters: {
           start_date: start_date || null,
           end_date: end_date || null,
-          sector_id: sector_id || null,
+          sector_number: sector_id ? parseInt(sector_id) : null,
+          sector_uuid: sectorUuid,
           tmb_association_id: tmb_association_id || null
         }
       }
@@ -401,7 +409,7 @@ export const getOutputDetails = async (req, res) => {
     const { 
       start_date, 
       end_date, 
-      sector_id,
+      sector_id, // sector_number (1-6)
       output_type // 'recycling', 'recovery', or 'disposal'
     } = req.query;
 
@@ -410,6 +418,18 @@ export const getOutputDetails = async (req, res) => {
         success: false,
         message: 'output_type trebuie să fie: recycling, recovery sau disposal'
       });
+    }
+
+    // Get sector UUID if sector_number is provided
+    let sectorUuid = null;
+    if (sector_id) {
+      const sectorQuery = await pool.query(
+        `SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true`,
+        [parseInt(sector_id)]
+      );
+      if (sectorQuery.rows.length > 0) {
+        sectorUuid = sectorQuery.rows[0].id;
+      }
     }
 
     const tableName = `waste_tickets_${output_type}`;
@@ -430,9 +450,9 @@ export const getOutputDetails = async (req, res) => {
       paramIndex++;
     }
 
-    if (sector_id) {
+    if (sectorUuid) {
       whereConditions.push(`wt.sector_id = $${paramIndex}`);
-      queryParams.push(sector_id);
+      queryParams.push(sectorUuid);
       paramIndex++;
     }
 
