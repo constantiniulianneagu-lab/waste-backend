@@ -12,7 +12,7 @@ import recoveryTicketRoutes from './routes/tickets/recovery.js';
 import disposalTicketRoutes from './routes/tickets/disposal.js';
 import rejectedTicketRoutes from './routes/tickets/rejected.js';
 import tmbDashboardRoutes from './routes/dashboard/tmb.js';
-
+import reportsRoutes from './routes/reports/index.js';
 
 // Dashboard Routes
 import dashboardLandfillRoutes from './routes/dashboard/landfill.js'; // 🆕 NOU
@@ -93,7 +93,10 @@ console.log('📍 Mounting disposal ticket routes at /api/tickets/disposal');
 app.use('/api/tickets/disposal', disposalTicketRoutes);
 
 console.log('📍 Mounting rejected ticket routes at /api/tickets/rejected');
-app.use('/api/tickets/rejected', rejectedTicketRoutes); 
+app.use('/api/tickets/rejected', rejectedTicketRoutes);
+
+console.log('📍 Mounting reports routes at /api/reports/landfill');
+app.use('/api/reports', reportsRoutes);
 
 // Dashboard Routes
 console.log('📍 Mounting dashboard landfill routes at /api/dashboard/landfill');
