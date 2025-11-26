@@ -331,11 +331,10 @@ export const getAuxiliaryData = async (req, res) => {
     `;
     const operatorsResult = await db.query(operatorsQuery);
 
-    // Sectors - FIXED: sector_name instead of name
+    // Sectors - FIXED: fără deleted_at (sectors nu are această coloană)
     const sectorsQuery = `
       SELECT id, sector_name as name, sector_number
       FROM sectors
-      WHERE deleted_at IS NULL
       ORDER BY sector_number
     `;
     const sectorsResult = await db.query(sectorsQuery);
