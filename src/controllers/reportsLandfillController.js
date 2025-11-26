@@ -92,16 +92,19 @@ export const getLandfillReports = async (req, res) => {
       }
 
       if (sector_id) {
-        if (!userSectorIds.includes(sector_id)) {
+        // Convert sector_id from string to UUID for comparison
+        const requestedSectorId = sector_id;
+        
+        if (!userSectorIds.includes(requestedSectorId)) {
           return res.status(403).json({
             success: false,
             message: 'Access denied: Sector not accessible'
           });
         }
         sectorFilter = 'AND wtl.sector_id = $3';
-        sectorParams = [sector_id];
+        sectorParams = [requestedSectorId];
         
-        const sectorInfo = userSectorsResult.rows.find(s => s.sector_id === sector_id);
+        const sectorInfo = userSectorsResult.rows.find(s => s.sector_id === requestedSectorId);
         if (sectorInfo) {
           sectorName = sectorInfo.sector_name;
         }
