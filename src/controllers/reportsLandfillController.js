@@ -312,16 +312,16 @@ export const getAuxiliaryData = async (req, res) => {
   try {
     console.log('📦 Fetching auxiliary data for reports...');
 
-    // Waste codes
+    // Waste codes - NU are deleted_at!
     const wasteCodesQuery = `
       SELECT id, code, description
       FROM waste_codes
-      WHERE deleted_at IS NULL
+      WHERE is_active = true
       ORDER BY code
     `;
     const wasteCodesResult = await db.query(wasteCodesQuery);
 
-    // Operators (suppliers)
+    // Operators (suppliers) - ARE deleted_at
     const operatorsQuery = `
       SELECT id, name
       FROM institutions
@@ -331,10 +331,11 @@ export const getAuxiliaryData = async (req, res) => {
     `;
     const operatorsResult = await db.query(operatorsQuery);
 
-    // Sectors - FIXED: fără deleted_at (sectors nu are această coloană)
+    // Sectors - NU are deleted_at!
     const sectorsQuery = `
       SELECT id, sector_name as name, sector_number
       FROM sectors
+      WHERE is_active = true
       ORDER BY sector_number
     `;
     const sectorsResult = await db.query(sectorsQuery);
