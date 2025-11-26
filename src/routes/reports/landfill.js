@@ -10,7 +10,7 @@ import {
   getAuxiliaryData,
   exportLandfillReports 
 } from '../../controllers/reportsLandfillController.js';
-import { authenticateToken } from '../../../middleware/authMiddleware.js';
+import { authenticateToken } from '../../middleware/auth.js';
 
 const router = express.Router();
 
