@@ -223,7 +223,7 @@ export const getLandfillReports = async (req, res) => {
         i.name as supplier_name,
         wc.code as waste_code,
         wc.description as waste_description,
-        s.id as sector_id,,
+        s.id as sector_id,
         wtl.generator_type as generator,
         wtl.vehicle_number,
         wtl.gross_weight_kg / 1000.0 as gross_weight_tons,
