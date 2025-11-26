@@ -1,29 +1,26 @@
 /**
  * ============================================================================
- * REPORTS LANDFILL ROUTES
+ * LANDFILL REPORTS ROUTES
  * ============================================================================
  */
 
 import express from 'express';
-import { authenticateToken } from '../../middleware/auth.js';
 import { 
-  getLandfillReports,
-  getAuxiliaryData 
+  getLandfillReports, 
+  getAuxiliaryData,
+  exportLandfillReports 
 } from '../../controllers/reportsLandfillController.js';
+import { authenticateToken } from '../../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-/**
- * GET /api/reports/landfill
- * Get landfill reports with filters and pagination
- * Query params: year, from, to, sector_id, page, per_page
- */
+// Get reports (cu paginare)
 router.get('/', authenticateToken, getLandfillReports);
 
-/**
- * GET /api/reports/landfill/auxiliary
- * Get dropdown data (waste codes, operators, sectors)
- */
+// Get auxiliary data (dropdowns)
 router.get('/auxiliary', authenticateToken, getAuxiliaryData);
+
+// Export reports (toate datele filtrate, fără paginare)
+router.get('/export', authenticateToken, exportLandfillReports);
 
 export default router;

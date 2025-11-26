@@ -358,3 +358,184 @@ export const getAuxiliaryData = async (req, res) => {
     });
   }
 };
+
+/**
+ * ============================================================================
+ * EXPORT LANDFILL REPORTS (toate datele filtrate, fără paginare)
+ * ============================================================================
+ * Același query ca getLandfillReports dar FĂRĂ LIMIT/OFFSET
+ * ============================================================================
+ */
+
+export const exportLandfillReports = async (req, res) => {
+  console.log('\n📤 ==================== EXPORT LANDFILL REPORTS ====================');
+  console.log('📥 Query params:', req.query);
+  console.log('👤 User:', { id: req.user?.id, role: req.user?.role });
+
+  try {
+    const { year, from, to, sector_id } = req.query;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // ========================================================================
+    // STEP 1: DATE RANGE SETUP
+    // ========================================================================
+    
+    const currentDate = new Date();
+    const currentYear = year || currentDate.getFullYear();
+    const startDate = from || `${currentYear}-01-01`;
+    const endDate = to || currentDate.toISOString().split('T')[0];
+
+    console.log('📅 Date range:', { startDate, endDate });
+
+    // ========================================================================
+    // STEP 2: RBAC - SECTOR FILTERING (EXACT CA ÎN getLandfillReports)
+    // ========================================================================
+
+    let sectorFilter = '';
+    let sectorParams = [];
+
+    if (userRole === 'PLATFORM_ADMIN') {
+      console.log('✅ PLATFORM_ADMIN - full access');
+      
+      if (sector_id) {
+        sectorFilter = 'AND wtl.sector_id = $3';
+        sectorParams = [sector_id];
+      }
+    } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
+      console.log('🔒 Restricted user, checking accessible sectors...');
+      
+      const userSectorsQuery = `
+        SELECT DISTINCT is_table.sector_id, s.sector_name
+        FROM user_institutions ui
+        JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
+        JOIN sectors s ON is_table.sector_id = s.id
+        WHERE ui.user_id = $1 AND ui.deleted_at IS NULL
+      `;
+      
+      const userSectorsResult = await db.query(userSectorsQuery, [userId]);
+      const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
+      
+      if (userSectorIds.length === 0) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: No sectors assigned'
+        });
+      }
+
+      if (sector_id) {
+        const requestedSectorId = sector_id;
+        
+        if (!userSectorIds.includes(requestedSectorId)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Access denied: Sector not accessible'
+          });
+        }
+        sectorFilter = 'AND wtl.sector_id = $3';
+        sectorParams = [requestedSectorId];
+      } else {
+        sectorFilter = 'AND wtl.sector_id = ANY($3)';
+        sectorParams = [userSectorIds];
+      }
+    }
+
+    const baseParams = [startDate, endDate, ...sectorParams];
+
+    // ========================================================================
+    // STEP 3: COUNT TOTAL
+    // ========================================================================
+
+    console.log('🔢 Counting total records...');
+
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM waste_tickets_landfill wtl
+      WHERE wtl.deleted_at IS NULL
+        AND wtl.ticket_date >= $1
+        AND wtl.ticket_date <= $2
+        ${sectorFilter}
+    `;
+    
+    const countResult = await db.query(countQuery, baseParams);
+    const totalCount = parseInt(countResult.rows[0].total);
+
+    console.log(`📊 Total records: ${totalCount}`);
+
+    // ========================================================================
+    // STEP 4: FETCH ALL TICKETS (FĂRĂ LIMIT/OFFSET!)
+    // ========================================================================
+
+    console.log('📋 Fetching ALL tickets for export...');
+
+    const ticketsQuery = `
+      SELECT 
+        wtl.id,
+        wtl.ticket_number,
+        wtl.ticket_date,
+        wtl.ticket_time,
+        i.name as supplier_name,
+        wc.code as waste_code,
+        wc.description as waste_description,
+        s.sector_name,
+        wtl.generator_type as generator,
+        wtl.vehicle_number,
+        wtl.gross_weight_kg / 1000.0 as gross_weight_tons,
+        wtl.tare_weight_kg / 1000.0 as tare_weight_tons,
+        wtl.net_weight_tons,
+        wtl.contract_type as contract,
+        wtl.operation_type
+      FROM waste_tickets_landfill wtl
+      JOIN institutions i ON wtl.supplier_id = i.id
+      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
+      JOIN sectors s ON wtl.sector_id = s.id
+      WHERE wtl.deleted_at IS NULL
+        AND wtl.ticket_date >= $1
+        AND wtl.ticket_date <= $2
+        ${sectorFilter}
+      ORDER BY wtl.ticket_date DESC, wtl.ticket_time DESC
+    `;
+    
+    const ticketsResult = await db.query(ticketsQuery, baseParams);
+
+    const tickets = ticketsResult.rows.map(row => ({
+      id: row.id,
+      ticket_number: row.ticket_number,
+      ticket_date: row.ticket_date,
+      ticket_time: row.ticket_time,
+      supplier_name: row.supplier_name,
+      waste_code: row.waste_code,
+      waste_description: row.waste_description,
+      sector_name: row.sector_name,
+      generator: row.generator,
+      vehicle_number: row.vehicle_number,
+      gross_weight_tons: formatNumber(row.gross_weight_tons),
+      tare_weight_tons: formatNumber(row.tare_weight_tons),
+      net_weight_tons: formatNumber(row.net_weight_tons),
+      contract: row.contract,
+      operation: row.operation_type || `Eliminare ${row.sector_name}`
+    }));
+
+    // ========================================================================
+    // STEP 5: RESPONSE
+    // ========================================================================
+
+    console.log(`✅ Export data fetched successfully: ${tickets.length} records`);
+
+    res.json({
+      success: true,
+      data: {
+        tickets: tickets,
+        total_count: totalCount
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Export error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export reports',
+      error: error.message
+    });
+  }
+};
