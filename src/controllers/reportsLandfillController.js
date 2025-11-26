@@ -1,13 +1,17 @@
 /**
  * ============================================================================
- * REPORTS LANDFILL CONTROLLER - FIXED FOR SUPABASE
+ * REPORTS LANDFILL CONTROLLER - FINAL VERSION FOR SUPABASE
  * ============================================================================
  * 
- * Controller pentru rapoarte detaliate depozitare
- * Corect pentru structura reală din Supabase
+ * Corect pentru structura REALĂ din Supabase:
+ * - sectors.sector_name (NU sectors.name!)
+ * - waste_tickets_landfill.generator_type
+ * - waste_tickets_landfill.gross_weight_kg / 1000
+ * - waste_tickets_landfill.contract_type
+ * - waste_tickets_landfill.operation_type
  * 
  * Created: 2025-11-26
- * Updated: 2025-11-26 - Fixed for actual DB schema
+ * Updated: 2025-11-26 - Final fix for sector_name
  * ============================================================================
  */
 
@@ -28,14 +32,6 @@ const formatNumber = (num) => {
  * ============================================================================
  * GET LANDFILL REPORTS
  * ============================================================================
- * Query params:
- * - year: number (optional)
- * - from: date (YYYY-MM-DD)
- * - to: date (YYYY-MM-DD)
- * - sector_id: UUID (optional)
- * - page: number (default: 1)
- * - per_page: number (default: 20)
- * ============================================================================
  */
 
 export const getLandfillReports = async (req, res) => {
@@ -48,10 +44,7 @@ export const getLandfillReports = async (req, res) => {
     const userId = req.user.id;
     const userRole = req.user.role;
 
-    // ========================================================================
-    // STEP 1: DATE RANGE SETUP
-    // ========================================================================
-    
+    // Date range setup
     const currentDate = new Date();
     const currentYear = year || currentDate.getFullYear();
     const startDate = from || `${currentYear}-01-01`;
@@ -59,13 +52,10 @@ export const getLandfillReports = async (req, res) => {
 
     console.log('📅 Date range:', { startDate, endDate });
 
-    // ========================================================================
-    // STEP 2: RBAC - SECTOR FILTERING
-    // ========================================================================
-
+    // RBAC - Sector filtering
     let sectorFilter = '';
     let sectorParams = [];
-    let sectorName = 'București'; // Default
+    let sectorName = 'București';
 
     if (userRole === 'PLATFORM_ADMIN') {
       console.log('✅ PLATFORM_ADMIN - full access');
@@ -74,18 +64,17 @@ export const getLandfillReports = async (req, res) => {
         sectorFilter = 'AND wtl.sector_id = $3';
         sectorParams = [sector_id];
         
-        // Get sector name
-        const sectorQuery = 'SELECT name FROM sectors WHERE id = $1';
+        const sectorQuery = 'SELECT sector_name FROM sectors WHERE id = $1';
         const sectorResult = await db.query(sectorQuery, [sector_id]);
         if (sectorResult.rows.length > 0) {
-          sectorName = sectorResult.rows[0].name;
+          sectorName = sectorResult.rows[0].sector_name;
         }
       }
     } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
       console.log('🔒 Restricted user, checking accessible sectors...');
       
       const userSectorsQuery = `
-        SELECT DISTINCT is_table.sector_id, s.name
+        SELECT DISTINCT is_table.sector_id, s.sector_name
         FROM user_institutions ui
         JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
         JOIN sectors s ON is_table.sector_id = s.id
@@ -114,7 +103,7 @@ export const getLandfillReports = async (req, res) => {
         
         const sectorInfo = userSectorsResult.rows.find(s => s.sector_id === sector_id);
         if (sectorInfo) {
-          sectorName = sectorInfo.name;
+          sectorName = sectorInfo.sector_name;
         }
       } else {
         sectorFilter = 'AND wtl.sector_id = ANY($3)';
@@ -123,10 +112,6 @@ export const getLandfillReports = async (req, res) => {
     }
 
     const baseParams = [startDate, endDate, ...sectorParams];
-
-    // ========================================================================
-    // STEP 3: SUMMARY DATA
-    // ========================================================================
 
     console.log('📊 Fetching summary data...');
 
@@ -163,7 +148,6 @@ export const getLandfillReports = async (req, res) => {
     
     const suppliersResult = await db.query(suppliersQuery, baseParams);
     
-    // Group by supplier
     const suppliersMap = {};
     suppliersResult.rows.forEach(row => {
       if (!suppliersMap[row.supplier_name]) {
@@ -209,10 +193,6 @@ export const getLandfillReports = async (req, res) => {
       quantity: formatNumber(row.quantity)
     }));
 
-    // ========================================================================
-    // STEP 4: DETAILED TICKETS WITH PAGINATION
-    // ========================================================================
-
     console.log('📋 Fetching tickets with pagination...');
 
     const offset = (page - 1) * per_page;
@@ -230,7 +210,7 @@ export const getLandfillReports = async (req, res) => {
     const countResult = await db.query(countQuery, baseParams);
     const totalCount = parseInt(countResult.rows[0].total);
 
-    // Fetch tickets - FIXED for Supabase schema
+    // Fetch tickets - CORRECTED FOR SUPABASE SCHEMA
     const ticketsQuery = `
       SELECT 
         wtl.id,
@@ -240,7 +220,7 @@ export const getLandfillReports = async (req, res) => {
         i.name as supplier_name,
         wc.code as waste_code,
         wc.description as waste_description,
-        s.name as sector_name,
+        s.sector_name,
         wtl.generator_type as generator,
         wtl.vehicle_number,
         wtl.gross_weight_kg / 1000.0 as gross_weight_tons,
@@ -283,10 +263,6 @@ export const getLandfillReports = async (req, res) => {
       operation: row.operation_type || `Eliminare ${row.sector_name}`
     }));
 
-    // ========================================================================
-    // STEP 5: RESPONSE
-    // ========================================================================
-
     console.log('✅ Reports data fetched successfully');
 
     res.json({
@@ -325,7 +301,7 @@ export const getLandfillReports = async (req, res) => {
 
 /**
  * ============================================================================
- * GET AUXILIARY DATA (for dropdowns)
+ * GET AUXILIARY DATA
  * ============================================================================
  */
 
@@ -352,9 +328,9 @@ export const getAuxiliaryData = async (req, res) => {
     `;
     const operatorsResult = await db.query(operatorsQuery);
 
-    // Sectors
+    // Sectors - FIXED: sector_name instead of name
     const sectorsQuery = `
-      SELECT id, name, sector_number
+      SELECT id, sector_name as name, sector_number
       FROM sectors
       WHERE deleted_at IS NULL
       ORDER BY sector_number
