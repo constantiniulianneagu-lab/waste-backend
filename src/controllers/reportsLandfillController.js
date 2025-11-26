@@ -1,15 +1,13 @@
 /**
  * ============================================================================
- * REPORTS LANDFILL CONTROLLER
+ * REPORTS LANDFILL CONTROLLER - FIXED FOR SUPABASE
  * ============================================================================
  * 
  * Controller pentru rapoarte detaliate depozitare
- * Returnează:
- * - Summary (total, perioada, furnizori, waste codes)
- * - Tickets detaliate cu paginare
- * - Export ready data
+ * Corect pentru structura reală din Supabase
  * 
  * Created: 2025-11-26
+ * Updated: 2025-11-26 - Fixed for actual DB schema
  * ============================================================================
  */
 
@@ -232,7 +230,7 @@ export const getLandfillReports = async (req, res) => {
     const countResult = await db.query(countQuery, baseParams);
     const totalCount = parseInt(countResult.rows[0].total);
 
-    // Fetch tickets
+    // Fetch tickets - FIXED for Supabase schema
     const ticketsQuery = `
       SELECT 
         wtl.id,
@@ -243,13 +241,13 @@ export const getLandfillReports = async (req, res) => {
         wc.code as waste_code,
         wc.description as waste_description,
         s.name as sector_name,
-        wtl.generator,
+        wtl.generator_type as generator,
         wtl.vehicle_number,
-        wtl.gross_weight_tons,
-        wtl.tare_weight_tons,
+        wtl.gross_weight_kg / 1000.0 as gross_weight_tons,
+        wtl.tare_weight_kg / 1000.0 as tare_weight_tons,
         wtl.net_weight_tons,
-        wtl.contract,
-        wtl.observations
+        wtl.contract_type as contract,
+        wtl.operation_type
       FROM waste_tickets_landfill wtl
       JOIN institutions i ON wtl.supplier_id = i.id
       JOIN waste_codes wc ON wtl.waste_code_id = wc.id
@@ -282,8 +280,7 @@ export const getLandfillReports = async (req, res) => {
       tare_weight_tons: formatNumber(row.tare_weight_tons),
       net_weight_tons: formatNumber(row.net_weight_tons),
       contract: row.contract,
-      observations: row.observations,
-      operation: `Eliminare ${row.sector_name}` // Computed field
+      operation: row.operation_type || `Eliminare ${row.sector_name}`
     }));
 
     // ========================================================================
