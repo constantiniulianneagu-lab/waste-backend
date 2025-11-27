@@ -1,55 +1,28 @@
 // ============================================================================
 // TMB DASHBOARD CONTROLLER - VERSIUNE CORECTATĂ
 // ============================================================================
-// Corecții:
-// - accepted_quantity_tons → net_weight_tons
-// - tmb_association_id → operator_id
-// - JOIN cu tmb_associations + validare perioade (valid_from, valid_to)
-// - RBAC pentru sectoare
-// - waste_tickets_recycling corect integrat
-// ============================================================================
 
 import pool from '../config/database.js';
 
-/**
- * Helper function to format numbers
- */
 const formatNumber = (num) => {
   return num ? parseFloat(num).toFixed(2) : '0.00';
 };
 
-/**
- * GET /api/dashboard/tmb/stats
- * Query params:
- * - start_date: YYYY-MM-DD
- * - end_date: YYYY-MM-DD
- * - sector_id: 1-6 (sector_number) SAU sector UUID
- * - operator_id: ID operator din asociație
- */
 export const getTmbStats = async (req, res) => {
   console.log('\n📊 ==================== TMB DASHBOARD STATS ====================');
   console.log('📥 Query params:', req.query);
   console.log('👤 User:', { id: req.user?.id, role: req.user?.role });
 
   try {
-    const { 
-      start_date, 
-      end_date, 
-      sector_id,
-      operator_id 
-    } = req.query;
-
+    const { start_date, end_date, sector_id, operator_id } = req.query;
     const userId = req.user.id;
     const userRole = req.user.role;
 
-    // ========================================================================
     // RBAC - Sector Access Control
-    // ========================================================================
     let accessibleSectorIds = [];
     
     if (userRole === 'PLATFORM_ADMIN') {
       console.log('✅ PLATFORM_ADMIN - full access');
-      // Admin are acces la toate sectoarele
     } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
       console.log('🔒 Restricted user, checking accessible sectors...');
       
@@ -73,9 +46,7 @@ export const getTmbStats = async (req, res) => {
       console.log('✅ Accessible sectors:', accessibleSectorIds);
     }
 
-    // ========================================================================
-    // Build WHERE clause for filtering
-    // ========================================================================
+    // Build WHERE clause
     let whereConditions = ['deleted_at IS NULL'];
     let queryParams = [];
     let paramIndex = 1;
@@ -94,14 +65,11 @@ export const getTmbStats = async (req, res) => {
 
     const whereClause = whereConditions.join(' AND ');
 
-    // ========================================================================
-    // Get sector UUID if sector_number is provided
-    // ========================================================================
+    // Get sector UUID
     let sectorUuid = null;
     let sectorFilter = '';
     
     if (sector_id) {
-      // Check dacă e număr (1-6) sau UUID
       if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
         const sectorQuery = await pool.query(
           `SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true`,
@@ -112,11 +80,9 @@ export const getTmbStats = async (req, res) => {
           console.log(`✅ Sector ${sector_id} UUID: ${sectorUuid}`);
         }
       } else {
-        // E deja UUID
         sectorUuid = sector_id;
       }
       
-      // Verifică dacă user-ul are acces la sectorul cerut
       if (accessibleSectorIds.length > 0 && !accessibleSectorIds.includes(sectorUuid)) {
         return res.status(403).json({
           success: false,
@@ -126,25 +92,19 @@ export const getTmbStats = async (req, res) => {
       
       sectorFilter = `AND sector_id = '${sectorUuid}'`;
     } else if (accessibleSectorIds.length > 0) {
-      // User restricted - aplică filter pentru toate sectoarele accesibile
       const sectorIdsList = accessibleSectorIds.map(id => `'${id}'`).join(',');
       sectorFilter = `AND sector_id IN (${sectorIdsList})`;
     }
 
-    // ========================================================================
-    // 1. TOTAL COLLECTED (Landfill 20 03 01 + TMB Input)
-    // ========================================================================
-    
     // Get waste_code_id for '20 03 01'
     const wasteCodeQuery = await pool.query(
       `SELECT id FROM waste_codes WHERE code = '20 03 01'`
     );
     const wasteCode2003Id = wasteCodeQuery.rows[0]?.id;
 
-    // Landfill direct (only 20 03 01)
+    // Landfill direct
     let landfillQuery = `
-      SELECT 
-        COALESCE(SUM(net_weight_tons), 0) as total_landfill_direct
+      SELECT COALESCE(SUM(net_weight_tons), 0) as total_landfill_direct
       FROM waste_tickets_landfill
       WHERE ${whereClause}
     `;
@@ -152,7 +112,6 @@ export const getTmbStats = async (req, res) => {
     if (wasteCode2003Id) {
       landfillQuery += ` AND waste_code_id = '${wasteCode2003Id}'`;
     }
-
     if (sectorFilter) {
       landfillQuery += ` ${sectorFilter}`;
     }
@@ -160,10 +119,9 @@ export const getTmbStats = async (req, res) => {
     const landfillResult = await pool.query(landfillQuery, queryParams);
     const totalLandfillDirect = parseFloat(landfillResult.rows[0].total_landfill_direct) || 0;
 
-    // TMB Input (net_weight_tons) ← CORECTAT!
+    // TMB Input
     let tmbInputQuery = `
-      SELECT 
-        COALESCE(SUM(wtt.net_weight_tons), 0) as total_tmb_input
+      SELECT COALESCE(SUM(wtt.net_weight_tons), 0) as total_tmb_input
       FROM waste_tickets_tmb wtt
       JOIN tmb_associations ta ON (
         wtt.sector_id = ta.sector_id AND
@@ -177,49 +135,32 @@ export const getTmbStats = async (req, res) => {
     if (sectorFilter) {
       tmbInputQuery += ` ${sectorFilter.replace('sector_id', 'wtt.sector_id')}`;
     }
-
     if (operator_id) {
       tmbInputQuery += ` AND wtt.operator_id = ${operator_id}`;
     }
 
     const tmbInputResult = await pool.query(tmbInputQuery, queryParams);
     const totalTmbInput = parseFloat(tmbInputResult.rows[0].total_tmb_input) || 0;
-
-    // TOTAL COLLECTED
     const totalCollected = totalLandfillDirect + totalTmbInput;
 
-    console.log('📊 Collected:', { landfill: totalLandfillDirect, tmb: totalTmbInput, total: totalCollected });
-
-    // ========================================================================
-    // 2. REJECTED QUANTITIES (operator_id) ← CORECTAT!
-    // ========================================================================
+    // Rejected
     let rejectedQuery = `
-      SELECT 
-        COALESCE(SUM(rejected_quantity_tons), 0) as total_rejected
+      SELECT COALESCE(SUM(rejected_quantity_tons), 0) as total_rejected
       FROM waste_tickets_rejected
       WHERE ${whereClause}
     `;
-
     if (sectorFilter) {
       rejectedQuery += ` ${sectorFilter}`;
     }
-
     if (operator_id) {
       rejectedQuery += ` AND operator_id = ${operator_id}`;
     }
 
     const rejectedResult = await pool.query(rejectedQuery, queryParams);
     const totalRejected = parseFloat(rejectedResult.rows[0].total_rejected) || 0;
-
-    // TMB NET = TMB Input - Rejected
     const tmbNet = totalTmbInput - totalRejected;
 
-    console.log('📊 Rejected:', totalRejected, '| TMB Net:', tmbNet);
-
-    // ========================================================================
-    // 3. OUTPUT METRICS (Recycling, Recovery, Disposal)
-    // ========================================================================
-    
+    // Output stats
     const getOutputStats = async (tableName) => {
       let query = `
         SELECT 
@@ -228,7 +169,6 @@ export const getTmbStats = async (req, res) => {
         FROM ${tableName}
         WHERE ${whereClause}
       `;
-
       if (sectorFilter) {
         query += ` ${sectorFilter}`;
       }
@@ -249,24 +189,14 @@ export const getTmbStats = async (req, res) => {
     const recoveryStat = await getOutputStats('waste_tickets_recovery');
     const disposalStat = await getOutputStats('waste_tickets_disposal');
 
-    console.log('📊 Outputs:', { recycling: recyclingStat, recovery: recoveryStat, disposal: disposalStat });
-
-    // ========================================================================
-    // 4. STOCK/DIFFERENCE CALCULATION
-    // ========================================================================
     const totalOutputSent = recyclingStat.sent + recoveryStat.sent + disposalStat.sent;
     const stockDifference = tmbNet - totalOutputSent;
 
-    // ========================================================================
-    // 5. PERCENTAGES (from TMB Net)
-    // ========================================================================
     const recyclingPercent = tmbNet > 0 ? (recyclingStat.sent / tmbNet) * 100 : 0;
     const recoveryPercent = tmbNet > 0 ? (recoveryStat.sent / tmbNet) * 100 : 0;
     const disposalPercent = tmbNet > 0 ? (disposalStat.sent / tmbNet) * 100 : 0;
 
-    // ========================================================================
-    // 6. MONTHLY EVOLUTION (Last 12 months)
-    // ========================================================================
+    // Monthly evolution
     const monthlyQuery = `
       WITH months AS (
         SELECT 
@@ -309,9 +239,7 @@ export const getTmbStats = async (req, res) => {
 
     const monthlyResult = await pool.query(monthlyQuery, queryParams);
 
-    // ========================================================================
-    // 7. WASTE CODES BREAKDOWN
-    // ========================================================================
+    // Waste codes
     const wasteCodesQuery = `
       SELECT 
         wc.code,
@@ -335,9 +263,7 @@ export const getTmbStats = async (req, res) => {
 
     const wasteCodesResult = await pool.query(wasteCodesQuery, queryParams);
 
-    // ========================================================================
-    // 8. OPERATORS BREAKDOWN
-    // ========================================================================
+    // Operators
     const operatorsQuery = `
       SELECT 
         i.id,
@@ -366,7 +292,6 @@ export const getTmbStats = async (req, res) => {
 
     const operatorsResult = await pool.query(operatorsQuery, queryParams);
 
-    // Calculate percentages for operators
     const operatorsWithPercent = operatorsResult.rows.map(op => ({
       ...op,
       tmb_percent: totalTmbInput > 0 
@@ -374,9 +299,6 @@ export const getTmbStats = async (req, res) => {
         : '0.00'
     }));
 
-    // ========================================================================
-    // 9. RESPONSE
-    // ========================================================================
     console.log('✅ TMB Stats calculated successfully');
 
     res.json({
@@ -417,18 +339,9 @@ export const getTmbStats = async (req, res) => {
   }
 };
 
-/**
- * GET /api/dashboard/tmb/output-details
- * Get detailed breakdown for specific output type
- */
 export const getOutputDetails = async (req, res) => {
   try {
-    const { 
-      output_type, // 'recycling', 'recovery', 'disposal'
-      start_date, 
-      end_date, 
-      sector_id 
-    } = req.query;
+    const { output_type, start_date, end_date, sector_id } = req.query;
 
     if (!output_type) {
       return res.status(400).json({
@@ -437,7 +350,6 @@ export const getOutputDetails = async (req, res) => {
       });
     }
 
-    // Map output type to table name
     const tableMap = {
       'recycling': 'waste_tickets_recycling',
       'recovery': 'waste_tickets_recovery',
@@ -452,7 +364,6 @@ export const getOutputDetails = async (req, res) => {
       });
     }
 
-    // Build WHERE clause
     let whereConditions = ['deleted_at IS NULL'];
     let queryParams = [];
     let paramIndex = 1;
@@ -471,7 +382,6 @@ export const getOutputDetails = async (req, res) => {
 
     const whereClause = whereConditions.join(' AND ');
 
-    // Get sector UUID if provided
     let sectorFilter = '';
     if (sector_id) {
       if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
@@ -487,7 +397,6 @@ export const getOutputDetails = async (req, res) => {
       }
     }
 
-    // Query for details
     const query = `
       SELECT 
         wt.ticket_number,
