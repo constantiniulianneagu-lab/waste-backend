@@ -1,5 +1,10 @@
 // ============================================================================
-// TMB DASHBOARD CONTROLLER - VERSIUNE CORECTATĂ
+// TMB DASHBOARD CONTROLLER - VERSIUNE NOUĂ
+// ============================================================================
+// Logică nouă:
+// - Stoc/Diferență = TMB Input - (Reciclabil + Valorificare + Depozitare)
+// - Operatori doar cu cod 20 03 01
+// - TMB vs Depozitare comparație
 // ============================================================================
 
 import pool from '../config/database.js';
@@ -14,7 +19,7 @@ export const getTmbStats = async (req, res) => {
   console.log('👤 User:', { id: req.user?.id, role: req.user?.role });
 
   try {
-    const { start_date, end_date, sector_id, operator_id } = req.query;
+    const { start_date, end_date, sector_id, year } = req.query;
     const userId = req.user.id;
     const userRole = req.user.role;
 
@@ -51,16 +56,23 @@ export const getTmbStats = async (req, res) => {
     let queryParams = [];
     let paramIndex = 1;
 
-    if (start_date) {
-      whereConditions.push(`ticket_date >= $${paramIndex}`);
-      queryParams.push(start_date);
+    // Year filter (priority over start_date/end_date)
+    if (year) {
+      whereConditions.push(`EXTRACT(YEAR FROM ticket_date) = $${paramIndex}`);
+      queryParams.push(parseInt(year));
       paramIndex++;
-    }
+    } else {
+      if (start_date) {
+        whereConditions.push(`ticket_date >= $${paramIndex}`);
+        queryParams.push(start_date);
+        paramIndex++;
+      }
 
-    if (end_date) {
-      whereConditions.push(`ticket_date <= $${paramIndex}`);
-      queryParams.push(end_date);
-      paramIndex++;
+      if (end_date) {
+        whereConditions.push(`ticket_date <= $${paramIndex}`);
+        queryParams.push(end_date);
+        paramIndex++;
+      }
     }
 
     const whereClause = whereConditions.join(' AND ');
@@ -102,7 +114,7 @@ export const getTmbStats = async (req, res) => {
     );
     const wasteCode2003Id = wasteCodeQuery.rows[0]?.id;
 
-    // Landfill direct
+    // 1. Landfill direct (only 20 03 01)
     let landfillQuery = `
       SELECT COALESCE(SUM(net_weight_tons), 0) as total_landfill_direct
       FROM waste_tickets_landfill
@@ -119,7 +131,7 @@ export const getTmbStats = async (req, res) => {
     const landfillResult = await pool.query(landfillQuery, queryParams);
     const totalLandfillDirect = parseFloat(landfillResult.rows[0].total_landfill_direct) || 0;
 
-    // TMB Input
+    // 2. TMB Input
     let tmbInputQuery = `
       SELECT COALESCE(SUM(wtt.net_weight_tons), 0) as total_tmb_input
       FROM waste_tickets_tmb wtt
@@ -135,32 +147,12 @@ export const getTmbStats = async (req, res) => {
     if (sectorFilter) {
       tmbInputQuery += ` ${sectorFilter.replace('sector_id', 'wtt.sector_id')}`;
     }
-    if (operator_id) {
-      tmbInputQuery += ` AND wtt.operator_id = ${operator_id}`;
-    }
 
     const tmbInputResult = await pool.query(tmbInputQuery, queryParams);
     const totalTmbInput = parseFloat(tmbInputResult.rows[0].total_tmb_input) || 0;
     const totalCollected = totalLandfillDirect + totalTmbInput;
 
-    // Rejected
-    let rejectedQuery = `
-      SELECT COALESCE(SUM(rejected_quantity_tons), 0) as total_rejected
-      FROM waste_tickets_rejected
-      WHERE ${whereClause}
-    `;
-    if (sectorFilter) {
-      rejectedQuery += ` ${sectorFilter}`;
-    }
-    if (operator_id) {
-      rejectedQuery += ` AND operator_id = ${operator_id}`;
-    }
-
-    const rejectedResult = await pool.query(rejectedQuery, queryParams);
-    const totalRejected = parseFloat(rejectedResult.rows[0].total_rejected) || 0;
-    const tmbNet = totalTmbInput - totalRejected;
-
-    // Output stats
+    // 3. Output stats (Trimis + Acceptat)
     const getOutputStats = async (tableName) => {
       let query = `
         SELECT 
@@ -189,20 +181,22 @@ export const getTmbStats = async (req, res) => {
     const recoveryStat = await getOutputStats('waste_tickets_recovery');
     const disposalStat = await getOutputStats('waste_tickets_disposal');
 
+    // 4. STOC/DIFERENȚĂ (NOU CALCUL)
+    // Stoc = TMB Input - (Reciclabil Trimis + Valorificare Trimisă + Depozitare Trimisă)
     const totalOutputSent = recyclingStat.sent + recoveryStat.sent + disposalStat.sent;
-    const stockDifference = tmbNet - totalOutputSent;
+    const stockDifference = totalTmbInput - totalOutputSent;
 
-    const recyclingPercent = tmbNet > 0 ? (recyclingStat.sent / tmbNet) * 100 : 0;
-    const recoveryPercent = tmbNet > 0 ? (recoveryStat.sent / tmbNet) * 100 : 0;
-    const disposalPercent = tmbNet > 0 ? (disposalStat.sent / tmbNet) * 100 : 0;
+    // 5. Percentages (din TMB Input)
+    const recyclingPercent = totalTmbInput > 0 ? (recyclingStat.sent / totalTmbInput) * 100 : 0;
+    const recoveryPercent = totalTmbInput > 0 ? (recoveryStat.sent / totalTmbInput) * 100 : 0;
+    const disposalPercent = totalTmbInput > 0 ? (disposalStat.sent / totalTmbInput) * 100 : 0;
 
-    // Monthly evolution
+    // 6. Monthly evolution (pentru grafic Area+Bar+Line)
     const monthlyQuery = `
-      WITH months AS (
+      WITH tmb_monthly AS (
         SELECT 
           DATE_TRUNC('month', wtt.ticket_date) as month,
-          'tmb' as source,
-          SUM(wtt.net_weight_tons) as total_tons
+          COALESCE(SUM(wtt.net_weight_tons), 0) as tmb_total
         FROM waste_tickets_tmb wtt
         JOIN tmb_associations ta ON (
           wtt.sector_id = ta.sector_id AND
@@ -212,92 +206,125 @@ export const getTmbStats = async (req, res) => {
         )
         WHERE ${whereClause.replace('deleted_at', 'wtt.deleted_at')}
         ${sectorFilter ? sectorFilter.replace('sector_id', 'wtt.sector_id') : ''}
-        ${operator_id ? `AND wtt.operator_id = ${operator_id}` : ''}
         GROUP BY DATE_TRUNC('month', wtt.ticket_date)
-        
-        UNION ALL
-        
+      ),
+      landfill_monthly AS (
         SELECT 
           DATE_TRUNC('month', ticket_date) as month,
-          'landfill' as source,
-          SUM(net_weight_tons) as total_tons
+          COALESCE(SUM(net_weight_tons), 0) as landfill_total
         FROM waste_tickets_landfill
         WHERE ${whereClause}
         ${wasteCode2003Id ? `AND waste_code_id = '${wasteCode2003Id}'` : ''}
         ${sectorFilter ? sectorFilter : ''}
         GROUP BY DATE_TRUNC('month', ticket_date)
+      ),
+      all_months AS (
+        SELECT month FROM tmb_monthly
+        UNION
+        SELECT month FROM landfill_monthly
       )
       SELECT 
-        TO_CHAR(month, 'YYYY-MM') as month,
-        source,
-        COALESCE(SUM(total_tons), 0) as total
-      FROM months
-      WHERE month >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '11 months')
-      GROUP BY month, source
-      ORDER BY month ASC, source
+        TO_CHAR(am.month, 'Mon') as month,
+        COALESCE(tm.tmb_total, 0) as tmb_total,
+        COALESCE(lm.landfill_total, 0) as landfill_total
+      FROM all_months am
+      LEFT JOIN tmb_monthly tm ON am.month = tm.month
+      LEFT JOIN landfill_monthly lm ON am.month = lm.month
+      ORDER BY am.month ASC
     `;
 
     const monthlyResult = await pool.query(monthlyQuery, queryParams);
 
-    // Waste codes
-    const wasteCodesQuery = `
+    // 7. Distribution by sector (pentru grafic pie)
+    const sectorDistributionQuery = `
       SELECT 
-        wc.code,
-        wc.description,
-        COALESCE(SUM(wtt.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_tmb wtt
-      JOIN waste_codes wc ON wtt.waste_code_id = wc.id
-      JOIN tmb_associations ta ON (
+        s.sector_name,
+        COALESCE(SUM(wtt.net_weight_tons), 0) as tmb_tons,
+        COALESCE(
+          (SELECT SUM(net_weight_tons) 
+           FROM waste_tickets_landfill wl 
+           WHERE wl.sector_id = s.id 
+             AND wl.deleted_at IS NULL
+             ${wasteCode2003Id ? `AND wl.waste_code_id = '${wasteCode2003Id}'` : ''}
+             ${year ? `AND EXTRACT(YEAR FROM wl.ticket_date) = ${year}` : ''}
+             ${start_date ? `AND wl.ticket_date >= '${start_date}'` : ''}
+             ${end_date ? `AND wl.ticket_date <= '${end_date}'` : ''}
+          ), 0
+        ) as landfill_tons
+      FROM sectors s
+      LEFT JOIN waste_tickets_tmb wtt ON s.id = wtt.sector_id AND wtt.deleted_at IS NULL
+      LEFT JOIN tmb_associations ta ON (
         wtt.sector_id = ta.sector_id AND
         wtt.operator_id IN (ta.primary_operator_id, ta.secondary_operator_id) AND
         wtt.ticket_date >= ta.valid_from AND
         (ta.valid_to IS NULL OR wtt.ticket_date <= ta.valid_to)
       )
-      WHERE ${whereClause.replace('deleted_at', 'wtt.deleted_at')}
-      ${sectorFilter ? sectorFilter.replace('sector_id', 'wtt.sector_id') : ''}
-      ${operator_id ? `AND wtt.operator_id = ${operator_id}` : ''}
-      GROUP BY wc.code, wc.description
-      ORDER BY total_tons DESC
-      LIMIT 10
+      WHERE s.is_active = true
+        ${year ? `AND (wtt.ticket_date IS NULL OR EXTRACT(YEAR FROM wtt.ticket_date) = ${year})` : ''}
+        ${start_date ? `AND (wtt.ticket_date IS NULL OR wtt.ticket_date >= '${start_date}')` : ''}
+        ${end_date ? `AND (wtt.ticket_date IS NULL OR wtt.ticket_date <= '${end_date}')` : ''}
+      GROUP BY s.id, s.sector_name
+      ORDER BY s.sector_number
     `;
 
-    const wasteCodesResult = await pool.query(wasteCodesQuery, queryParams);
+    const sectorDistributionResult = await pool.query(sectorDistributionQuery);
 
-    // Operators
+    // 8. Operators (DOAR cod 20 03 01) - TMB vs Depozitare
     const operatorsQuery = `
-      SELECT 
-        i.id,
-        i.name,
-        COALESCE(SUM(wtt.net_weight_tons), 0) as tmb_total_tons,
-        COUNT(wtt.id) as ticket_count,
-        ta.association_name,
-        CASE 
-          WHEN i.id = ta.primary_operator_id THEN 'primary'
-          WHEN i.id = ta.secondary_operator_id THEN 'secondary'
-        END as role
-      FROM waste_tickets_tmb wtt
-      JOIN institutions i ON wtt.operator_id = i.id
-      JOIN tmb_associations ta ON (
-        wtt.sector_id = ta.sector_id AND
-        wtt.operator_id IN (ta.primary_operator_id, ta.secondary_operator_id) AND
-        wtt.ticket_date >= ta.valid_from AND
-        (ta.valid_to IS NULL OR wtt.ticket_date <= ta.valid_to)
+      WITH tmb_data AS (
+        SELECT 
+          i.id,
+          i.name,
+          COALESCE(SUM(wtt.net_weight_tons), 0) as tmb_total_tons
+        FROM waste_tickets_tmb wtt
+        JOIN institutions i ON wtt.operator_id = i.id
+        JOIN tmb_associations ta ON (
+          wtt.sector_id = ta.sector_id AND
+          wtt.operator_id IN (ta.primary_operator_id, ta.secondary_operator_id) AND
+          wtt.ticket_date >= ta.valid_from AND
+          (ta.valid_to IS NULL OR wtt.ticket_date <= ta.valid_to)
+        )
+        WHERE ${whereClause.replace('deleted_at', 'wtt.deleted_at')}
+        ${sectorFilter ? sectorFilter.replace('sector_id', 'wtt.sector_id') : ''}
+        GROUP BY i.id, i.name
+      ),
+      landfill_data AS (
+        SELECT 
+          i.id,
+          COALESCE(SUM(wl.net_weight_tons), 0) as landfill_total_tons
+        FROM waste_tickets_landfill wl
+        JOIN institutions i ON wl.supplier_id = i.id
+        WHERE ${whereClause.replace('deleted_at', 'wl.deleted_at')}
+        ${wasteCode2003Id ? `AND wl.waste_code_id = '${wasteCode2003Id}'` : ''}
+        ${sectorFilter ? sectorFilter.replace('sector_id', 'wl.sector_id') : ''}
+        GROUP BY i.id
       )
-      WHERE ${whereClause.replace('deleted_at', 'wtt.deleted_at')}
-      ${sectorFilter ? sectorFilter.replace('sector_id', 'wtt.sector_id') : ''}
-      ${operator_id ? `AND wtt.operator_id = ${operator_id}` : ''}
-      GROUP BY i.id, i.name, ta.association_name, ta.primary_operator_id, ta.secondary_operator_id
-      ORDER BY tmb_total_tons DESC
+      SELECT 
+        t.id,
+        t.name,
+        t.tmb_total_tons,
+        COALESCE(l.landfill_total_tons, 0) as landfill_total_tons,
+        (t.tmb_total_tons + COALESCE(l.landfill_total_tons, 0)) as total_tons
+      FROM tmb_data t
+      LEFT JOIN landfill_data l ON t.id = l.id
+      WHERE t.tmb_total_tons > 0 OR COALESCE(l.landfill_total_tons, 0) > 0
+      ORDER BY total_tons DESC
     `;
 
     const operatorsResult = await pool.query(operatorsQuery, queryParams);
 
-    const operatorsWithPercent = operatorsResult.rows.map(op => ({
-      ...op,
-      tmb_percent: totalTmbInput > 0 
-        ? ((parseFloat(op.tmb_total_tons) / totalTmbInput) * 100).toFixed(2)
-        : '0.00'
-    }));
+    const operatorsWithPercent = operatorsResult.rows.map(op => {
+      const totalTons = parseFloat(op.total_tons);
+      return {
+        ...op,
+        tmb_percent: totalTons > 0 
+          ? ((parseFloat(op.tmb_total_tons) / totalTons) * 100).toFixed(2)
+          : '0.00',
+        landfill_percent: totalTons > 0 
+          ? ((parseFloat(op.landfill_total_tons) / totalTons) * 100).toFixed(2)
+          : '0.00'
+      };
+    });
 
     console.log('✅ TMB Stats calculated successfully');
 
@@ -308,10 +335,13 @@ export const getTmbStats = async (req, res) => {
           total_collected: formatNumber(totalCollected),
           total_landfill_direct: formatNumber(totalLandfillDirect),
           total_tmb_input: formatNumber(totalTmbInput),
-          total_rejected: formatNumber(totalRejected),
-          tmb_net: formatNumber(tmbNet),
-          total_output_sent: formatNumber(totalOutputSent),
-          stock_difference: formatNumber(stockDifference)
+          stock_difference: formatNumber(stockDifference),
+          landfill_percent: totalCollected > 0 
+            ? formatNumber((totalLandfillDirect / totalCollected) * 100) 
+            : '0.00',
+          tmb_percent: totalCollected > 0 
+            ? formatNumber((totalTmbInput / totalCollected) * 100) 
+            : '0.00'
         },
         outputs: {
           recycling: recyclingStat,
@@ -324,7 +354,7 @@ export const getTmbStats = async (req, res) => {
           }
         },
         monthly_evolution: monthlyResult.rows,
-        waste_codes: wasteCodesResult.rows,
+        sector_distribution: sectorDistributionResult.rows,
         operators: operatorsWithPercent
       }
     });
