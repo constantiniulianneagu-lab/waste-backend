@@ -4,7 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
-import institutionRoutes from './routes/institutions.js';  // ← Adaugă import
+import institutionRoutes from './routes/institutions.js';
 import landfillTicketRoutes from './routes/tickets/landfill.js';
 import tmbTicketRoutes from './routes/tickets/tmb.js';
 import recyclingTicketRoutes from './routes/tickets/recycling.js';
@@ -13,27 +13,26 @@ import disposalTicketRoutes from './routes/tickets/disposal.js';
 import rejectedTicketRoutes from './routes/tickets/rejected.js';
 import tmbDashboardRoutes from './routes/dashboard/tmb.js';
 import reportsRoutes from './routes/reports/index.js';
+import tmbRoutes from './routes/tmb/tmb.js'; // 🆕 NOU - TMB operators
 
 // Dashboard Routes
-import dashboardLandfillRoutes from './routes/dashboard/landfill.js'; // 🆕 NOU
+import dashboardLandfillRoutes from './routes/dashboard/landfill.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-
-// CORS - permite origin-uri specifice
+// CORS
 app.use(cors({
   origin: [
     'http://localhost:5173',
     'https://waste-frontend-ev7pe2lsl.vercel.app',
-    /\.webcontainer\.io$/,  // ✅ Permite toate subdomeniile .webcontainer.io
-    /\.local-credentialless\.webcontainer\.io$/  // ✅ Specific pentru local credentialless
+    /\.webcontainer\.io$/,
+    /\.local-credentialless\.webcontainer\.io$/
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-
 
 // Body parser
 app.use(express.json());
@@ -62,7 +61,8 @@ app.get('/', (req, res) => {
       health: '/health',
       auth: '/api/auth/*',
       users: '/api/users/*',
-      institutions: '/api/institutions/*'  // ← Adaugă
+      institutions: '/api/institutions/*',
+      tmb: '/api/tmb/*'  // 🆕 NOU
     }
   });
 });
@@ -76,6 +76,9 @@ app.use('/api/users', userRoutes);
 
 console.log('📍 Mounting institution routes at /api/institutions');
 app.use('/api/institutions', institutionRoutes);
+
+console.log('📍 Mounting TMB routes at /api/tmb'); // 🆕 NOU
+app.use('/api/tmb', tmbRoutes); // 🆕 NOU
 
 console.log('📍 Mounting landfill ticket routes at /api/tickets/landfill');
 app.use('/api/tickets/landfill', landfillTicketRoutes);
