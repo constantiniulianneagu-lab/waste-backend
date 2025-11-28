@@ -1,7 +1,3 @@
-// ============================================================================
-// TMB OPERATORS CONTROLLER
-// ============================================================================
-
 import pool from '../config/database.js';
 
 export const getTmbOperatorsBySector = async (req, res) => {
@@ -77,7 +73,7 @@ export const getTmbOperatorsBySector = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Get TMB operators error:', error);
+    console.error('Get TMB operators error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch TMB operators',
@@ -156,7 +152,7 @@ export const getTmbAssociations = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Get TMB associations error:', error);
+    console.error('Get TMB associations error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch TMB associations',
