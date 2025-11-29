@@ -269,15 +269,13 @@ export const getTmbStats = async (req, res) => {
 
     const sectorDistributionResult = await pool.query(sectorDistributionQuery);
 
-    // 8. Operators (DOAR cod 20 03 01) - TMB vs Depozitare
+    // 8. Suppliers (cei care colectează cod 20 03 01) - TMB vs Depozitare
     const operatorsQuery = `
-      WITH tmb_data AS (
+      WITH tmb_suppliers AS (
         SELECT 
-          i.id,
-          i.name,
+          wtt.supplier_id as institution_id,
           COALESCE(SUM(wtt.net_weight_tons), 0) as tmb_total_tons
         FROM waste_tickets_tmb wtt
-        JOIN institutions i ON wtt.operator_id = i.id
         JOIN tmb_associations ta ON (
           wtt.sector_id = ta.sector_id AND
           wtt.operator_id IN (ta.primary_operator_id, ta.secondary_operator_id) AND
@@ -286,28 +284,34 @@ export const getTmbStats = async (req, res) => {
         )
         WHERE ${whereClause.replace('deleted_at', 'wtt.deleted_at')}
         ${sectorFilter ? sectorFilter.replace('sector_id', 'wtt.sector_id') : ''}
-        GROUP BY i.id, i.name
+        GROUP BY wtt.supplier_id
       ),
-      landfill_data AS (
+      landfill_suppliers AS (
         SELECT 
-          i.id,
+          wl.supplier_id as institution_id,
           COALESCE(SUM(wl.net_weight_tons), 0) as landfill_total_tons
         FROM waste_tickets_landfill wl
-        JOIN institutions i ON wl.supplier_id = i.id
         WHERE ${whereClause.replace('deleted_at', 'wl.deleted_at')}
         ${wasteCode2003Id ? `AND wl.waste_code_id = '${wasteCode2003Id}'` : ''}
         ${sectorFilter ? sectorFilter.replace('sector_id', 'wl.sector_id') : ''}
-        GROUP BY i.id
+        GROUP BY wl.supplier_id
+      ),
+      all_suppliers AS (
+        SELECT institution_id FROM tmb_suppliers
+        UNION
+        SELECT institution_id FROM landfill_suppliers
       )
       SELECT 
-        t.id,
-        t.name,
-        t.tmb_total_tons,
-        COALESCE(l.landfill_total_tons, 0) as landfill_total_tons,
-        (t.tmb_total_tons + COALESCE(l.landfill_total_tons, 0)) as total_tons
-      FROM tmb_data t
-      LEFT JOIN landfill_data l ON t.id = l.id
-      WHERE t.tmb_total_tons > 0 OR COALESCE(l.landfill_total_tons, 0) > 0
+        i.id,
+        i.name,
+        COALESCE(ts.tmb_total_tons, 0) as tmb_total_tons,
+        COALESCE(ls.landfill_total_tons, 0) as landfill_total_tons,
+        (COALESCE(ts.tmb_total_tons, 0) + COALESCE(ls.landfill_total_tons, 0)) as total_tons
+      FROM all_suppliers asup
+      JOIN institutions i ON asup.institution_id = i.id
+      LEFT JOIN tmb_suppliers ts ON asup.institution_id = ts.institution_id
+      LEFT JOIN landfill_suppliers ls ON asup.institution_id = ls.institution_id
+      WHERE (COALESCE(ts.tmb_total_tons, 0) + COALESCE(ls.landfill_total_tons, 0)) > 0
       ORDER BY total_tons DESC
     `;
 
