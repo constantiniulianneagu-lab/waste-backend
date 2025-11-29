@@ -269,7 +269,7 @@ export const getTmbStats = async (req, res) => {
 
     const sectorDistributionResult = await pool.query(sectorDistributionQuery);
 
-    // 8. Suppliers (cei care colectează cod 20 03 01) - TMB vs Depozitare
+    // 8. Operators (DOAR cod 20 03 01) - TMB vs Depozitare
     const operatorsQuery = `
       WITH tmb_data AS (
         SELECT 
@@ -277,7 +277,7 @@ export const getTmbStats = async (req, res) => {
           i.name,
           COALESCE(SUM(wtt.net_weight_tons), 0) as tmb_total_tons
         FROM waste_tickets_tmb wtt
-        JOIN institutions i ON wtt.supplier_id = i.id
+        JOIN institutions i ON wtt.operator_id = i.id
         JOIN tmb_associations ta ON (
           wtt.sector_id = ta.sector_id AND
           wtt.operator_id IN (ta.primary_operator_id, ta.secondary_operator_id) AND
@@ -298,22 +298,16 @@ export const getTmbStats = async (req, res) => {
         ${wasteCode2003Id ? `AND wl.waste_code_id = '${wasteCode2003Id}'` : ''}
         ${sectorFilter ? sectorFilter.replace('sector_id', 'wl.sector_id') : ''}
         GROUP BY i.id
-      ),
-      all_suppliers AS (
-        SELECT id, name FROM tmb_data
-        UNION
-        SELECT id, name FROM landfill_data
       )
       SELECT 
-        s.id,
-        s.name,
-        COALESCE(t.tmb_total_tons, 0) as tmb_total_tons,
+        t.id,
+        t.name,
+        t.tmb_total_tons,
         COALESCE(l.landfill_total_tons, 0) as landfill_total_tons,
-        (COALESCE(t.tmb_total_tons, 0) + COALESCE(l.landfill_total_tons, 0)) as total_tons
-      FROM all_suppliers s
-      LEFT JOIN tmb_data t ON s.id = t.id
-      LEFT JOIN landfill_data l ON s.id = l.id
-      WHERE (COALESCE(t.tmb_total_tons, 0) + COALESCE(l.landfill_total_tons, 0)) > 0
+        (t.tmb_total_tons + COALESCE(l.landfill_total_tons, 0)) as total_tons
+      FROM tmb_data t
+      LEFT JOIN landfill_data l ON t.id = l.id
+      WHERE t.tmb_total_tons > 0 OR COALESCE(l.landfill_total_tons, 0) > 0
       ORDER BY total_tons DESC
     `;
 
