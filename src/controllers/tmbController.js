@@ -31,6 +31,7 @@ export const getTmbOperatorsBySector = async (req, res) => {
 
     const validationDate = date || new Date().toISOString().split('T')[0];
 
+    // FIX: Adăugat sort_order în SELECT pentru a putea face ORDER BY
     const query = `
       SELECT DISTINCT
         i.id,
@@ -43,6 +44,10 @@ export const getTmbOperatorsBySector = async (req, res) => {
           WHEN i.id = ta.primary_operator_id THEN 'primary'
           WHEN i.id = ta.secondary_operator_id THEN 'secondary'
         END as role,
+        CASE 
+          WHEN i.id = ta.primary_operator_id THEN 1 
+          ELSE 2 
+        END as sort_order,
         ta.is_active as association_active
       FROM tmb_associations ta
       JOIN institutions i ON (
@@ -55,9 +60,7 @@ export const getTmbOperatorsBySector = async (req, res) => {
         AND ta.is_active = true
         AND i.is_active = true
         AND i.deleted_at IS NULL
-      ORDER BY 
-        CASE WHEN i.id = ta.primary_operator_id THEN 1 ELSE 2 END,
-        i.name
+      ORDER BY sort_order, i.name
     `;
 
     const result = await pool.query(query, [sectorUuid, validationDate]);
