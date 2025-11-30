@@ -13,6 +13,7 @@ import disposalTicketRoutes from './routes/tickets/disposal.js';
 import rejectedTicketRoutes from './routes/tickets/rejected.js';
 import tmbDashboardRoutes from './routes/dashboard/tmb.js';
 import reportsRoutes from './routes/reports/index.js';
+import reportTmbRoutes from './routes/reports/tmb.js'; // 🆕 NOU - TMB Reports
 import tmbRoutes from './routes/tmb/tmb.js'; // 🆕 NOU - TMB operators
 
 // Dashboard Routes
@@ -62,7 +63,8 @@ app.get('/', (req, res) => {
       auth: '/api/auth/*',
       users: '/api/users/*',
       institutions: '/api/institutions/*',
-      tmb: '/api/tmb/*'  // 🆕 NOU
+      tmb: '/api/tmb/*',
+      reports: '/api/reports/*'  // 🆕 NOU
     }
   });
 });
@@ -77,8 +79,8 @@ app.use('/api/users', userRoutes);
 console.log('📍 Mounting institution routes at /api/institutions');
 app.use('/api/institutions', institutionRoutes);
 
-console.log('📍 Mounting TMB routes at /api/tmb'); // 🆕 NOU
-app.use('/api/tmb', tmbRoutes); // 🆕 NOU
+console.log('📍 Mounting TMB routes at /api/tmb');
+app.use('/api/tmb', tmbRoutes);
 
 console.log('📍 Mounting landfill ticket routes at /api/tickets/landfill');
 app.use('/api/tickets/landfill', landfillTicketRoutes);
@@ -98,8 +100,11 @@ app.use('/api/tickets/disposal', disposalTicketRoutes);
 console.log('📍 Mounting rejected ticket routes at /api/tickets/rejected');
 app.use('/api/tickets/rejected', rejectedTicketRoutes);
 
-console.log('📍 Mounting reports routes at /api/reports/landfill');
+console.log('📍 Mounting reports routes at /api/reports');
 app.use('/api/reports', reportsRoutes);
+
+console.log('📍 Mounting TMB reports routes at /api/reports/tmb'); // 🆕 NOU
+app.use('/api/reports/tmb', reportTmbRoutes); // 🆕 NOU
 
 // Dashboard Routes
 console.log('📍 Mounting dashboard landfill routes at /api/dashboard/landfill');
