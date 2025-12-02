@@ -132,8 +132,7 @@ export const getDisposalTickets = async (req, res) => {
         s.sector_name,
         wtd.vehicle_number,
         wtd.delivered_quantity_tons,
-        wtd.accepted_quantity_tons,
-        wtd.disposal_month
+        wtd.accepted_quantity_tons
       FROM waste_tickets_disposal wtd
       JOIN institutions client ON wtd.recipient_id = client.id
       JOIN institutions supplier ON wtd.supplier_id = supplier.id

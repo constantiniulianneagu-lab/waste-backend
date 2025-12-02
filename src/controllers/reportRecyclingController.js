@@ -134,7 +134,11 @@ export const getRecyclingTickets = async (req, res) => {
         wtr.delivered_quantity_tons,
         wtr.accepted_quantity_tons,
         wtr.difference_tons,
-        wtr.acceptance_percentage
+        CASE 
+          WHEN wtr.delivered_quantity_kg > 0 
+          THEN ROUND((wtr.accepted_quantity_kg / wtr.delivered_quantity_kg * 100.0)::numeric, 2)
+          ELSE 0 
+        END as acceptance_percentage
       FROM waste_tickets_recycling wtr
       JOIN institutions client ON wtr.recipient_id = client.id
       JOIN institutions supplier ON wtr.supplier_id = supplier.id
