@@ -30,7 +30,7 @@ export const getRejectedTickets = async (req, res) => {
         sectorFilter = 'AND wtrj.sector_id = $3';
         sectorParams = [sector_id];
       }
-    } else {
+    } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
       const userSectorsQuery = `
         SELECT DISTINCT is_table.sector_id
         FROM user_institutions ui
