@@ -30,7 +30,7 @@ export const getRecoveryTickets = async (req, res) => {
         sectorFilter = 'AND wtv.sector_id = $3';
         sectorParams = [sector_id];
       }
-    } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
+    } else {
       const userSectorsQuery = `
         SELECT DISTINCT is_table.sector_id
         FROM user_institutions ui
@@ -107,7 +107,7 @@ export const getRecoveryTickets = async (req, res) => {
         i.name,
         SUM(wtv.accepted_quantity_tons) as total_tons
       FROM waste_tickets_recovery wtv
-      JOIN institutions i ON wtv.recipient_id = i.id
+      JOIN institutions i ON wtv.client_id = i.id
       WHERE wtv.deleted_at IS NULL
         AND wtv.ticket_date >= $1
         AND wtv.ticket_date <= $2
@@ -134,7 +134,7 @@ export const getRecoveryTickets = async (req, res) => {
         wtv.delivered_quantity_tons,
         wtv.accepted_quantity_tons
       FROM waste_tickets_recovery wtv
-      JOIN institutions client ON wtv.recipient_id = client.id
+      JOIN institutions client ON wtv.client_id = client.id
       JOIN institutions supplier ON wtv.supplier_id = supplier.id
       JOIN waste_codes wc ON wtv.waste_code_id = wc.id
       JOIN sectors s ON wtv.sector_id = s.id

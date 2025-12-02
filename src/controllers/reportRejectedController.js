@@ -30,7 +30,7 @@ export const getRejectedTickets = async (req, res) => {
         sectorFilter = 'AND wtrj.sector_id = $3';
         sectorParams = [sector_id];
       }
-    } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
+    } else {
       const userSectorsQuery = `
         SELECT DISTINCT is_table.sector_id
         FROM user_institutions ui
@@ -130,6 +130,7 @@ export const getRejectedTickets = async (req, res) => {
         wc.description as waste_description,
         s.sector_name,
         wtrj.vehicle_number,
+        wtrj.generator_type,
         wtrj.rejected_quantity_tons,
         wtrj.rejection_reason
       FROM waste_tickets_rejected wtrj
