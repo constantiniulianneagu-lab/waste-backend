@@ -211,76 +211,56 @@ export const getStats = async (req, res) => {
       throw new Error(`Summary query failed: ${summaryError.message}`);
     }
 
-    // ========================================================================
-    // STEP 4: WASTE CATEGORIES
-    // ========================================================================
-    
-    console.log('\n🗑️ STEP 4: Fetching waste categories');
-    
-    const categoriesQuery = `
-      SELECT 
-        CASE 
-          WHEN wc.code = '20 03 01' THEN '20 03 01'
-          WHEN wc.code = '20 03 03' THEN '20 03 03'
-          WHEN wc.code LIKE '19%' THEN '19 * *'
-          WHEN wc.code = '17 09 04' THEN '17 09 04'
-          ELSE 'ALTELE'
-        END as category,
-        CASE 
-          WHEN wc.code = '20 03 01' THEN 'Deșeuri municipale'
-          WHEN wc.code = '20 03 03' THEN 'Reziduuri străzi'
-          WHEN wc.code LIKE '19%' THEN 'Deșeuri de sortare'
-          WHEN wc.code = '17 09 04' THEN 'Construcții'
-          ELSE 'Altele'
-        END as description,
-        COUNT(*) as ticket_count,
-        COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_landfill wtl
-      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
-      JOIN sectors s ON wtl.sector_id = s.id
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorFilter}
-      GROUP BY 
-        CASE 
-          WHEN wc.code = '20 03 01' THEN '20 03 01'
-          WHEN wc.code = '20 03 03' THEN '20 03 03'
-          WHEN wc.code LIKE '19%' THEN '19 * *'
-          WHEN wc.code = '17 09 04' THEN '17 09 04'
-          ELSE 'ALTELE'
-        END,
-        CASE 
-          WHEN wc.code = '20 03 01' THEN 'Deșeuri municipale'
-          WHEN wc.code = '20 03 03' THEN 'Reziduuri străzi'
-          WHEN wc.code LIKE '19%' THEN 'Deșeuri de sortare'
-          WHEN wc.code = '17 09 04' THEN 'Construcții'
-          ELSE 'Altele'
-        END
-      ORDER BY total_tons DESC
-    `;
+   // ========================================================================
+// STEP 4: WASTE CATEGORIES (CU DENUMIRI DIN waste_codes)
+// ========================================================================
 
-    let wasteCategories;
-    
-    try {
-      console.log('🔍 Executing categories query...');
-      const categoriesResult = await db.query(categoriesQuery, baseParams);
-      
-      wasteCategories = categoriesResult.rows.map(row => ({
-        waste_code: row.category,
-        waste_description: row.description,
-        icon_color: getWasteCodeColor(row.category),
-        total_tons: parseFloat(row.total_tons),
-        total_tons_formatted: formatTons(parseFloat(row.total_tons)),
-        percentage_of_total: totalTons > 0 ? parseFloat(((parseFloat(row.total_tons) / totalTons) * 100).toFixed(1)) : 0,
-        ticket_count: parseInt(row.ticket_count)
-      }));
-      
-      console.log(`✅ Found ${wasteCategories.length} waste categories`);
-    } catch (categoriesError) {
-      console.error('❌ Categories query failed:', categoriesError);
-      throw new Error(`Categories query failed: ${categoriesError.message}`);
-    }
+console.log('\n🗑️ STEP 4: Fetching waste categories');
+
+const categoriesQuery = `
+  SELECT 
+    wc.code AS waste_code,
+    wc.description AS waste_description,    -- ✅ Denumire din tabelul waste_codes
+    wc.category,
+    COUNT(*) AS ticket_count,
+    COALESCE(SUM(wtl.net_weight_tons), 0) AS total_tons
+  FROM waste_tickets_landfill wtl
+  JOIN waste_codes wc ON wtl.waste_code_id = wc.id
+  JOIN sectors s ON wtl.sector_id = s.id
+  WHERE wtl.deleted_at IS NULL
+    AND wtl.ticket_date >= $1
+    AND wtl.ticket_date <= $2
+    ${sectorFilter}
+  GROUP BY wc.code, wc.description, wc.category
+  ORDER BY total_tons DESC
+  LIMIT 5
+`;
+
+let wasteCategories;
+
+try {
+  console.log('🔍 Executing categories query...');
+  const categoriesResult = await db.query(categoriesQuery, baseParams);
+  
+  wasteCategories = categoriesResult.rows.map(row => ({
+    waste_code: row.waste_code,
+    waste_description: row.waste_description,  // ✅ Din waste_codes
+    category: row.category,
+    icon_color: getWasteCodeColor(row.waste_code),
+    total_tons: parseFloat(row.total_tons),
+    total_tons_formatted: formatTons(parseFloat(row.total_tons)),
+    percentage_of_total: totalTons > 0 
+      ? parseFloat(((parseFloat(row.total_tons) / totalTons) * 100).toFixed(1)) 
+      : 0,
+    ticket_count: parseInt(row.ticket_count)
+  }));
+  
+  console.log(`✅ Found ${wasteCategories.length} waste categories`);
+  
+} catch (categoriesError) {
+  console.error('❌ Categories query failed:', categoriesError);
+  throw new Error(`Categories query failed: ${categoriesError.message}`);
+}
 
     // ========================================================================
     // STEP 5: PER SECTOR BREAKDOWN
