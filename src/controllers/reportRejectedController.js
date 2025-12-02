@@ -130,7 +130,6 @@ export const getRejectedTickets = async (req, res) => {
         wc.description as waste_description,
         s.sector_name,
         wtrj.vehicle_number,
-        wtrj.generator_type,
         wtrj.rejected_quantity_tons,
         wtrj.rejection_reason
       FROM waste_tickets_rejected wtrj
