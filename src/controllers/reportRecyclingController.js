@@ -107,7 +107,7 @@ export const getRecyclingTickets = async (req, res) => {
         i.name,
         SUM(wtr.accepted_quantity_tons) as total_tons
       FROM waste_tickets_recycling wtr
-      JOIN institutions i ON wtr.client_id = i.id
+      JOIN institutions i ON wtr.recipient_id = i.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
         AND wtr.ticket_date <= $2
@@ -136,7 +136,7 @@ export const getRecyclingTickets = async (req, res) => {
         wtr.difference_tons,
         wtr.acceptance_percentage
       FROM waste_tickets_recycling wtr
-      JOIN institutions client ON wtr.client_id = client.id
+      JOIN institutions client ON wtr.recipient_id = client.id
       JOIN institutions supplier ON wtr.supplier_id = supplier.id
       JOIN waste_codes wc ON wtr.waste_code_id = wc.id
       JOIN sectors s ON wtr.sector_id = s.id
