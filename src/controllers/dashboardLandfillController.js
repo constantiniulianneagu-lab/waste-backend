@@ -608,7 +608,20 @@ try {
     // ========================================================================
     
     console.log('\n📦 STEP 9: Building response');
-    
+    const response = {
+      success: true,
+      data: {
+        summary: { ... },
+        waste_categories: wasteCategories,
+        per_sector: perSector,
+        monthly_evolution: monthlyEvolution,
+        monthly_stats: monthlyStats,
+        top_operators: topOperators,
+        recent_tickets: recentTickets,
+        available_years: availableYears  // ✅ ADAUGĂ
+      },
+      filters_applied: { ... }
+    };
     const response = {
       success: true,
       data: {
