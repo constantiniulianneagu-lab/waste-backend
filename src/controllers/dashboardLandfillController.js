@@ -576,6 +576,33 @@ try {
       throw new Error(`Recent tickets query failed: ${ticketsError.message}`);
     }
 
+// ========================================================================
+// STEP 8.5: AVAILABLE YEARS
+// ========================================================================
+
+console.log('\n📅 STEP 8.5: Fetching available years');
+
+const availableYearsQuery = `
+  SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
+  FROM waste_tickets_landfill
+  WHERE deleted_at IS NULL
+  ORDER BY year DESC
+`;
+
+let availableYears = [];
+
+try {
+  console.log('🔍 Executing available years query...');
+  const yearsResult = await db.query(availableYearsQuery);
+  
+  availableYears = yearsResult.rows.map(row => row.year);
+  
+  console.log(`✅ Found ${availableYears.length} years:`, availableYears);
+} catch (yearsError) {
+  console.error('❌ Available years query failed:', yearsError);
+  availableYears = [new Date().getFullYear()];
+}
+
     // ========================================================================
     // STEP 9: BUILD RESPONSE
     // ========================================================================
