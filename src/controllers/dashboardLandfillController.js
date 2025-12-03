@@ -607,54 +607,46 @@ try {
     // STEP 9: BUILD RESPONSE
     // ========================================================================
     
-    console.log('\n📦 STEP 9: Building response');
-    const response = {
-      success: true,
-      data: {
-        summary: { ... },
-        waste_categories: wasteCategories,
-        per_sector: perSector,
-        monthly_evolution: monthlyEvolution,
-        monthly_stats: monthlyStats,
-        top_operators: topOperators,
-        recent_tickets: recentTickets,
-        available_years: availableYears  // ✅ ADAUGĂ
-      },
-      filters_applied: { ... }
-    };
-    const response = {
-      success: true,
-      data: {
-        summary: {
-          total_tons: totalTons,
-          total_tons_formatted: formatTons(totalTons),
-          total_tickets: parseInt(summary.total_tickets),
-          avg_weight_per_ticket: parseFloat(summary.avg_weight_per_ticket),
-          date_range: {
-            from: startDate,
-            to: endDate,
-            days: Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1
-          }
-        },
-        waste_categories: wasteCategories,
-        per_sector: perSector,
-        monthly_evolution: monthlyEvolution,
-        monthly_stats: monthlyStats,
-        top_operators: topOperators,
-        recent_tickets: recentTickets
-      },
-      filters_applied: {
-        year: currentYear,
+ // ========================================================================
+// STEP 9: BUILD RESPONSE
+// ========================================================================
+
+console.log('\n📦 STEP 9: Building response');
+
+const response = {
+  success: true,
+  data: {
+    summary: {
+      total_tons: totalTons,
+      total_tons_formatted: formatTons(totalTons),
+      total_tickets: parseInt(summary.total_tickets),
+      avg_weight_per_ticket: parseFloat(summary.avg_weight_per_ticket),
+      date_range: {
         from: startDate,
         to: endDate,
-        sector_id: sectorIdInt || 'all'
+        days: Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1
       }
-    };
+    },
+    waste_categories: wasteCategories,
+    per_sector: perSector,
+    monthly_evolution: monthlyEvolution,
+    monthly_stats: monthlyStats,
+    top_operators: topOperators,
+    recent_tickets: recentTickets,
+    available_years: availableYears  // ✅ ADĂUGAT
+  },
+  filters_applied: {
+    year: currentYear,
+    from: startDate,
+    to: endDate,
+    sector_id: sectorIdInt || 'all'
+  }
+};
 
-    console.log('✅ Response built successfully');
-    console.log('==================== REQUEST COMPLETE ====================\n');
-    
-    return res.status(200).json(response);
+console.log('✅ Response built successfully');
+console.log('==================== REQUEST COMPLETE ====================\n');
+
+return res.status(200).json(response);
 
   } catch (error) {
     console.error('\n❌ ==================== ERROR ====================');
