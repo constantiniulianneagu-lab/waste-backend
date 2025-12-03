@@ -352,107 +352,124 @@ try {
       throw new Error(`Per sector query failed: ${sectorError.message}`);
     }
 
-    // ========================================================================
-    // STEP 6: MONTHLY EVOLUTION
-    // ========================================================================
-    
-    console.log('\n📈 STEP 6: Fetching monthly evolution');
-    
-    const monthlyQuery = `
-      SELECT 
-        EXTRACT(YEAR FROM wtl.ticket_date) as year,
-        EXTRACT(MONTH FROM wtl.ticket_date) as month,
-        COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_landfill wtl
-      JOIN sectors s ON wtl.sector_id = s.id
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorFilter}
-      GROUP BY EXTRACT(YEAR FROM wtl.ticket_date), EXTRACT(MONTH FROM wtl.ticket_date)
-      ORDER BY year, month
-    `;
+   // ========================================================================
+// STEP 6: MONTHLY EVOLUTION - FIX MINIMUM CALCULATION
+// ========================================================================
 
-    let monthlyEvolution, monthlyStats;
-    
-    try {
-      console.log('🔍 Executing monthly query...');
-      const monthlyResult = await db.query(monthlyQuery, baseParams);
+console.log('\n📈 STEP 6: Fetching monthly evolution');
 
-      monthlyEvolution = monthlyResult.rows.map(row => ({
-        month: getMonthName(parseInt(row.month)),
-        year: parseInt(row.year),
-        total_tons: parseFloat(row.total_tons)
-      }));
+const monthlyQuery = `
+  SELECT 
+    EXTRACT(YEAR FROM wtl.ticket_date) as year,
+    EXTRACT(MONTH FROM wtl.ticket_date) as month,
+    COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
+  FROM waste_tickets_landfill wtl
+  JOIN sectors s ON wtl.sector_id = s.id
+  WHERE wtl.deleted_at IS NULL
+    AND wtl.ticket_date >= $1
+    AND wtl.ticket_date <= $2
+    ${sectorFilter}
+  GROUP BY EXTRACT(YEAR FROM wtl.ticket_date), EXTRACT(MONTH FROM wtl.ticket_date)
+  ORDER BY year, month
+`;
 
-      // Calculate stats
-      const monthlyTotals = monthlyResult.rows.map(r => parseFloat(r.total_tons));
-      const maxMonthly = Math.max(...monthlyTotals, 0);
-      const minMonthly = Math.min(...monthlyTotals, 0);
-      const avgMonthly = monthlyTotals.length > 0 
-        ? monthlyTotals.reduce((a, b) => a + b, 0) / monthlyTotals.length 
-        : 0;
+let monthlyEvolution, monthlyStats;
 
-      const maxMonthIndex = monthlyTotals.indexOf(maxMonthly);
-      const minMonthIndex = monthlyTotals.indexOf(minMonthly);
+try {
+  console.log('🔍 Executing monthly query...');
+  const monthlyResult = await db.query(monthlyQuery, baseParams);
 
-      // Previous year total
-      const prevYearStart = new Date(startDate);
-      prevYearStart.setFullYear(prevYearStart.getFullYear() - 1);
-      const prevYearEnd = new Date(endDate);
-      prevYearEnd.setFullYear(prevYearEnd.getFullYear() - 1);
+  monthlyEvolution = monthlyResult.rows.map(row => ({
+    month: getMonthName(parseInt(row.month)),
+    year: parseInt(row.year),
+    total_tons: parseFloat(row.total_tons)
+  }));
 
-      const prevYearParams = [
-        prevYearStart.toISOString().split('T')[0],
-        prevYearEnd.toISOString().split('T')[0],
-        ...sectorParams
-      ];
+  // ✅ FIX: Calculate stats CORECT
+  const monthlyTotals = monthlyResult.rows.map(r => parseFloat(r.total_tons));
+  
+  // Maximum - fără fallback 0
+  const maxMonthly = monthlyTotals.length > 0 
+    ? Math.max(...monthlyTotals) 
+    : 0;
+  
+  // ✅ FIX: Minimum - fără fallback 0 în Math.min()
+  const minMonthly = monthlyTotals.length > 0 
+    ? Math.min(...monthlyTotals) 
+    : 0;
+  
+  const avgMonthly = monthlyTotals.length > 0 
+    ? monthlyTotals.reduce((a, b) => a + b, 0) / monthlyTotals.length 
+    : 0;
 
-      const prevYearTotalQuery = `
-        SELECT COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
-        FROM waste_tickets_landfill wtl
-        JOIN sectors s ON wtl.sector_id = s.id
-        WHERE wtl.deleted_at IS NULL
-          AND wtl.ticket_date >= $1
-          AND wtl.ticket_date <= $2
-          ${sectorFilter}
-      `;
+  const maxMonthIndex = monthlyTotals.indexOf(maxMonthly);
+  const minMonthIndex = monthlyTotals.indexOf(minMonthly);
 
-      const prevYearTotalResult = await db.query(prevYearTotalQuery, prevYearParams);
-      const prevYearTotal = parseFloat(prevYearTotalResult.rows[0].total_tons);
+  console.log('📊 Monthly stats calculated:', {
+    maxMonthly,
+    minMonthly,
+    avgMonthly,
+    totalMonths: monthlyTotals.length
+  });
 
-      const trendingPercent = prevYearTotal > 0 
-        ? parseFloat((((totalTons - prevYearTotal) / prevYearTotal) * 100).toFixed(1))
-        : 0;
+  // Previous year total
+  const prevYearStart = new Date(startDate);
+  prevYearStart.setFullYear(prevYearStart.getFullYear() - 1);
+  const prevYearEnd = new Date(endDate);
+  prevYearEnd.setFullYear(prevYearEnd.getFullYear() - 1);
 
-      monthlyStats = {
-        maximum: {
-          value: maxMonthly,
-          month: monthlyResult.rows[maxMonthIndex] 
-            ? `${getMonthName(parseInt(monthlyResult.rows[maxMonthIndex].month))} ${monthlyResult.rows[maxMonthIndex].year}`
-            : 'N/A'
-        },
-        minimum: {
-          value: minMonthly,
-          month: monthlyResult.rows[minMonthIndex]
-            ? `${getMonthName(parseInt(monthlyResult.rows[minMonthIndex].month))} ${monthlyResult.rows[minMonthIndex].year}`
-            : 'N/A'
-        },
-        average_monthly: parseFloat(avgMonthly.toFixed(2)),
-        trending: {
-          value: trendingPercent,
-          direction: trendingPercent >= 0 ? 'up' : 'down',
-          vs_period: (parseInt(currentYear) - 1).toString(),
-          current_period_total: totalTons,
-          previous_period_total: prevYearTotal
-        }
-      };
-      
-      console.log(`✅ Found ${monthlyEvolution.length} months`);
-    } catch (monthlyError) {
-      console.error('❌ Monthly query failed:', monthlyError);
-      throw new Error(`Monthly query failed: ${monthlyError.message}`);
+  const prevYearParams = [
+    prevYearStart.toISOString().split('T')[0],
+    prevYearEnd.toISOString().split('T')[0],
+    ...sectorParams
+  ];
+
+  const prevYearTotalQuery = `
+    SELECT COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
+    FROM waste_tickets_landfill wtl
+    JOIN sectors s ON wtl.sector_id = s.id
+    WHERE wtl.deleted_at IS NULL
+      AND wtl.ticket_date >= $1
+      AND wtl.ticket_date <= $2
+      ${sectorFilter}
+  `;
+
+  const prevYearTotalResult = await db.query(prevYearTotalQuery, prevYearParams);
+  const prevYearTotal = parseFloat(prevYearTotalResult.rows[0].total_tons);
+
+  const trendingPercent = prevYearTotal > 0 
+    ? parseFloat((((totalTons - prevYearTotal) / prevYearTotal) * 100).toFixed(1))
+    : 0;
+
+  monthlyStats = {
+    maximum: {
+      value: maxMonthly,
+      month: monthlyResult.rows[maxMonthIndex] 
+        ? `${getMonthName(parseInt(monthlyResult.rows[maxMonthIndex].month))} ${monthlyResult.rows[maxMonthIndex].year}`
+        : 'N/A'
+    },
+    minimum: {
+      value: minMonthly,  // ✅ Acum e valoarea reală, nu 0
+      month: monthlyResult.rows[minMonthIndex]
+        ? `${getMonthName(parseInt(monthlyResult.rows[minMonthIndex].month))} ${monthlyResult.rows[minMonthIndex].year}`
+        : 'N/A'
+    },
+    average_monthly: parseFloat(avgMonthly.toFixed(2)),
+    trending: {
+      value: trendingPercent,
+      direction: trendingPercent >= 0 ? 'up' : 'down',
+      vs_period: (parseInt(currentYear) - 1).toString(),
+      current_period_total: totalTons,
+      previous_period_total: prevYearTotal
     }
+  };
+  
+  console.log('✅ Monthly stats:', monthlyStats);
+  console.log(`✅ Found ${monthlyEvolution.length} months`);
+} catch (monthlyError) {
+  console.error('❌ Monthly query failed:', monthlyError);
+  throw new Error(`Monthly query failed: ${monthlyError.message}`);
+}
 
     // ========================================================================
     // STEP 7: TOP OPERATORS
