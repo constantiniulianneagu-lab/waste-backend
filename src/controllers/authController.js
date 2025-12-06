@@ -1,20 +1,20 @@
 // src/controllers/authController.js
-import bcrypt from 'bcryptjs';  // ✅ Nou
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import pool from '../config/database.js';
 
 // Generate JWT tokens
 const generateTokens = (userId, email, role) => {
   const accessToken = jwt.sign(
-    { userId, email, role },
+    { id: userId, email, role }, // ✅ SCHIMBAT: userId → id
     process.env.JWT_SECRET,
-    { expiresIn: '15m' } // 15 minute
+    { expiresIn: '15m' }
   );
 
   const refreshToken = jwt.sign(
-    { userId, email },
+    { id: userId, email }, // ✅ SCHIMBAT: userId → id
     process.env.JWT_REFRESH_SECRET,
-    { expiresIn: '7d' } // 7 zile
+    { expiresIn: '7d' }
   );
 
   return { accessToken, refreshToken };
@@ -110,22 +110,22 @@ export const login = async (req, res) => {
 
     console.log('🎉 Login successful for user:', user.email);
 
-  // Returnează user info + tokens
-res.json({
-  success: true,
-  message: 'Login successful',
-  data: {
-    user: {
-      id: user.id,
-      email: user.email,
-      firstName: user.first_name,
-      lastName: user.last_name,
-      role: user.role
-    },
-    accessToken,
-    refreshToken
-  }
-});
+    // Returnează user info + tokens
+    res.json({
+      success: true,
+      message: 'Login successful',
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.first_name,
+          lastName: user.last_name,
+          role: user.role
+        },
+        accessToken,
+        refreshToken
+      }
+    });
 
   } catch (error) {
     console.error('💥 Login error:', error);
@@ -208,7 +208,7 @@ export const refreshToken = async (req, res) => {
     // Generează nou access token
     const newAccessToken = jwt.sign(
       {
-        userId: tokenData.user_id,
+        id: tokenData.user_id,  // ✅ SCHIMBAT: userId → id
         email: tokenData.email,
         role: tokenData.role
       },
@@ -235,8 +235,8 @@ export const refreshToken = async (req, res) => {
 // GET CURRENT USER
 export const getCurrentUser = async (req, res) => {
   try {
-    // req.user vine din auth middleware
-    const userId = req.user.userId;
+    // req.user vine din auth middleware - acum are "id" în loc de "userId"
+    const userId = req.user.id; // ✅ SCHIMBAT: userId → id
 
     const result = await pool.query(
       `SELECT id, email, first_name, last_name, role, is_active, created_at
