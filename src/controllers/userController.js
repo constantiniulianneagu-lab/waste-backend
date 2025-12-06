@@ -2,6 +2,10 @@
 import bcrypt from 'bcryptjs';
 import pool from '../config/database.js';
 
+// ============================================================================
+// USER MANAGEMENT (PLATFORM_ADMIN)
+// ============================================================================
+
 // GET ALL USERS (with pagination & filters)
 export const getAllUsers = async (req, res) => {
   try {
@@ -291,8 +295,8 @@ export const getUserStats = async (req, res) => {
         COUNT(*) as total,
         COUNT(*) FILTER (WHERE is_active = true) as active,
         COUNT(*) FILTER (WHERE role = 'PLATFORM_ADMIN') as admins,
-        COUNT(*) FILTER (WHERE role = 'INSTITUTION_ADMIN') as institution_admins,
-        COUNT(*) FILTER (WHERE role = 'INSTITUTION_EDITOR') as editors,
+        COUNT(*) FILTER (WHERE role = 'ADMIN_INSTITUTION') as institution_admins,
+        COUNT(*) FILTER (WHERE role = 'EDITOR_INSTITUTION') as editors,
         COUNT(*) FILTER (WHERE role = 'REGULATOR_VIEWER') as regulators
       FROM users
       WHERE deleted_at IS NULL
@@ -307,6 +311,205 @@ export const getUserStats = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Eroare la obținerea statisticilor'
+    });
+  }
+};
+
+// ============================================================================
+// USER PROFILE (ALL AUTHENTICATED USERS)
+// ============================================================================
+
+// GET CURRENT USER PROFILE
+export const getUserProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get user data
+    const userQuery = `
+      SELECT 
+        id, email, first_name, last_name, role, 
+        phone, position, department, is_active,
+        created_at
+      FROM users 
+      WHERE id = $1 AND deleted_at IS NULL
+    `;
+    const userResult = await pool.query(userQuery, [userId]);
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Utilizator negăsit'
+      });
+    }
+
+    const user = userResult.rows[0];
+
+    // Get institution data (primary institution)
+    const institutionQuery = `
+      SELECT 
+        i.id, i.name, i.type, i.sector,
+        i.contact_email, i.contact_phone, i.address,
+        i.website, i.short_name, i.fiscal_code
+      FROM institutions i
+      INNER JOIN user_institutions ui ON i.id = ui.institution_id
+      WHERE ui.user_id = $1 AND ui.is_primary = true
+      AND i.deleted_at IS NULL
+      LIMIT 1
+    `;
+    const institutionResult = await pool.query(institutionQuery, [userId]);
+
+    res.json({
+      success: true,
+      data: {
+        user: user,
+        institution: institutionResult.rows[0] || null
+      }
+    });
+  } catch (error) {
+    console.error('getUserProfile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la încărcarea profilului'
+    });
+  }
+};
+
+// UPDATE CURRENT USER PROFILE
+export const updateProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { firstName, lastName, email, phone, position, department } = req.body;
+
+    // Validare
+    if (!firstName || !lastName || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Prenume, Nume și Email sunt obligatorii'
+      });
+    }
+
+    // Verifică dacă email-ul e folosit de alt user
+    const emailCheck = await pool.query(
+      'SELECT id FROM users WHERE email = $1 AND id != $2 AND deleted_at IS NULL',
+      [email.toLowerCase(), userId]
+    );
+
+    if (emailCheck.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email-ul este deja utilizat'
+      });
+    }
+
+    // Update user
+    const updateQuery = `
+      UPDATE users 
+      SET 
+        first_name = $1,
+        last_name = $2,
+        email = $3,
+        phone = $4,
+        position = $5,
+        department = $6,
+        updated_at = NOW()
+      WHERE id = $7 AND deleted_at IS NULL
+      RETURNING id, email, first_name, last_name, role, phone, position, department, is_active, updated_at
+    `;
+
+    const result = await pool.query(updateQuery, [
+      firstName, 
+      lastName, 
+      email.toLowerCase(), 
+      phone || null, 
+      position || null, 
+      department || null, 
+      userId
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Utilizator negăsit'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Profil actualizat cu succes',
+      data: result.rows[0]
+    });
+  } catch (error) {
+    console.error('updateProfile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la actualizarea profilului'
+    });
+  }
+};
+
+// UPDATE CURRENT USER PASSWORD
+export const updatePassword = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { currentPassword, newPassword } = req.body;
+
+    // Validare
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Parola curentă și parola nouă sunt obligatorii'
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Parola nouă trebuie să aibă minim 8 caractere'
+      });
+    }
+
+    // Get current password hash
+    const userQuery = 'SELECT password_hash FROM users WHERE id = $1 AND deleted_at IS NULL';
+    const userResult = await pool.query(userQuery, [userId]);
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Utilizator negăsit'
+      });
+    }
+
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, userResult.rows[0].password_hash);
+
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: 'Parola curentă este incorectă'
+      });
+    }
+
+    // Hash new password
+    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    const updateQuery = `
+      UPDATE users 
+      SET password_hash = $1, updated_at = NOW()
+      WHERE id = $2
+    `;
+
+    await pool.query(updateQuery, [newPasswordHash, userId]);
+
+    res.json({
+      success: true,
+      message: 'Parola schimbată cu succes'
+    });
+  } catch (error) {
+    console.error('updatePassword error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la schimbarea parolei'
     });
   }
 };

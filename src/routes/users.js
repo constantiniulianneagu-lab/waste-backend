@@ -6,7 +6,10 @@ import {
   createUser, 
   updateUser, 
   deleteUser,
-  getUserStats
+  getUserStats,
+  getUserProfile,      // ✅ ADĂUGAT
+  updateProfile,       // ✅ ADĂUGAT
+  updatePassword       // ✅ ADĂUGAT
 } from '../controllers/userController.js';
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 
@@ -14,6 +17,23 @@ const router = express.Router();
 
 // Toate route-urile necesită autentificare
 router.use(authenticateToken);
+
+// ============================================================================
+// USER PROFILE ROUTES (ALL AUTHENTICATED USERS)
+// ============================================================================
+
+// GET current user profile
+router.get('/profile', getUserProfile);
+
+// PUT update current user profile
+router.put('/profile', updateProfile);
+
+// PUT update current user password
+router.put('/password', updatePassword);
+
+// ============================================================================
+// USER MANAGEMENT ROUTES (PLATFORM_ADMIN ONLY)
+// ============================================================================
 
 // GET routes
 // Doar PLATFORM_ADMIN poate vedea lista de users
