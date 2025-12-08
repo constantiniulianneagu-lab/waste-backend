@@ -306,10 +306,12 @@ export const getInstitutionStats = async (req, res) => {
   }
 };
 
-// GET INSTITUTION CONTRACTS (TMB)
+// GET INSTITUTION CONTRACTS (TMB) - FIXED cu sector_name
 export const getInstitutionContracts = async (req, res) => {
   try {
     const { id } = req.params;
+    
+    console.log('Getting contracts for institution:', id);
     
     // 1. Get institution to check type
     const institutionResult = await pool.query(
@@ -325,6 +327,7 @@ export const getInstitutionContracts = async (req, res) => {
     }
     
     const institution = institutionResult.rows[0];
+    console.log('Institution:', institution);
     
     // 2. Only TMB operators have contracts
     if (institution.type !== 'TMB_OPERATOR') {
@@ -340,13 +343,17 @@ export const getInstitutionContracts = async (req, res) => {
     }
     
     // 3. Get associations (where this institution is primary operator)
+    // ✅ FIX: Folosim sector_name în loc de s.name
     const associationsResult = await pool.query(
-      `SELECT a.sector_id, s.name as sector_name
+      `SELECT a.sector_id, s.sector_name
        FROM tmb_associations a
        LEFT JOIN sectors s ON s.id = a.sector_id
-       WHERE a.primary_operator_id = $1`,
+       WHERE a.primary_operator_id = $1
+       AND a.is_active = true`,
       [id]
     );
+    
+    console.log('Associations found:', associationsResult.rows.length);
     
     const sectorIds = associationsResult.rows.map(a => a.sector_id);
     
@@ -362,12 +369,15 @@ export const getInstitutionContracts = async (req, res) => {
       });
     }
     
+    console.log('Sector IDs:', sectorIds);
+    
     // 4. Get contracts for these sectors
+    // ✅ FIX: Folosim s.sector_name în loc de s.name
     const placeholders = sectorIds.map((_, i) => `$${i + 1}`).join(',');
     const contractsResult = await pool.query(
       `SELECT 
         c.*,
-        s.name as sector_name
+        COALESCE(s.sector_name, s.sector_number::text, c.sector_id::text) as sector_name
        FROM tmb_contracts c
        LEFT JOIN sectors s ON s.id = c.sector_id
        WHERE c.sector_id IN (${placeholders})
@@ -375,6 +385,8 @@ export const getInstitutionContracts = async (req, res) => {
        ORDER BY c.contract_date_start DESC`,
       sectorIds
     );
+    
+    console.log('Contracts found:', contractsResult.rows.length);
     
     const contracts = contractsResult.rows;
     
@@ -393,6 +405,7 @@ export const getInstitutionContracts = async (req, res) => {
         contractIds
       );
       amendments = amendmentsResult.rows;
+      console.log('Amendments found:', amendments.length);
     }
     
     // 6. Group amendments by contract
@@ -416,6 +429,12 @@ export const getInstitutionContracts = async (req, res) => {
     }, 0);
     
     const activeContracts = contractsWithAmendments.filter(c => c.is_active).length;
+    
+    console.log('Returning contracts:', {
+      total: contractsWithAmendments.length,
+      active: activeContracts,
+      total_value: totalValue
+    });
     
     res.json({
       success: true,
