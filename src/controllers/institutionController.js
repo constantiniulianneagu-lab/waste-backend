@@ -305,3 +305,134 @@ export const getInstitutionStats = async (req, res) => {
     });
   }
 };
+
+// GET INSTITUTION CONTRACTS (TMB)
+export const getInstitutionContracts = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // 1. Get institution to check type
+    const institutionResult = await pool.query(
+      'SELECT id, name, type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
+      [id]
+    );
+    
+    if (institutionResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Institution not found'
+      });
+    }
+    
+    const institution = institutionResult.rows[0];
+    
+    // 2. Only TMB operators have contracts
+    if (institution.type !== 'TMB_OPERATOR') {
+      return res.json({
+        success: true,
+        data: [],
+        metadata: {
+          total_contracts: 0,
+          active_contracts: 0,
+          total_value: 0
+        }
+      });
+    }
+    
+    // 3. Get associations (where this institution is primary operator)
+    const associationsResult = await pool.query(
+      `SELECT a.sector_id, s.name as sector_name
+       FROM tmb_associations a
+       LEFT JOIN sectors s ON s.id = a.sector_id
+       WHERE a.primary_operator_id = $1`,
+      [id]
+    );
+    
+    const sectorIds = associationsResult.rows.map(a => a.sector_id);
+    
+    if (sectorIds.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        metadata: {
+          total_contracts: 0,
+          active_contracts: 0,
+          total_value: 0
+        }
+      });
+    }
+    
+    // 4. Get contracts for these sectors
+    const placeholders = sectorIds.map((_, i) => `$${i + 1}`).join(',');
+    const contractsResult = await pool.query(
+      `SELECT 
+        c.*,
+        s.name as sector_name
+       FROM tmb_contracts c
+       LEFT JOIN sectors s ON s.id = c.sector_id
+       WHERE c.sector_id IN (${placeholders})
+       AND c.deleted_at IS NULL
+       ORDER BY c.contract_date_start DESC`,
+      sectorIds
+    );
+    
+    const contracts = contractsResult.rows;
+    
+    // 5. Get amendments for these contracts
+    const contractIds = contracts.map(c => c.id);
+    let amendments = [];
+    
+    if (contractIds.length > 0) {
+      const amendmentPlaceholders = contractIds.map((_, i) => `$${i + 1}`).join(',');
+      const amendmentsResult = await pool.query(
+        `SELECT *
+         FROM tmb_contract_amendments
+         WHERE contract_id IN (${amendmentPlaceholders})
+         AND deleted_at IS NULL
+         ORDER BY amendment_date DESC`,
+        contractIds
+      );
+      amendments = amendmentsResult.rows;
+    }
+    
+    // 6. Group amendments by contract
+    const amendmentsByContract = {};
+    amendments.forEach(a => {
+      if (!amendmentsByContract[a.contract_id]) {
+        amendmentsByContract[a.contract_id] = [];
+      }
+      amendmentsByContract[a.contract_id].push(a);
+    });
+    
+    // 7. Attach amendments to contracts
+    const contractsWithAmendments = contracts.map(c => ({
+      ...c,
+      amendments: amendmentsByContract[c.id] || []
+    }));
+    
+    // 8. Calculate metadata
+    const totalValue = contractsWithAmendments.reduce((sum, c) => {
+      return sum + (parseFloat(c.contract_value) || 0);
+    }, 0);
+    
+    const activeContracts = contractsWithAmendments.filter(c => c.is_active).length;
+    
+    res.json({
+      success: true,
+      data: contractsWithAmendments,
+      metadata: {
+        total_contracts: contractsWithAmendments.length,
+        active_contracts: activeContracts,
+        total_value: totalValue
+      }
+    });
+    
+  } catch (err) {
+    console.error('Error in getInstitutionContracts:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: err.message
+    });
+  }
+};

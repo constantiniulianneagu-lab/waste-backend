@@ -6,7 +6,8 @@ import {
   createInstitution, 
   updateInstitution, 
   deleteInstitution,
-  getInstitutionStats
+  getInstitutionStats,
+  getInstitutionContracts  // ✅ ADAUGĂ
 } from '../controllers/institutionController.js';
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 
@@ -21,6 +22,9 @@ router.get('/', getAllInstitutions);
 
 // Doar PLATFORM_ADMIN poate vedea stats
 router.get('/stats', authorizeRoles('PLATFORM_ADMIN'), getInstitutionStats);
+
+// Get contracts for institution (ÎNAINTE de /:id)
+router.get('/:id/contracts', authenticateToken, getInstitutionContracts);
 
 // Toți utilizatorii autentificați pot vedea detalii instituție
 router.get('/:id', getInstitutionById);
