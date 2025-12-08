@@ -118,6 +118,9 @@ app.use('/api/dashboard/landfill', dashboardLandfillRoutes);
 console.log('📍 Mounting TMB dashboard routes at /api/dashboard/tmb');
 app.use('/api/dashboard/tmb', tmbDashboardRoutes);
 
+console.log('📍 Mounting contract files routes at /api/contracts');
+app.use('/api/contracts', contractFilesRoutes);
+
 // Debug - list all routes
 console.log('📋 Registered routes:');
 app._router.stack.forEach((middleware) => {
