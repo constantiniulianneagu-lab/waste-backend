@@ -349,7 +349,9 @@ export const getInstitutionContracts = async (req, res) => {
        FROM tmb_associations a
        LEFT JOIN sectors s ON s.id = a.sector_id
        WHERE a.primary_operator_id = $1
-       AND a.is_active = true`,
+       AND a.is_active = true
+       AND a.valid_from <= CURRENT_DATE
+       AND (a.valid_to IS NULL OR a.valid_to >= CURRENT_DATE)`,
       [id]
     );
     
