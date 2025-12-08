@@ -1,14 +1,15 @@
 // src/routes/contractFiles.js
 /**
  * ============================================================================
- * CONTRACT FILE ROUTES - ES6 MODULES
+ * CONTRACT FILE ROUTES - SIMPLIFIED
  * ============================================================================
  * Routes pentru upload/download/delete contracte PDF
+ * Verifică manual rolul în controller în loc de middleware
  * ============================================================================
  */
 
 import express from 'express';
-import { authenticateToken, requireRole } from '../middleware/auth.js';
+import { authenticateToken } from '../middleware/auth.js';
 import {
   upload,
   uploadContractFile,
@@ -19,6 +20,21 @@ import {
 const router = express.Router();
 
 // ============================================================================
+// MIDDLEWARE PENTRU VERIFICARE ROL PLATFORM_ADMIN
+// ============================================================================
+
+const requirePlatformAdmin = (req, res, next) => {
+  if (req.user && req.user.role === 'PLATFORM_ADMIN') {
+    next();
+  } else {
+    res.status(403).json({
+      success: false,
+      message: 'Access denied. Platform admin only.',
+    });
+  }
+};
+
+// ============================================================================
 // ROUTES
 // ============================================================================
 
@@ -27,8 +43,8 @@ const router = express.Router();
 router.post(
   '/:contractId/upload',
   authenticateToken,
-  requireRole(['PLATFORM_ADMIN']),
-  upload.single('file'), // Multer middleware
+  requirePlatformAdmin,
+  upload.single('file'),
   uploadContractFile
 );
 
@@ -37,7 +53,7 @@ router.post(
 router.delete(
   '/:contractId/file',
   authenticateToken,
-  requireRole(['PLATFORM_ADMIN']),
+  requirePlatformAdmin,
   deleteContractFile
 );
 
