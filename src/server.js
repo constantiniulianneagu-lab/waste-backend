@@ -15,6 +15,7 @@ import tmbDashboardRoutes from './routes/dashboard/tmb.js';
 import reportsRoutes from './routes/reports/index.js';
 import reportTmbRoutes from './routes/reports/tmb.js'; // 🆕 NOU - TMB Reports
 import tmbRoutes from './routes/tmb/tmb.js'; // 🆕 NOU - TMB operators
+import contractFilesRoutes from './routes/contractFiles.js'; // 🆕 Contract files upload
 
 // Dashboard Routes
 import dashboardLandfillRoutes from './routes/dashboard/landfill.js';
@@ -64,7 +65,8 @@ app.get('/', (req, res) => {
       users: '/api/users/*',
       institutions: '/api/institutions/*',
       tmb: '/api/tmb/*',
-      reports: '/api/reports/*'  // 🆕 NOU
+      reports: '/api/reports/*',  // 🆕 NOU
+      contracts: '/api/contracts/*' // 🆕 NOU
     }
   });
 });
@@ -105,6 +107,9 @@ app.use('/api/reports', reportsRoutes);
 
 console.log('📍 Mounting TMB reports routes at /api/reports/tmb'); // 🆕 NOU
 app.use('/api/reports/tmb', reportTmbRoutes); // 🆕 NOU
+
+console.log('📍 Mounting contract files routes at /api/contracts');
+app.use('/api/contracts', contractFilesRoutes);
 
 // Dashboard Routes
 console.log('📍 Mounting dashboard landfill routes at /api/dashboard/landfill');
