@@ -1,99 +1,52 @@
 // src/controllers/institutionController.js
 import pool from '../config/database.js';
 
-// GET ALL INSTITUTIONS - CU SECTORS DIN institution_sectors + contracts
+// GET ALL INSTITUTIONS
 export const getAllInstitutions = async (req, res) => {
   try {
     const { page = 1, limit = 10, type, sector, search } = req.query;
     const offset = (page - 1) * limit;
 
     let query = `
-      SELECT 
-        i.id, 
-        i.name, 
-        i.short_name,
-        i.type, 
-        i.contact_email,
-        i.contact_phone,
-        i.address,
-        i.website,
-        i.fiscal_code,
-        i.registration_no,
-        i.is_active, 
-        i.created_at, 
-        i.updated_at,
-        -- Agregare sectoare din institution_sectors
-        COALESCE(
-          STRING_AGG(
-            DISTINCT CASE 
-              WHEN s.sector_number IS NOT NULL THEN s.sector_number::text
-              ELSE NULL
-            END, 
-            ',' 
-            ORDER BY s.sector_number::text
-          ),
-          -- Fallback la sectorul din institutions.sector (legacy)
-          i.sector
-        ) as sector
-      FROM institutions i
-      LEFT JOIN institution_sectors ins ON ins.institution_id = i.id
-      LEFT JOIN sectors s ON s.id = ins.sector_id
-      WHERE i.deleted_at IS NULL
+      SELECT id, name, short_name, type, sector, contact_email, contact_phone,
+             address, website, fiscal_code, registration_no, is_active, 
+             created_at, updated_at
+      FROM institutions 
+      WHERE deleted_at IS NULL
     `;
     const params = [];
     let paramCount = 1;
 
     // Filter by type
     if (type) {
-      query += ` AND i.type = $${paramCount}`;
+      query += ` AND type = $${paramCount}`;
       params.push(type);
       paramCount++;
     }
 
     // Filter by sector
     if (sector) {
-      query += ` AND (i.sector = $${paramCount} OR EXISTS (
-        SELECT 1 FROM institution_sectors ins2
-        JOIN sectors s2 ON s2.id = ins2.sector_id
-        WHERE ins2.institution_id = i.id
-        AND s2.sector_number::text = $${paramCount}
-      ))`;
+      query += ` AND sector = $${paramCount}`;
       params.push(sector);
       paramCount++;
     }
 
     // Search by name or email
     if (search) {
-      query += ` AND (i.name ILIKE $${paramCount} OR i.contact_email ILIKE $${paramCount})`;
+      query += ` AND (name ILIKE $${paramCount} OR contact_email ILIKE $${paramCount})`;
       params.push(`%${search}%`);
       paramCount++;
     }
 
-    // Group by institution
-    query += ` GROUP BY i.id`;
-
     // Get total count
-    const countQuery = `
-      SELECT COUNT(DISTINCT i.id)
-      FROM institutions i
-      LEFT JOIN institution_sectors ins ON ins.institution_id = i.id
-      LEFT JOIN sectors s ON s.id = ins.sector_id
-      WHERE i.deleted_at IS NULL
-      ${type ? `AND i.type = $1` : ''}
-      ${sector ? `AND (i.sector = $${type ? 2 : 1} OR EXISTS (
-        SELECT 1 FROM institution_sectors ins2
-        JOIN sectors s2 ON s2.id = ins2.sector_id
-        WHERE ins2.institution_id = i.id
-        AND s2.sector_number::text = $${type ? 2 : 1}
-      ))` : ''}
-      ${search ? `AND (i.name ILIKE $${paramCount - 1} OR i.contact_email ILIKE $${paramCount - 1})` : ''}
-    `;
-    
-    const countResult = await pool.query(countQuery, params.slice(0, paramCount - 2));
+    const countResult = await pool.query(
+      query.replace('SELECT id, name, short_name, type, sector, contact_email, contact_phone, address, website, fiscal_code, registration_no, is_active, created_at, updated_at', 'SELECT COUNT(*)'),
+      params
+    );
     const total = parseInt(countResult.rows[0].count);
 
     // Add pagination
-    query += ` ORDER BY i.created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    query += ` ORDER BY created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     params.push(limit, offset);
 
     const result = await pool.query(query, params);
@@ -119,42 +72,17 @@ export const getAllInstitutions = async (req, res) => {
   }
 };
 
-// GET SINGLE INSTITUTION - CU SECTORS DIN institution_sectors + contracts
+// GET SINGLE INSTITUTION
 export const getInstitutionById = async (req, res) => {
   try {
     const { id } = req.params;
 
     const result = await pool.query(
-      `SELECT 
-        i.id, 
-        i.name,
-        i.short_name,
-        i.type, 
-        i.contact_email,
-        i.contact_phone,
-        i.address,
-        i.website,
-        i.fiscal_code,
-        i.registration_no,
-        i.is_active, 
-        i.created_at, 
-        i.updated_at,
-        COALESCE(
-          STRING_AGG(
-            DISTINCT CASE 
-              WHEN s.sector_number IS NOT NULL THEN s.sector_number::text
-              ELSE NULL
-            END, 
-            ',' 
-            ORDER BY s.sector_number::text
-          ),
-          i.sector
-        ) as sector
-       FROM institutions i
-       LEFT JOIN institution_sectors ins ON ins.institution_id = i.id
-       LEFT JOIN sectors s ON s.id = ins.sector_id
-       WHERE i.id = $1 AND i.deleted_at IS NULL
-       GROUP BY i.id`,
+      `SELECT id, name, short_name, type, sector, contact_email, contact_phone,
+              address, website, fiscal_code, registration_no, is_active, 
+              created_at, updated_at
+       FROM institutions 
+       WHERE id = $1 AND deleted_at IS NULL`,
       [id]
     );
 
