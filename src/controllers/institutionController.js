@@ -306,7 +306,7 @@ export const getInstitutionStats = async (req, res) => {
   }
 };
 
-// GET INSTITUTION CONTRACTS (TMB) - FIXED cu sector_name
+// GET INSTITUTION CONTRACTS (TMB)
 export const getInstitutionContracts = async (req, res) => {
   try {
     const { id } = req.params;
@@ -343,15 +343,12 @@ export const getInstitutionContracts = async (req, res) => {
     }
     
     // 3. Get associations (where this institution is primary operator)
-    // ✅ FIX: Folosim sector_name în loc de s.name
     const associationsResult = await pool.query(
       `SELECT a.sector_id, s.sector_name
        FROM tmb_associations a
        LEFT JOIN sectors s ON s.id = a.sector_id
        WHERE a.primary_operator_id = $1
-       AND a.is_active = true
-       AND a.valid_from <= CURRENT_DATE
-       AND (a.valid_to IS NULL OR a.valid_to >= CURRENT_DATE)`,
+       AND a.is_active = true`,
       [id]
     );
     
@@ -374,7 +371,6 @@ export const getInstitutionContracts = async (req, res) => {
     console.log('Sector IDs:', sectorIds);
     
     // 4. Get contracts for these sectors
-    // ✅ FIX: Folosim s.sector_name în loc de s.name
     const placeholders = sectorIds.map((_, i) => `$${i + 1}`).join(',');
     const contractsResult = await pool.query(
       `SELECT 
