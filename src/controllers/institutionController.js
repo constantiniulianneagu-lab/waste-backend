@@ -308,7 +308,7 @@ export const getInstitutionStats = async (req, res) => {
   }
 };
 
-// GET INSTITUTION CONTRACTS (TMB) - păstrăm așa cum e (nu schimbăm)
+// GET INSTITUTION CONTRACTS (TMB) - FIXED LOGIC
 export const getInstitutionContracts = async (req, res) => {
   try {
     const { id } = req.params;
@@ -344,7 +344,8 @@ export const getInstitutionContracts = async (req, res) => {
       });
     }
     
-    // 3. Get associations (where this institution is primary operator)
+    // 3. Get associations WHERE THIS INSTITUTION IS PRIMARY OPERATOR
+    // ✅ FIX: DOAR primary_operator_id, NU secondary!
     const associationsResult = await pool.query(
       `SELECT a.sector_id, s.sector_name
        FROM tmb_associations a
@@ -377,7 +378,14 @@ export const getInstitutionContracts = async (req, res) => {
     const contractsResult = await pool.query(
       `SELECT 
         c.*,
-        COALESCE(s.sector_name, s.sector_number::text, c.sector_id::text) as sector_name
+        COALESCE(s.sector_name, s.sector_number::text, c.sector_id::text) as sector_name,
+        -- ✅ Determină dacă contractul e activ pe bază de date
+        CASE 
+          WHEN c.is_active = false THEN false
+          WHEN c.contract_date_end IS NOT NULL AND c.contract_date_end < CURRENT_DATE THEN false
+          WHEN c.contract_date_start > CURRENT_DATE THEN false
+          ELSE true
+        END as is_currently_active
        FROM tmb_contracts c
        LEFT JOIN sectors s ON s.id = c.sector_id
        WHERE c.sector_id IN (${placeholders})
@@ -417,9 +425,10 @@ export const getInstitutionContracts = async (req, res) => {
       amendmentsByContract[a.contract_id].push(a);
     });
     
-    // 7. Attach amendments to contracts
+    // 7. Attach amendments to contracts și folosește is_currently_active
     const contractsWithAmendments = contracts.map(c => ({
       ...c,
+      is_active: c.is_currently_active, // ✅ Folosește statusul calculat pe bază de date
       amendments: amendmentsByContract[c.id] || []
     }));
     
