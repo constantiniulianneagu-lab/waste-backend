@@ -308,7 +308,7 @@ export const getInstitutionStats = async (req, res) => {
   }
 };
 
-// GET INSTITUTION CONTRACTS (TMB) - FIXED LOGIC
+// GET INSTITUTION CONTRACTS (TMB) - CONTRACTS FOR BOTH PRIMARY AND SECONDARY
 export const getInstitutionContracts = async (req, res) => {
   try {
     const { id } = req.params;
@@ -344,18 +344,25 @@ export const getInstitutionContracts = async (req, res) => {
       });
     }
     
-    // 3. Get associations WHERE THIS INSTITUTION IS PRIMARY OPERATOR
-    // ✅ FIX: DOAR primary_operator_id, NU secondary!
+    // 3. Get associations WHERE THIS INSTITUTION IS PRIMARY **OR** SECONDARY OPERATOR
+    // ✅ FIX: Include BOTH primary_operator_id AND secondary_operator_id
     const associationsResult = await pool.query(
-      `SELECT a.sector_id, s.sector_name
+      `SELECT 
+        a.sector_id, 
+        s.sector_name,
+        CASE 
+          WHEN a.primary_operator_id = $1 THEN 'PRIMARY'
+          WHEN a.secondary_operator_id = $1 THEN 'SECONDARY'
+        END as role
        FROM tmb_associations a
        LEFT JOIN sectors s ON s.id = a.sector_id
-       WHERE a.primary_operator_id = $1
+       WHERE (a.primary_operator_id = $1 OR a.secondary_operator_id = $1)
        AND a.is_active = true`,
       [id]
     );
     
     console.log('Associations found:', associationsResult.rows.length);
+    console.log('Association roles:', associationsResult.rows);
     
     const sectorIds = associationsResult.rows.map(a => a.sector_id);
     
