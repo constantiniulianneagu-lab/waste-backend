@@ -308,7 +308,7 @@ export const getInstitutionStats = async (req, res) => {
   }
 };
 
-// GET INSTITUTION CONTRACTS (TMB) - CONTRACTS FOR BOTH PRIMARY AND SECONDARY
+// GET INSTITUTION CONTRACTS (TMB) - WITH AMENDMENTS DATE CHECK
 export const getInstitutionContracts = async (req, res) => {
   try {
     const { id } = req.params;
@@ -345,7 +345,6 @@ export const getInstitutionContracts = async (req, res) => {
     }
     
     // 3. Get associations WHERE THIS INSTITUTION IS PRIMARY **OR** SECONDARY OPERATOR
-    // ✅ FIX: Include BOTH primary_operator_id AND secondary_operator_id
     const associationsResult = await pool.query(
       `SELECT 
         a.sector_id, 
@@ -362,7 +361,6 @@ export const getInstitutionContracts = async (req, res) => {
     );
     
     console.log('Associations found:', associationsResult.rows.length);
-    console.log('Association roles:', associationsResult.rows);
     
     const sectorIds = associationsResult.rows.map(a => a.sector_id);
     
@@ -380,19 +378,22 @@ export const getInstitutionContracts = async (req, res) => {
     
     console.log('Sector IDs:', sectorIds);
     
-    // 4. Get contracts for these sectors
+    // 4. Get contracts for these sectors WITH latest amendment date
     const placeholders = sectorIds.map((_, i) => `$${i + 1}`).join(',');
     const contractsResult = await pool.query(
       `SELECT 
         c.*,
         COALESCE(s.sector_name, s.sector_number::text, c.sector_id::text) as sector_name,
-        -- ✅ Determină dacă contractul e activ pe bază de date
-        CASE 
-          WHEN c.is_active = false THEN false
-          WHEN c.contract_date_end IS NOT NULL AND c.contract_date_end < CURRENT_DATE THEN false
-          WHEN c.contract_date_start > CURRENT_DATE THEN false
-          ELSE true
-        END as is_currently_active
+        -- ✅ Ia data finală din ultimul act adițional (dacă există)
+        (
+          SELECT am.new_contract_date_end
+          FROM tmb_contract_amendments am
+          WHERE am.contract_id = c.id
+          AND am.new_contract_date_end IS NOT NULL
+          AND am.deleted_at IS NULL
+          ORDER BY am.amendment_date DESC
+          LIMIT 1
+        ) as amended_end_date
        FROM tmb_contracts c
        LEFT JOIN sectors s ON s.id = c.sector_id
        WHERE c.sector_id IN (${placeholders})
@@ -432,12 +433,36 @@ export const getInstitutionContracts = async (req, res) => {
       amendmentsByContract[a.contract_id].push(a);
     });
     
-    // 7. Attach amendments to contracts și folosește is_currently_active
-    const contractsWithAmendments = contracts.map(c => ({
-      ...c,
-      is_active: c.is_currently_active, // ✅ Folosește statusul calculat pe bază de date
-      amendments: amendmentsByContract[c.id] || []
-    }));
+    // 7. Attach amendments și calculează status pe bază de date (inclusiv acte adiționale)
+    const contractsWithAmendments = contracts.map(c => {
+      // ✅ Folosește amended_end_date dacă există, altfel contract_date_end
+      const effectiveEndDate = c.amended_end_date || c.contract_date_end;
+      
+      // Determină dacă contractul e activ
+      let isCurrentlyActive = true;
+      
+      if (c.is_active === false) {
+        isCurrentlyActive = false;
+      } else if (effectiveEndDate && new Date(effectiveEndDate) < new Date()) {
+        isCurrentlyActive = false;
+      } else if (c.contract_date_start && new Date(c.contract_date_start) > new Date()) {
+        isCurrentlyActive = false;
+      }
+      
+      console.log(`Contract ${c.contract_number}:`, {
+        original_end: c.contract_date_end,
+        amended_end: c.amended_end_date,
+        effective_end: effectiveEndDate,
+        is_active: isCurrentlyActive
+      });
+      
+      return {
+        ...c,
+        effective_end_date: effectiveEndDate, // ✅ Data efectivă de sfârșit
+        is_active: isCurrentlyActive,
+        amendments: amendmentsByContract[c.id] || []
+      };
+    });
     
     // 8. Calculate metadata
     const totalValue = contractsWithAmendments.reduce((sum, c) => {
