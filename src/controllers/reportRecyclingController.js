@@ -38,7 +38,7 @@ export const getRecyclingTickets = async (req, res) => {
         SELECT DISTINCT is_table.sector_id
         FROM user_institutions ui
         JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
-        WHERE ui.user_id = $1 AND ui.deleted_at IS NULL
+        WHERE ui.user_id = $1
       `;
       const userSectorsResult = await db.query(userSectorsQuery, [userId]);
       const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
