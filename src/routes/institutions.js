@@ -28,7 +28,7 @@ import {
 
 import {
   getWasteOperatorContracts,
-  getWasteOperatorContractById,  // ← SCHIMBAT de la getWasteOperatorContract
+  getWasteOperatorContractById,  // ← CORECTAT (era getWasteOperatorContract)
   createWasteOperatorContract,
   updateWasteOperatorContract,
   deleteWasteOperatorContract
@@ -36,7 +36,7 @@ import {
 
 import {
   getSortingContracts,
-  getSortingContract,
+  getSortingContract,  // ← Verifică dacă e corect în controller
   createSortingContract,
   updateSortingContract,
   deleteSortingContract
@@ -44,7 +44,7 @@ import {
 
 import {
   getDisposalContracts,
-  getDisposalContract,
+  getDisposalContract,  // ← Verifică dacă e corect în controller
   createDisposalContract,
   updateDisposalContract,
   deleteDisposalContract
@@ -92,7 +92,7 @@ router.delete('/:institutionId/tmb-contracts/:contractId', authorizeRoles('PLATF
 // ============================================================================
 
 router.get('/:institutionId/waste-contracts', getWasteOperatorContracts);
-router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContractById);  // ← SCHIMBAT
+router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContractById);  // ← CORECTAT
 router.post('/:institutionId/waste-contracts', authorizeRoles('PLATFORM_ADMIN'), createWasteOperatorContract);
 router.put('/:institutionId/waste-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), updateWasteOperatorContract);
 router.delete('/:institutionId/waste-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), deleteWasteOperatorContract);
@@ -102,7 +102,7 @@ router.delete('/:institutionId/waste-contracts/:contractId', authorizeRoles('PLA
 // ============================================================================
 
 router.get('/:institutionId/sorting-contracts', getSortingContracts);
-router.get('/:institutionId/sorting-contracts/:contractId', getSortingContract);
+router.get('/:institutionId/sorting-contracts/:contractId', getSortingContract);  // ← Verifică controller
 router.post('/:institutionId/sorting-contracts', authorizeRoles('PLATFORM_ADMIN'), createSortingContract);
 router.put('/:institutionId/sorting-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), updateSortingContract);
 router.delete('/:institutionId/sorting-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), deleteSortingContract);
@@ -112,7 +112,7 @@ router.delete('/:institutionId/sorting-contracts/:contractId', authorizeRoles('P
 // ============================================================================
 
 router.get('/:institutionId/disposal-contracts', getDisposalContracts);
-router.get('/:institutionId/disposal-contracts/:contractId', getDisposalContract);
+router.get('/:institutionId/disposal-contracts/:contractId', getDisposalContract);  // ← Verifică controller
 router.post('/:institutionId/disposal-contracts', authorizeRoles('PLATFORM_ADMIN'), createDisposalContract);
 router.put('/:institutionId/disposal-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), updateDisposalContract);
 router.delete('/:institutionId/disposal-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), deleteDisposalContract);
