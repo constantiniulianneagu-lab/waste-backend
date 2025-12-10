@@ -15,7 +15,10 @@ const formatNumber = (num) => {
 export const getRecyclingTickets = async (req, res) => {
   try {
     const { year, start_date, end_date, sector_id, page = 1, limit = 10 } = req.query;
-    const { userId, userRole } = req.user;
+    
+    // ✅ FIXED: Correct req.user structure from JWT
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
     // Date range
     const startDate = start_date || `${year}-01-01`;
@@ -107,7 +110,7 @@ export const getRecyclingTickets = async (req, res) => {
         i.name,
         SUM(wtr.accepted_quantity_tons) as total_tons
       FROM waste_tickets_recycling wtr
-      JOIN institutions i ON wtr.client_id = i.id
+      JOIN institutions i ON wtr.recipient_id = i.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
         AND wtr.ticket_date <= $2
@@ -133,10 +136,9 @@ export const getRecyclingTickets = async (req, res) => {
         wtr.vehicle_number,
         wtr.delivered_quantity_tons,
         wtr.accepted_quantity_tons,
-        wtr.difference_tons,
-        wtr.acceptance_percentage
+        wtr.difference_tons
       FROM waste_tickets_recycling wtr
-      JOIN institutions client ON wtr.client_id = client.id
+      JOIN institutions client ON wtr.recipient_id = client.id
       JOIN institutions supplier ON wtr.supplier_id = supplier.id
       JOIN waste_codes wc ON wtr.waste_code_id = wc.id
       JOIN sectors s ON wtr.sector_id = s.id
@@ -193,8 +195,7 @@ export const getRecyclingTickets = async (req, res) => {
           vehicle_number: t.vehicle_number,
           delivered_quantity_tons: formatNumber(t.delivered_quantity_tons),
           accepted_quantity_tons: formatNumber(t.accepted_quantity_tons),
-          difference_tons: formatNumber(t.difference_tons),
-          acceptance_percentage: formatNumber(t.acceptance_percentage)
+          difference_tons: formatNumber(t.difference_tons)
         })),
         pagination: {
           current_page: parseInt(page),
