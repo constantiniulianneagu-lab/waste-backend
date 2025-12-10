@@ -308,14 +308,23 @@ export const getInstitutionStats = async (req, res) => {
   }
 };
 
-// GET INSTITUTION CONTRACTS (TMB) - WITH AMENDMENTS DATE CHECK
+// ============================================================================
+// ÎNLOCUIEȘTE funcția getInstitutionContracts din institutionController.js
+// (de la linia ~330 până la sfârșit)
+// CU ACEASTĂ VERSIUNE:
+// ============================================================================
+
+// GET INSTITUTION CONTRACTS - SIMPLIFIED (returns empty, use specific endpoints)
+// Frontend trebuie să folosească endpoint-uri specifice:
+// - /api/institutions/:id/tmb-contracts
+// - /api/institutions/:id/waste-contracts
+// - /api/institutions/:id/sorting-contracts
+// - /api/institutions/:id/disposal-contracts
 export const getInstitutionContracts = async (req, res) => {
   try {
     const { id } = req.params;
     
-    console.log('Getting contracts for institution:', id);
-    
-    // 1. Get institution to check type
+    // Verifică dacă instituția există
     const institutionResult = await pool.query(
       'SELECT id, name, type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
       [id]
@@ -328,163 +337,11 @@ export const getInstitutionContracts = async (req, res) => {
       });
     }
     
-    const institution = institutionResult.rows[0];
-    console.log('Institution:', institution);
-    
-    // 2. Only TMB operators have contracts
-    if (institution.type !== 'TMB_OPERATOR') {
-      return res.json({
-        success: true,
-        data: [],
-        metadata: {
-          total_contracts: 0,
-          active_contracts: 0,
-          total_value: 0
-        }
-      });
-    }
-    
-    // 3. Get associations WHERE THIS INSTITUTION IS PRIMARY **OR** SECONDARY OPERATOR
-    const associationsResult = await pool.query(
-      `SELECT 
-        a.sector_id, 
-        s.sector_name,
-        CASE 
-          WHEN a.primary_operator_id = $1 THEN 'PRIMARY'
-          WHEN a.secondary_operator_id = $1 THEN 'SECONDARY'
-        END as role
-       FROM tmb_associations a
-       LEFT JOIN sectors s ON s.id = a.sector_id
-       WHERE (a.primary_operator_id = $1 OR a.secondary_operator_id = $1)
-       AND a.is_active = true`,
-      [id]
-    );
-    
-    console.log('Associations found:', associationsResult.rows.length);
-    
-    const sectorIds = associationsResult.rows.map(a => a.sector_id);
-    
-    if (sectorIds.length === 0) {
-      return res.json({
-        success: true,
-        data: [],
-        metadata: {
-          total_contracts: 0,
-          active_contracts: 0,
-          total_value: 0
-        }
-      });
-    }
-    
-    console.log('Sector IDs:', sectorIds);
-    
-    // 4. Get contracts for these sectors WITH latest amendment date
-    const placeholders = sectorIds.map((_, i) => `$${i + 1}`).join(',');
-    const contractsResult = await pool.query(
-      `SELECT 
-        c.*,
-        COALESCE(s.sector_name, s.sector_number::text, c.sector_id::text) as sector_name,
-        -- ✅ Ia data finală din ultimul act adițional (dacă există)
-        (
-          SELECT am.new_contract_date_end
-          FROM tmb_contract_amendments am
-          WHERE am.contract_id = c.id
-          AND am.new_contract_date_end IS NOT NULL
-          AND am.deleted_at IS NULL
-          ORDER BY am.amendment_date DESC
-          LIMIT 1
-        ) as amended_end_date
-       FROM tmb_contracts c
-       LEFT JOIN sectors s ON s.id = c.sector_id
-       WHERE c.sector_id IN (${placeholders})
-       AND c.deleted_at IS NULL
-       ORDER BY c.contract_date_start DESC`,
-      sectorIds
-    );
-    
-    console.log('Contracts found:', contractsResult.rows.length);
-    
-    const contracts = contractsResult.rows;
-    
-    // 5. Get amendments for these contracts
-    const contractIds = contracts.map(c => c.id);
-    let amendments = [];
-    
-    if (contractIds.length > 0) {
-      const amendmentPlaceholders = contractIds.map((_, i) => `$${i + 1}`).join(',');
-      const amendmentsResult = await pool.query(
-        `SELECT *
-         FROM tmb_contract_amendments
-         WHERE contract_id IN (${amendmentPlaceholders})
-         AND deleted_at IS NULL
-         ORDER BY amendment_date DESC`,
-        contractIds
-      );
-      amendments = amendmentsResult.rows;
-      console.log('Amendments found:', amendments.length);
-    }
-    
-    // 6. Group amendments by contract
-    const amendmentsByContract = {};
-    amendments.forEach(a => {
-      if (!amendmentsByContract[a.contract_id]) {
-        amendmentsByContract[a.contract_id] = [];
-      }
-      amendmentsByContract[a.contract_id].push(a);
-    });
-    
-    // 7. Attach amendments și calculează status pe bază de date (inclusiv acte adiționale)
-    const contractsWithAmendments = contracts.map(c => {
-      // ✅ Folosește amended_end_date dacă există, altfel contract_date_end
-      const effectiveEndDate = c.amended_end_date || c.contract_date_end;
-      
-      // Determină dacă contractul e activ
-      let isCurrentlyActive = true;
-      
-      if (c.is_active === false) {
-        isCurrentlyActive = false;
-      } else if (effectiveEndDate && new Date(effectiveEndDate) < new Date()) {
-        isCurrentlyActive = false;
-      } else if (c.contract_date_start && new Date(c.contract_date_start) > new Date()) {
-        isCurrentlyActive = false;
-      }
-      
-      console.log(`Contract ${c.contract_number}:`, {
-        original_end: c.contract_date_end,
-        amended_end: c.amended_end_date,
-        effective_end: effectiveEndDate,
-        is_active: isCurrentlyActive
-      });
-      
-      return {
-        ...c,
-        effective_end_date: effectiveEndDate, // ✅ Data efectivă de sfârșit
-        is_active: isCurrentlyActive,
-        amendments: amendmentsByContract[c.id] || []
-      };
-    });
-    
-    // 8. Calculate metadata
-    const totalValue = contractsWithAmendments.reduce((sum, c) => {
-      return sum + (parseFloat(c.contract_value) || 0);
-    }, 0);
-    
-    const activeContracts = contractsWithAmendments.filter(c => c.is_active).length;
-    
-    console.log('Returning contracts:', {
-      total: contractsWithAmendments.length,
-      active: activeContracts,
-      total_value: totalValue
-    });
-    
+    // Returnează gol - frontend-ul va folosi endpoint-uri specifice
     res.json({
       success: true,
-      data: contractsWithAmendments,
-      metadata: {
-        total_contracts: contractsWithAmendments.length,
-        active_contracts: activeContracts,
-        total_value: totalValue
-      }
+      data: [],
+      message: 'Use specific contract endpoints based on institution type'
     });
     
   } catch (err) {

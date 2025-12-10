@@ -45,3 +45,72 @@ export const authorizeRoles = (...allowedRoles) => {
     next();
   };
 };
+
+// ============================================================================
+// 🆕 AUTHORIZE ADMIN ONLY (pentru upload/delete contracte)
+// ============================================================================
+
+export const authorizeAdminOnly = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Neautentificat'
+    });
+  }
+
+  const adminRoles = ['PLATFORM_ADMIN', 'INSTITUTION_ADMIN'];
+  
+  if (!adminRoles.includes(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Acces interzis. Doar administratorii pot upload/șterge contracte.'
+    });
+  }
+
+  next();
+};
+
+// ============================================================================
+// 🆕 AUTHORIZE INSTITUTION ACCESS (verifică că user-ul are acces la instituție)
+// ============================================================================
+
+export const authorizeInstitutionAccess = async (req, res, next) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Neautentificat'
+      });
+    }
+
+    const { institutionId } = req.params;
+
+    // PLATFORM_ADMIN are acces la toate
+    if (req.user.role === 'PLATFORM_ADMIN') {
+      return next();
+    }
+
+    // INSTITUTION_ADMIN și OPERATOR trebuie să fie asociați cu instituția
+    const accessCheck = await pool.query(
+      `SELECT 1 
+       FROM user_institutions 
+       WHERE user_id = $1 AND institution_id = $2 AND deleted_at IS NULL`,
+      [req.user.userId || req.user.id, institutionId]
+    );
+
+    if (accessCheck.rows.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu aveți acces la această instituție'
+      });
+    }
+
+    next();
+  } catch (err) {
+    console.error('Institution access check error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la verificarea accesului'
+    });
+  }
+};

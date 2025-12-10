@@ -1,15 +1,25 @@
 // src/routes/contractFiles.js
 /**
  * ============================================================================
- * CONTRACT FILE ROUTES - SIMPLIFIED
+ * CONTRACT FILE ROUTES - GENERIC FOR ALL CONTRACT TYPES
  * ============================================================================
  * Routes pentru upload/download/delete contracte PDF
- * Verifică manual rolul în controller în loc de middleware
+ * Suportă: TMB, Waste Operator, Sorting, Disposal
+ * 
+ * URL Format: /api/contracts/:contractType/:contractId/...
+ * 
+ * Examples:
+ * - POST /api/contracts/tmb/123/upload
+ * - DELETE /api/contracts/waste/456/file
+ * - GET /api/contracts/sorting/789/file
  * ============================================================================
  */
 
 import express from 'express';
-import { authenticateToken } from '../middleware/auth.js';
+import { 
+  authenticateToken, 
+  authorizeAdminOnly 
+} from '../middleware/auth.js';
 import {
   upload,
   uploadContractFile,
@@ -20,48 +30,34 @@ import {
 const router = express.Router();
 
 // ============================================================================
-// MIDDLEWARE PENTRU VERIFICARE ROL PLATFORM_ADMIN
-// ============================================================================
-
-const requirePlatformAdmin = (req, res, next) => {
-  if (req.user && req.user.role === 'PLATFORM_ADMIN') {
-    next();
-  } else {
-    res.status(403).json({
-      success: false,
-      message: 'Access denied. Platform admin only.',
-    });
-  }
-};
-
-// ============================================================================
-// ROUTES
+// ROUTES - WITH CONTRACT TYPE PARAMETER
 // ============================================================================
 
 // Upload contract file (doar PLATFORM_ADMIN)
-// POST /api/contracts/:contractId/upload
+// POST /api/contracts/:contractType/:contractId/upload
+// contractType: 'tmb' | 'waste' | 'sorting' | 'disposal'
 router.post(
-  '/:contractId/upload',
+  '/:contractType/:contractId/upload',  // ← Adaugă :contractType
   authenticateToken,
-  requirePlatformAdmin,
+  authorizeAdminOnly,  // ← ÎNLOCUIEȘTE requirePlatformAdmin
   upload.single('file'),
   uploadContractFile
 );
 
 // Delete contract file (doar PLATFORM_ADMIN)
-// DELETE /api/contracts/:contractId/file
+// DELETE /api/contracts/:contractType/:contractId/file
 router.delete(
-  '/:contractId/file',
+  '/:contractType/:contractId/file',  // ← Adaugă :contractType
   authenticateToken,
-  requirePlatformAdmin,
+  authorizeAdminOnly,  // ← ÎNLOCUIEȘTE requirePlatformAdmin
   deleteContractFile
 );
 
 // Get contract file info (toți utilizatorii autentificați)
-// GET /api/contracts/:contractId/file
+// GET /api/contracts/:contractType/:contractId/file
 router.get(
-  '/:contractId/file',
-  authenticateToken,
+  '/:contractType/:contractId/file',  // ← Adaugă :contractType
+  authenticateToken,  // ← Fără authorizeAdminOnly (toți pot citi)
   getContractFileInfo
 );
 

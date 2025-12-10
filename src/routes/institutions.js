@@ -1,7 +1,7 @@
 // src/routes/institutions.js
 /**
  * ============================================================================
- * INSTITUTION ROUTES - WITH ALL CONTRACT TYPES
+ * INSTITUTION ROUTES - COMPLETE WITH ALL CONTRACT TYPES
  * ============================================================================
  */
 
@@ -13,50 +13,46 @@ import {
   updateInstitution, 
   deleteInstitution,
   getInstitutionStats,
-  getInstitutionContracts  // TMB contracts
+  getInstitutionContracts  // Deprecated - kept for backwards compatibility
 } from '../controllers/institutionController.js';
+import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 
-// Waste Operator Contracts
+// Import contract controllers
+import {
+  getTMBContracts,
+  getTMBContract,
+  createTMBContract,
+  updateTMBContract,
+  deleteTMBContract
+} from '../controllers/tmbContractController.js';
+
 import {
   getWasteOperatorContracts,
-  getWasteOperatorContractById,
+  getWasteOperatorContract,
   createWasteOperatorContract,
   updateWasteOperatorContract,
-  deleteWasteOperatorContract,
-  createWasteOperatorAmendment,
-  deleteWasteOperatorAmendment
+  deleteWasteOperatorContract
 } from '../controllers/wasteOperatorContractController.js';
 
-// Sorting Contracts
 import {
   getSortingContracts,
-  getSortingContractById,
+  getSortingContract,
   createSortingContract,
   updateSortingContract,
-  deleteSortingContract,
-  createSortingAmendment,
-  deleteSortingAmendment
+  deleteSortingContract
 } from '../controllers/sortingContractController.js';
 
-// Disposal Contracts
 import {
   getDisposalContracts,
-  getDisposalContractById,
+  getDisposalContract,
   createDisposalContract,
   updateDisposalContract,
-  deleteDisposalContract,
-  createDisposalAmendment,
-  deleteDisposalAmendment
+  deleteDisposalContract
 } from '../controllers/disposalContractController.js';
-
-import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// ============================================================================
-// MIDDLEWARE
-// ============================================================================
-
+// Toate route-urile necesită autentificare
 router.use(authenticateToken);
 
 // ============================================================================
@@ -66,6 +62,10 @@ router.use(authenticateToken);
 // GET routes
 router.get('/', getAllInstitutions);
 router.get('/stats', authorizeRoles('PLATFORM_ADMIN'), getInstitutionStats);
+
+// Deprecated - kept for backwards compatibility
+router.get('/:id/contracts', getInstitutionContracts);
+
 router.get('/:id', getInstitutionById);
 
 // POST routes
@@ -78,78 +78,43 @@ router.put('/:id', authorizeRoles('PLATFORM_ADMIN'), updateInstitution);
 router.delete('/:id', authorizeRoles('PLATFORM_ADMIN'), deleteInstitution);
 
 // ============================================================================
-// TMB CONTRACTS ROUTES (existing)
+// TMB CONTRACT ROUTES
 // ============================================================================
 
-router.get('/:id/contracts', getInstitutionContracts);
+router.get('/:institutionId/tmb-contracts', getTMBContracts);
+router.get('/:institutionId/tmb-contracts/:contractId', getTMBContract);
+router.post('/:institutionId/tmb-contracts', authorizeRoles('PLATFORM_ADMIN'), createTMBContract);
+router.put('/:institutionId/tmb-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), updateTMBContract);
+router.delete('/:institutionId/tmb-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), deleteTMBContract);
 
 // ============================================================================
-// WASTE OPERATOR CONTRACTS ROUTES
+// WASTE OPERATOR CONTRACT ROUTES
 // ============================================================================
 
-// Get all contracts for institution
 router.get('/:institutionId/waste-contracts', getWasteOperatorContracts);
-
-// Get single contract
-router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContractById);
-
-// Create contract
+router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContract);
 router.post('/:institutionId/waste-contracts', authorizeRoles('PLATFORM_ADMIN'), createWasteOperatorContract);
-
-// Update contract
 router.put('/:institutionId/waste-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), updateWasteOperatorContract);
-
-// Delete contract
 router.delete('/:institutionId/waste-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), deleteWasteOperatorContract);
 
-// Amendments
-router.post('/:institutionId/waste-contracts/:contractId/amendments', authorizeRoles('PLATFORM_ADMIN'), createWasteOperatorAmendment);
-router.delete('/:institutionId/waste-contracts/:contractId/amendments/:amendmentId', authorizeRoles('PLATFORM_ADMIN'), deleteWasteOperatorAmendment);
-
 // ============================================================================
-// SORTING CONTRACTS ROUTES
+// SORTING CONTRACT ROUTES
 // ============================================================================
 
-// Get all contracts for institution
 router.get('/:institutionId/sorting-contracts', getSortingContracts);
-
-// Get single contract
-router.get('/:institutionId/sorting-contracts/:contractId', getSortingContractById);
-
-// Create contract
+router.get('/:institutionId/sorting-contracts/:contractId', getSortingContract);
 router.post('/:institutionId/sorting-contracts', authorizeRoles('PLATFORM_ADMIN'), createSortingContract);
-
-// Update contract
 router.put('/:institutionId/sorting-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), updateSortingContract);
-
-// Delete contract
 router.delete('/:institutionId/sorting-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), deleteSortingContract);
 
-// Amendments
-router.post('/:institutionId/sorting-contracts/:contractId/amendments', authorizeRoles('PLATFORM_ADMIN'), createSortingAmendment);
-router.delete('/:institutionId/sorting-contracts/:contractId/amendments/:amendmentId', authorizeRoles('PLATFORM_ADMIN'), deleteSortingAmendment);
-
 // ============================================================================
-// DISPOSAL CONTRACTS ROUTES
+// DISPOSAL CONTRACT ROUTES
 // ============================================================================
 
-// Get all contracts for institution
 router.get('/:institutionId/disposal-contracts', getDisposalContracts);
-
-// Get single contract
-router.get('/:institutionId/disposal-contracts/:contractId', getDisposalContractById);
-
-// Create contract
+router.get('/:institutionId/disposal-contracts/:contractId', getDisposalContract);
 router.post('/:institutionId/disposal-contracts', authorizeRoles('PLATFORM_ADMIN'), createDisposalContract);
-
-// Update contract
 router.put('/:institutionId/disposal-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), updateDisposalContract);
-
-// Delete contract
 router.delete('/:institutionId/disposal-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), deleteDisposalContract);
-
-// Amendments
-router.post('/:institutionId/disposal-contracts/:contractId/amendments', authorizeRoles('PLATFORM_ADMIN'), createDisposalAmendment);
-router.delete('/:institutionId/disposal-contracts/:contractId/amendments/:amendmentId', authorizeRoles('PLATFORM_ADMIN'), deleteDisposalAmendment);
 
 export default router;

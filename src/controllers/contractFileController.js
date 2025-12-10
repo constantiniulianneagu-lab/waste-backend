@@ -1,9 +1,10 @@
 // src/controllers/contractFileController.js
 /**
  * ============================================================================
- * CONTRACT FILE UPLOAD CONTROLLER - ES6 MODULES
+ * CONTRACT FILE UPLOAD CONTROLLER - GENERIC FOR ALL CONTRACT TYPES
  * ============================================================================
  * Upload, download și ștergere contracte PDF în Supabase Storage
+ * Funcționează pentru: TMB, Waste Operator, Sorting, Disposal
  * ============================================================================
  */
 
@@ -15,6 +16,26 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
+
+// Contract type mappings
+const CONTRACT_TYPE_MAPPINGS = {
+  'tmb': {
+    table: 'tmb_contracts',
+    bucket: 'tmb-contracts'
+  },
+  'waste': {
+    table: 'waste_operator_contracts',
+    bucket: 'waste-operator-contracts'
+  },
+  'sorting': {
+    table: 'sorting_operator_contracts',
+    bucket: 'sorting-contracts'
+  },
+  'disposal': {
+    table: 'disposal_contracts',
+    bucket: 'disposal-contracts'
+  }
+};
 
 // Multer configuration pentru file upload
 const storage = multer.memoryStorage();
@@ -33,18 +54,41 @@ export const upload = multer({
 });
 
 // ============================================================================
+// HELPER: Get contract type config
+// ============================================================================
+
+const getContractTypeConfig = (contractType) => {
+  const config = CONTRACT_TYPE_MAPPINGS[contractType];
+  if (!config) {
+    throw new Error(`Invalid contract type: ${contractType}. Valid types: ${Object.keys(CONTRACT_TYPE_MAPPINGS).join(', ')}`);
+  }
+  return config;
+};
+
+// ============================================================================
 // UPLOAD CONTRACT FILE
 // ============================================================================
 
 export const uploadContractFile = async (req, res) => {
   try {
-    const { contractId } = req.params;
+    const { contractType, contractId } = req.params;
     const file = req.file;
     
     if (!file) {
       return res.status(400).json({
         success: false,
         message: 'Niciun fișier selectat',
+      });
+    }
+    
+    // Get contract type configuration
+    let config;
+    try {
+      config = getContractTypeConfig(contractType);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: err.message
       });
     }
     
@@ -55,7 +99,7 @@ export const uploadContractFile = async (req, res) => {
     
     // Upload to Supabase Storage
     const { data, error } = await supabase.storage
-      .from('tmb-contracts')
+      .from(config.bucket)
       .upload(filePath, file.buffer, {
         contentType: 'application/pdf',
         cacheControl: '3600',
@@ -73,12 +117,12 @@ export const uploadContractFile = async (req, res) => {
     
     // Get public URL
     const { data: urlData } = supabase.storage
-      .from('tmb-contracts')
+      .from(config.bucket)
       .getPublicUrl(filePath);
     
     // Update contract record in database
     const { data: updateData, error: updateError } = await supabase
-      .from('tmb_contracts')
+      .from(config.table)
       .update({
         contract_file_url: urlData.publicUrl,
         contract_file_name: file.originalname,
@@ -94,7 +138,7 @@ export const uploadContractFile = async (req, res) => {
     if (updateError) {
       // Rollback: delete uploaded file
       await supabase.storage
-        .from('tmb-contracts')
+        .from(config.bucket)
         .remove([filePath]);
       
       return res.status(500).json({
@@ -131,11 +175,22 @@ export const uploadContractFile = async (req, res) => {
 
 export const deleteContractFile = async (req, res) => {
   try {
-    const { contractId } = req.params;
+    const { contractType, contractId } = req.params;
+    
+    // Get contract type configuration
+    let config;
+    try {
+      config = getContractTypeConfig(contractType);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: err.message
+      });
+    }
     
     // Get contract to find file path
     const { data: contract, error: fetchError } = await supabase
-      .from('tmb_contracts')
+      .from(config.table)
       .select('contract_file_url')
       .eq('id', contractId)
       .single();
@@ -160,7 +215,7 @@ export const deleteContractFile = async (req, res) => {
     
     // Delete from storage
     const { error: deleteError } = await supabase.storage
-      .from('tmb-contracts')
+      .from(config.bucket)
       .remove([filePath]);
     
     if (deleteError) {
@@ -169,7 +224,7 @@ export const deleteContractFile = async (req, res) => {
     
     // Update contract record (remove file info)
     const { error: updateError } = await supabase
-      .from('tmb_contracts')
+      .from(config.table)
       .update({
         contract_file_url: null,
         contract_file_name: null,
@@ -209,10 +264,21 @@ export const deleteContractFile = async (req, res) => {
 
 export const getContractFileInfo = async (req, res) => {
   try {
-    const { contractId } = req.params;
+    const { contractType, contractId } = req.params;
+    
+    // Get contract type configuration
+    let config;
+    try {
+      config = getContractTypeConfig(contractType);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: err.message
+      });
+    }
     
     const { data: contract, error } = await supabase
-      .from('tmb_contracts')
+      .from(config.table)
       .select('contract_file_url, contract_file_name, contract_file_size, contract_file_uploaded_at')
       .eq('id', contractId)
       .single();
