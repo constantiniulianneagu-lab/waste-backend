@@ -15,7 +15,10 @@ const formatNumber = (num) => {
 export const getDisposalTickets = async (req, res) => {
   try {
     const { year, start_date, end_date, sector_id, page = 1, limit = 10 } = req.query;
-    const { userId, userRole } = req.user;
+    
+    // ✅ FIXED: Correct req.user structure from JWT
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
     // Date range
     const startDate = start_date || `${year}-01-01`;
@@ -35,7 +38,7 @@ export const getDisposalTickets = async (req, res) => {
         SELECT DISTINCT is_table.sector_id
         FROM user_institutions ui
         JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
-        WHERE ui.user_id = $1 AND ui.deleted_at IS NULL
+        WHERE ui.user_id = $1
       `;
       const userSectorsResult = await db.query(userSectorsQuery, [userId]);
       const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
@@ -107,7 +110,7 @@ export const getDisposalTickets = async (req, res) => {
         i.name,
         SUM(wtd.accepted_quantity_tons) as total_tons
       FROM waste_tickets_disposal wtd
-      JOIN institutions i ON wtd.client_id = i.id
+      JOIN institutions i ON wtd.recipient_id = i.id
       WHERE wtd.deleted_at IS NULL
         AND wtd.ticket_date >= $1
         AND wtd.ticket_date <= $2
@@ -132,10 +135,9 @@ export const getDisposalTickets = async (req, res) => {
         s.sector_name,
         wtd.vehicle_number,
         wtd.delivered_quantity_tons,
-        wtd.accepted_quantity_tons,
-        wtd.disposal_month
+        wtd.accepted_quantity_tons
       FROM waste_tickets_disposal wtd
-      JOIN institutions client ON wtd.client_id = client.id
+      JOIN institutions client ON wtd.recipient_id = client.id
       JOIN institutions supplier ON wtd.supplier_id = supplier.id
       JOIN waste_codes wc ON wtd.waste_code_id = wc.id
       JOIN sectors s ON wtd.sector_id = s.id
@@ -191,8 +193,7 @@ export const getDisposalTickets = async (req, res) => {
           sector_name: t.sector_name,
           vehicle_number: t.vehicle_number,
           delivered_quantity_tons: formatNumber(t.delivered_quantity_tons),
-          accepted_quantity_tons: formatNumber(t.accepted_quantity_tons),
-          disposal_month: t.disposal_month
+          accepted_quantity_tons: formatNumber(t.accepted_quantity_tons)
         })),
         pagination: {
           current_page: parseInt(page),
