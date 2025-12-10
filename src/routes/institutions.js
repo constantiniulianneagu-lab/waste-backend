@@ -28,7 +28,7 @@ import {
 
 import {
   getWasteOperatorContracts,
-  getWasteOperatorContract,
+  getWasteOperatorContractById,  // ← SCHIMBAT de la getWasteOperatorContract
   createWasteOperatorContract,
   updateWasteOperatorContract,
   deleteWasteOperatorContract
@@ -92,7 +92,7 @@ router.delete('/:institutionId/tmb-contracts/:contractId', authorizeRoles('PLATF
 // ============================================================================
 
 router.get('/:institutionId/waste-contracts', getWasteOperatorContracts);
-router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContract);
+router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContractById);  // ← SCHIMBAT
 router.post('/:institutionId/waste-contracts', authorizeRoles('PLATFORM_ADMIN'), createWasteOperatorContract);
 router.put('/:institutionId/waste-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), updateWasteOperatorContract);
 router.delete('/:institutionId/waste-contracts/:contractId', authorizeRoles('PLATFORM_ADMIN'), deleteWasteOperatorContract);
