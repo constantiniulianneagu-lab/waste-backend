@@ -1,18 +1,18 @@
 // controllers/tmbContractController.js
 /**
  * ============================================================================
- * TMB CONTRACT CONTROLLER
+ * TMB CONTRACT CONTROLLER - ES6 VERSION
  * ============================================================================
  * CRUD operations pentru contracte TMB
  * ============================================================================
  */
 
-const db = require('../config/database');
+import pool from '../config/database.js';
 
 /**
  * GET all TMB contracts for an institution
  */
-const getTMBContracts = async (req, res) => {
+export const getTMBContracts = async (req, res) => {
   try {
     const { institutionId } = req.params;
 
@@ -93,7 +93,7 @@ const getTMBContracts = async (req, res) => {
       ORDER BY tc.contract_date_start DESC, tc.created_at DESC
     `;
 
-    const result = await db.query(query);
+    const result = await pool.query(query);
 
     res.json({
       success: true,
@@ -112,7 +112,7 @@ const getTMBContracts = async (req, res) => {
 /**
  * GET single TMB contract by ID
  */
-const getTMBContract = async (req, res) => {
+export const getTMBContract = async (req, res) => {
   try {
     const { institutionId, contractId } = req.params;
 
@@ -145,7 +145,7 @@ const getTMBContract = async (req, res) => {
       GROUP BY tc.id, s.sector_number, s.sector_name
     `;
 
-    const result = await db.query(query, [contractId]);
+    const result = await pool.query(query, [contractId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -171,7 +171,7 @@ const getTMBContract = async (req, res) => {
 /**
  * CREATE new TMB contract
  */
-const createTMBContract = async (req, res) => {
+export const createTMBContract = async (req, res) => {
   try {
     const { institutionId } = req.params;
     const {
@@ -195,7 +195,7 @@ const createTMBContract = async (req, res) => {
     }
 
     // Check for duplicate contract number
-    const duplicateCheck = await db.query(
+    const duplicateCheck = await pool.query(
       'SELECT id FROM tmb_contracts WHERE contract_number = $1 AND deleted_at IS NULL',
       [contract_number]
     );
@@ -234,7 +234,7 @@ const createTMBContract = async (req, res) => {
       is_active
     ];
 
-    const result = await db.query(query, values);
+    const result = await pool.query(query, values);
 
     res.status(201).json({
       success: true,
@@ -254,7 +254,7 @@ const createTMBContract = async (req, res) => {
 /**
  * UPDATE TMB contract
  */
-const updateTMBContract = async (req, res) => {
+export const updateTMBContract = async (req, res) => {
   try {
     const { institutionId, contractId } = req.params;
     const {
@@ -270,7 +270,7 @@ const updateTMBContract = async (req, res) => {
     } = req.body;
 
     // Check if contract exists
-    const existingContract = await db.query(
+    const existingContract = await pool.query(
       'SELECT id FROM tmb_contracts WHERE id = $1 AND deleted_at IS NULL',
       [contractId]
     );
@@ -283,7 +283,7 @@ const updateTMBContract = async (req, res) => {
     }
 
     // Check for duplicate contract number (excluding current contract)
-    const duplicateCheck = await db.query(
+    const duplicateCheck = await pool.query(
       'SELECT id FROM tmb_contracts WHERE contract_number = $1 AND id != $2 AND deleted_at IS NULL',
       [contract_number, contractId]
     );
@@ -324,7 +324,7 @@ const updateTMBContract = async (req, res) => {
       contractId
     ];
 
-    const result = await db.query(query, values);
+    const result = await pool.query(query, values);
 
     res.json({
       success: true,
@@ -344,12 +344,12 @@ const updateTMBContract = async (req, res) => {
 /**
  * DELETE TMB contract (soft delete)
  */
-const deleteTMBContract = async (req, res) => {
+export const deleteTMBContract = async (req, res) => {
   try {
     const { institutionId, contractId } = req.params;
 
     // Check if contract exists
-    const existingContract = await db.query(
+    const existingContract = await pool.query(
       'SELECT id FROM tmb_contracts WHERE id = $1 AND deleted_at IS NULL',
       [contractId]
     );
@@ -369,7 +369,7 @@ const deleteTMBContract = async (req, res) => {
       RETURNING id
     `;
 
-    await db.query(query, [contractId]);
+    await pool.query(query, [contractId]);
 
     res.json({
       success: true,
@@ -383,12 +383,4 @@ const deleteTMBContract = async (req, res) => {
       message: 'Eroare la ștergerea contractului TMB'
     });
   }
-};
-
-module.exports = {
-  getTMBContracts,
-  getTMBContract,
-  createTMBContract,
-  updateTMBContract,
-  deleteTMBContract
 };
