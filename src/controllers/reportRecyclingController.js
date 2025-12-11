@@ -163,9 +163,31 @@ export const getRecyclingTickets = async (req, res) => {
     const countResult = await db.query(countQuery, baseParams);
     const totalRecords = parseInt(countResult.rows[0].total);
 
+    console.log('📅 Fetching available years for Recycling...');
+
+    const availableYearsQuery = `
+      SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
+      FROM waste_tickets_recycling
+      WHERE deleted_at IS NULL
+      ORDER BY year DESC
+    `;
+
+    let availableYears = [];
+
+    try {
+      const yearsResult = await db.query(availableYearsQuery);
+      availableYears = yearsResult.rows.map(row => row.year);
+      console.log(`✅ Available years:`, availableYears);
+    } catch (yearsError) {
+      console.error('❌ Available years query failed:', yearsError);
+      availableYears = [new Date().getFullYear()];
+    }
+
+
     res.json({
       success: true,
       data: {
+        available_years: availableYears,  // ✅ ADAUGĂ
         summary: {
           total_delivered: formatNumber(summaryResult.rows[0].total_delivered),
           total_accepted: formatNumber(summaryResult.rows[0].total_accepted),
