@@ -198,11 +198,32 @@ export const getTmbTickets = async (req, res) => {
     queryParams.push(parseInt(limit), offset);
     const ticketsResult = await pool.query(ticketsQuery, queryParams);
 
+    console.log('📅 Fetching available years for TMB...');
+
+    const availableYearsQuery = `
+      SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
+      FROM waste_tickets_tmb
+      WHERE deleted_at IS NULL
+      ORDER BY year DESC
+    `;
+
+    let availableYears = [];
+
+    try {
+      const yearsResult = await pool.query(availableYearsQuery);
+      availableYears = yearsResult.rows.map(row => row.year);
+      console.log(`✅ Available years:`, availableYears);
+    } catch (yearsError) {
+      console.error('❌ Available years query failed:', yearsError);
+      availableYears = [new Date().getFullYear()];
+    }
+
     console.log('✅ TMB Tickets fetched successfully');
 
     res.json({
       success: true,
       data: {
+        available_years: availableYears,  // ✅ ADAUGĂ
         summary: {
           total_tickets: parseInt(summary.total_tickets),
           total_tons: formatNumber(summary.total_tons)
