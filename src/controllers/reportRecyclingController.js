@@ -35,7 +35,7 @@ export const getRecyclingTickets = async (req, res) => {
         SELECT DISTINCT is_table.sector_id
         FROM user_institutions ui
         JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
-        WHERE ui.user_id = $1 AND ui.deleted_at IS NULL
+        WHERE ui.user_id = $1
       `;
       const userSectorsResult = await db.query(userSectorsQuery, [userId]);
       const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
@@ -78,45 +78,83 @@ export const getRecyclingTickets = async (req, res) => {
     `;
     const summaryResult = await db.query(summaryQuery, baseParams);
 
-    // SUPPLIERS (furnizori - operatori TMB)
+    // SUPPLIERS (furnizori - operatori TMB) - GRUPAT PE CODURI
     const suppliersQuery = `
       SELECT 
-        i.id,
-        i.name,
-        s.sector_name,
-        wc.code,
-        SUM(wtr.delivered_quantity_tons) as total_tons
+        i.name as supplier_name,
+        wc.code as waste_code,
+        SUM(wtr.accepted_quantity_tons) as total_tons
       FROM waste_tickets_recycling wtr
       JOIN institutions i ON wtr.supplier_id = i.id
-      JOIN sectors s ON wtr.sector_id = s.id
       JOIN waste_codes wc ON wtr.waste_code_id = wc.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
         AND wtr.ticket_date <= $2
         ${sectorFilter}
-      GROUP BY i.id, i.name, s.sector_name, wc.code
-      ORDER BY total_tons DESC
-      LIMIT 10
+      GROUP BY i.name, wc.code
+      ORDER BY i.name, total_tons DESC
     `;
     const suppliersResult = await db.query(suppliersQuery, baseParams);
 
-    // CLIENTS (reciclatori)
+    // Group suppliers by name with their codes
+    const suppliersMap = {};
+    suppliersResult.rows.forEach(row => {
+      if (!suppliersMap[row.supplier_name]) {
+        suppliersMap[row.supplier_name] = {
+          name: row.supplier_name,
+          total: 0,
+          codes: []
+        };
+      }
+      suppliersMap[row.supplier_name].total += parseFloat(row.total_tons);
+      suppliersMap[row.supplier_name].codes.push({
+        code: row.waste_code,
+        quantity: parseFloat(row.total_tons)
+      });
+    });
+
+    const suppliers = Object.values(suppliersMap)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10); // Top 10
+
+    // CLIENTS (reciclatori) - GRUPAT PE CODURI
     const clientsQuery = `
       SELECT 
-        i.id,
-        i.name,
+        i.name as client_name,
+        wc.code as waste_code,
         SUM(wtr.accepted_quantity_tons) as total_tons
       FROM waste_tickets_recycling wtr
-      JOIN institutions i ON wtr.client_id = i.id
+      JOIN institutions i ON wtr.recipient_id = i.id
+      JOIN waste_codes wc ON wtr.waste_code_id = wc.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
         AND wtr.ticket_date <= $2
         ${sectorFilter}
-      GROUP BY i.id, i.name
-      ORDER BY total_tons DESC
-      LIMIT 10
+      GROUP BY i.name, wc.code
+      ORDER BY i.name, total_tons DESC
     `;
     const clientsResult = await db.query(clientsQuery, baseParams);
+
+    // Group clients by name with their codes
+    const clientsMap = {};
+    clientsResult.rows.forEach(row => {
+      if (!clientsMap[row.client_name]) {
+        clientsMap[row.client_name] = {
+          name: row.client_name,
+          total: 0,
+          codes: []
+        };
+      }
+      clientsMap[row.client_name].total += parseFloat(row.total_tons);
+      clientsMap[row.client_name].codes.push({
+        code: row.waste_code,
+        quantity: parseFloat(row.total_tons)
+      });
+    });
+
+    const clients = Object.values(clientsMap)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10); // Top 10
 
     // TICKETS (paginated)
     const offset = (page - 1) * limit;
@@ -125,6 +163,7 @@ export const getRecyclingTickets = async (req, res) => {
         wtr.id,
         wtr.ticket_number,
         wtr.ticket_date,
+        wtr.ticket_time,
         client.name as client_name,
         supplier.name as supplier_name,
         wc.code as waste_code,
@@ -134,17 +173,22 @@ export const getRecyclingTickets = async (req, res) => {
         wtr.delivered_quantity_tons,
         wtr.accepted_quantity_tons,
         wtr.difference_tons,
-        wtr.acceptance_percentage
+        CASE 
+          WHEN wtr.delivered_quantity_tons > 0 
+          THEN (wtr.accepted_quantity_tons / wtr.delivered_quantity_tons * 100)
+          ELSE 0 
+        END as acceptance_percentage
       FROM waste_tickets_recycling wtr
-      JOIN institutions client ON wtr.client_id = client.id
+      JOIN institutions client ON wtr.recipient_id = client.id
       JOIN institutions supplier ON wtr.supplier_id = supplier.id
       JOIN waste_codes wc ON wtr.waste_code_id = wc.id
-      JOIN sectors s ON wtr.sector_id = s.id
+      LEFT JOIN institution_sectors inst_sect ON supplier.id = inst_sect.institution_id
+      LEFT JOIN sectors s ON inst_sect.sector_id = s.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
         AND wtr.ticket_date <= $2
         ${sectorFilter}
-      ORDER BY wtr.ticket_date DESC
+      ORDER BY wtr.ticket_date DESC, wtr.ticket_time DESC
       LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}
     `;
     const ticketsResult = await db.query(ticketsQuery, [...baseParams, limit, offset]);
@@ -165,36 +209,31 @@ export const getRecyclingTickets = async (req, res) => {
       success: true,
       data: {
         summary: {
-          total_delivered: formatNumber(summaryResult.rows[0].total_delivered),
-          total_accepted: formatNumber(summaryResult.rows[0].total_accepted),
-          total_tickets: summaryResult.rows[0].total_tickets
+          total_quantity: parseFloat(summaryResult.rows[0].total_accepted),
+          period: {
+            year: parseInt(year),
+            date_from: startDate,
+            date_to: endDate,
+            sector: sector_id ? 'Sector specific' : 'București'
+          }
         },
-        suppliers: suppliersResult.rows.map(s => ({
-          id: s.id,
-          name: s.name,
-          sector_name: s.sector_name,
-          code: s.code,
-          total_tons: formatNumber(s.total_tons)
-        })),
-        clients: clientsResult.rows.map(c => ({
-          id: c.id,
-          name: c.name,
-          total_tons: formatNumber(c.total_tons)
-        })),
+        suppliers: suppliers,
+        clients: clients,
         tickets: ticketsResult.rows.map(t => ({
           id: t.id,
           ticket_number: t.ticket_number,
           ticket_date: t.ticket_date,
+          ticket_time: t.ticket_time,
           client_name: t.client_name,
           supplier_name: t.supplier_name,
           waste_code: t.waste_code,
           waste_description: t.waste_description,
-          sector_name: t.sector_name,
+          sector_name: t.sector_name || 'N/A',
           vehicle_number: t.vehicle_number,
-          delivered_quantity_tons: formatNumber(t.delivered_quantity_tons),
-          accepted_quantity_tons: formatNumber(t.accepted_quantity_tons),
-          difference_tons: formatNumber(t.difference_tons),
-          acceptance_percentage: formatNumber(t.acceptance_percentage)
+          delivered_quantity_tons: parseFloat(t.delivered_quantity_tons),
+          accepted_quantity_tons: parseFloat(t.accepted_quantity_tons),
+          difference_tons: parseFloat(t.difference_tons),
+          acceptance_percentage: parseFloat(t.acceptance_percentage).toFixed(2)
         })),
         pagination: {
           current_page: parseInt(page),
