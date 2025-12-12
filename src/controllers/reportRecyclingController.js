@@ -1,5 +1,6 @@
 // ============================================================================
-// RECYCLING REPORTS CONTROLLER - FINAL cu toate cerințele
+// RECYCLING REPORTS CONTROLLER - FINAL HYBRID
+// Structure: Simple like Recovery/Disposal + Your grouped data
 // ============================================================================
 
 import db from '../config/database.js';
@@ -13,7 +14,7 @@ export const getRecyclingTickets = async (req, res) => {
   try {
     const { year, start_date, end_date, sector_id, page = 1, limit = 10 } = req.query;
 
-    // ✅ CORRECT: Same as TMB controller
+    // ✅ CORRECT: Same as TMB controller (which works)
     const userId = req.user.id;
     const userRole = req.user.role;
 
@@ -23,7 +24,7 @@ export const getRecyclingTickets = async (req, res) => {
     const startDate = start_date || `${year}-01-01`;
     const endDate = end_date || `${year}-12-31`;
 
-    // RBAC - Sector filtering
+    // RBAC - Sector filtering (same as Recovery/Disposal)
     let sectorFilter = '';
     let sectorParams = [];
 
@@ -67,6 +68,9 @@ export const getRecyclingTickets = async (req, res) => {
 
     const baseParams = [startDate, endDate, ...sectorParams];
 
+    console.log('📅 Date range:', startDate, 'to', endDate);
+    console.log('🔍 Sector filter:', sectorFilter);
+
     // SUMMARY
     const summaryQuery = `
       SELECT 
@@ -81,97 +85,53 @@ export const getRecyclingTickets = async (req, res) => {
     `;
     const summaryResult = await db.query(summaryQuery, baseParams);
 
-    // ========================================================================
-    // SUPPLIERS (GRUPAT PE CODURI) - Cerința ta!
-    // ========================================================================
+    console.log('📊 Summary:', summaryResult.rows[0]);
+
+    // SUPPLIERS - Simple format (like Recovery/Disposal) for compatibility
     const suppliersQuery = `
       SELECT 
-        i.name as supplier_name,
-        wc.code as waste_code,
-        SUM(wtr.accepted_quantity_tons) as total_tons
+        i.id,
+        i.name,
+        s.sector_name,
+        wc.code,
+        SUM(wtr.delivered_quantity_tons) as total_tons
       FROM waste_tickets_recycling wtr
       JOIN institutions i ON wtr.supplier_id = i.id
+      JOIN sectors s ON wtr.sector_id = s.id
       JOIN waste_codes wc ON wtr.waste_code_id = wc.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
         AND wtr.ticket_date <= $2
         ${sectorFilter}
-      GROUP BY i.name, wc.code
-      ORDER BY i.name, SUM(wtr.accepted_quantity_tons) DESC
+      GROUP BY i.id, i.name, s.sector_name, wc.code
+      ORDER BY total_tons DESC
+      LIMIT 10
     `;
     const suppliersResult = await db.query(suppliersQuery, baseParams);
 
-    // Group by supplier name with codes array
-    const suppliersMap = {};
-    suppliersResult.rows.forEach(row => {
-      if (!suppliersMap[row.supplier_name]) {
-        suppliersMap[row.supplier_name] = {
-          name: row.supplier_name,
-          total: 0,
-          codes: []
-        };
-      }
-      const tons = parseFloat(row.total_tons);
-      suppliersMap[row.supplier_name].total += tons;
-      suppliersMap[row.supplier_name].codes.push({
-        code: row.waste_code,
-        quantity: tons
-      });
-    });
+    console.log('🏭 Suppliers:', suppliersResult.rows.length, 'rows');
 
-    const suppliers = Object.values(suppliersMap)
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10);
-
-    console.log('🏭 Suppliers grouped:', suppliers.length);
-
-    // ========================================================================
-    // CLIENTS (GRUPAT PE CODURI) - Cerința ta!
-    // ========================================================================
+    // CLIENTS - Simple format
     const clientsQuery = `
       SELECT 
-        i.name as client_name,
-        wc.code as waste_code,
+        i.id,
+        i.name,
         SUM(wtr.accepted_quantity_tons) as total_tons
       FROM waste_tickets_recycling wtr
       JOIN institutions i ON wtr.recipient_id = i.id
-      JOIN waste_codes wc ON wtr.waste_code_id = wc.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
         AND wtr.ticket_date <= $2
         ${sectorFilter}
-      GROUP BY i.name, wc.code
-      ORDER BY i.name, SUM(wtr.accepted_quantity_tons) DESC
+      GROUP BY i.id, i.name
+      ORDER BY total_tons DESC
+      LIMIT 10
     `;
     const clientsResult = await db.query(clientsQuery, baseParams);
 
-    // Group by client name with codes array
-    const clientsMap = {};
-    clientsResult.rows.forEach(row => {
-      if (!clientsMap[row.client_name]) {
-        clientsMap[row.client_name] = {
-          name: row.client_name,
-          total: 0,
-          codes: []
-        };
-      }
-      const tons = parseFloat(row.total_tons);
-      clientsMap[row.client_name].total += tons;
-      clientsMap[row.client_name].codes.push({
-        code: row.waste_code,
-        quantity: tons
-      });
-    });
+    console.log('♻️ Clients:', clientsResult.rows.length, 'rows');
 
-    const clients = Object.values(clientsMap)
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10);
-
-    console.log('♻️ Clients grouped:', clients.length);
-
-    // ========================================================================
-    // TICKETS (cu Proveniență = sector_name)
-    // ========================================================================
+    // TICKETS (paginated)
     const offset = (page - 1) * limit;
     const ticketsQuery = `
       SELECT 
@@ -207,6 +167,8 @@ export const getRecyclingTickets = async (req, res) => {
     `;
     const ticketsResult = await db.query(ticketsQuery, [...baseParams, limit, offset]);
 
+    console.log('🎫 Tickets:', ticketsResult.rows.length);
+
     // COUNT
     const countQuery = `
       SELECT COUNT(*) as total
@@ -234,24 +196,27 @@ export const getRecyclingTickets = async (req, res) => {
       availableYears = [new Date().getFullYear()];
     }
 
-    // ========================================================================
-    // RESPONSE cu structura EXACTĂ pentru cerințele tale
-    // ========================================================================
     const response = {
       success: true,
       data: {
         available_years: availableYears,
         summary: {
-          total_quantity: parseFloat(summaryResult.rows[0].total_accepted),  // Pentru Card 1 body
-          period: {
-            year: parseInt(year),
-            date_from: startDate,
-            date_to: endDate,
-            sector: sector_id ? 'Sector specific' : 'București'
-          }
+          total_delivered: formatNumber(summaryResult.rows[0].total_delivered),
+          total_accepted: formatNumber(summaryResult.rows[0].total_accepted),
+          total_tickets: summaryResult.rows[0].total_tickets
         },
-        suppliers: suppliers,  // Array cu { name, total, codes: [{code, quantity}] }
-        clients: clients,      // Array cu { name, total, codes: [{code, quantity}] }
+        suppliers: suppliersResult.rows.map(s => ({
+          id: s.id,
+          name: s.name,
+          sector_name: s.sector_name,
+          code: s.code,
+          total_tons: formatNumber(s.total_tons)
+        })),
+        clients: clientsResult.rows.map(c => ({
+          id: c.id,
+          name: c.name,
+          total_tons: formatNumber(c.total_tons)
+        })),
         tickets: ticketsResult.rows.map(t => ({
           id: t.id,
           ticket_number: t.ticket_number,
@@ -261,12 +226,12 @@ export const getRecyclingTickets = async (req, res) => {
           supplier_name: t.supplier_name,
           waste_code: t.waste_code,
           waste_description: t.waste_description,
-          sector_name: t.sector_name,  // Proveniență
+          sector_name: t.sector_name,
           vehicle_number: t.vehicle_number,
-          delivered_quantity_tons: parseFloat(t.delivered_quantity_tons),
-          accepted_quantity_tons: parseFloat(t.accepted_quantity_tons),
-          difference_tons: parseFloat(t.difference_tons),
-          acceptance_percentage: parseFloat(t.acceptance_percentage).toFixed(2)
+          delivered_quantity_tons: formatNumber(t.delivered_quantity_tons),
+          accepted_quantity_tons: formatNumber(t.accepted_quantity_tons),
+          difference_tons: formatNumber(t.difference_tons),
+          acceptance_percentage: formatNumber(t.acceptance_percentage)
         })),
         pagination: {
           current_page: parseInt(page),
@@ -277,10 +242,9 @@ export const getRecyclingTickets = async (req, res) => {
       }
     };
 
-    console.log('✅ RECYCLING SUCCESS:', {
-      total_quantity: response.data.summary.total_quantity,
+    console.log('✅ Response:', {
+      summary: response.data.summary,
       suppliers_count: response.data.suppliers.length,
-      suppliers_example: suppliers[0],
       clients_count: response.data.clients.length,
       tickets_count: response.data.tickets.length
     });
