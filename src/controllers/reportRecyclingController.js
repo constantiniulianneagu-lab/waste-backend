@@ -15,7 +15,8 @@ const formatNumber = (num) => {
 export const getRecyclingTickets = async (req, res) => {
   try {
     const { year, start_date, end_date, sector_id, page = 1, limit = 10 } = req.query;
-    const { userId, userRole } = req.user;
+    const userId = req.user.id;
+    const userRole = req.user.role;
 
     console.log('♻️ RECYCLING REPORT - User:', userId, 'Role:', userRole);
 
