@@ -1,16 +1,16 @@
-// src/controllers/wasteTicketsLandfillController.js
+// src/controllers/wasteTicketsRecyclingController.js
 import pool from '../config/database.js';
 
 // ============================================================================
-// GET ALL LANDFILL TICKETS (with pagination & filters)
+// GET ALL RECYCLING TICKETS (with pagination & filters)
 // ============================================================================
-export const getAllLandfillTickets = async (req, res) => {
+export const getAllRecyclingTickets = async (req, res) => {
   try {
     const { 
       page = 1, 
       limit = 20, 
-      sectorId,
       supplierId,
+      recipientId,
       wasteCodeId,
       startDate,
       endDate,
@@ -21,78 +21,80 @@ export const getAllLandfillTickets = async (req, res) => {
 
     let query = `
       SELECT 
-        wtl.id,
-        wtl.ticket_number,
-        wtl.ticket_date,
-        wtl.ticket_time,
-        wtl.supplier_id,
-        i.name as supplier_name,
-        i.type as supplier_type,
-        wtl.waste_code_id,
+        wtr.id,
+        wtr.ticket_number,
+        wtr.ticket_date,
+        wtr.ticket_time,
+        wtr.supplier_id,
+        is.name as supplier_name,
+        is.type as supplier_type,
+        wtr.recipient_id,
+        ir.name as recipient_name,
+        ir.type as recipient_type,
+        wtr.waste_code_id,
         wc.code as waste_code,
         wc.description as waste_description,
-        wtl.vehicle_number,
-        wtl.sector_id,
-        s.sector_name,
-        wtl.gross_weight_kg,
-        wtl.tare_weight_kg,
-        wtl.net_weight_kg,
-        wtl.net_weight_tons,
-        wtl.generator_type,
-        wtl.operation_type,
-        wtl.contract_type,
-        wtl.created_by,
+        wc.category as waste_category,
+        wtr.vehicle_number,
+        wtr.delivered_quantity_kg,
+        wtr.accepted_quantity_kg,
+        wtr.delivered_quantity_tons,
+        wtr.accepted_quantity_tons,
+        wtr.difference_kg,
+        wtr.difference_tons,
+        wtr.notes,
+        wtr.created_by,
         u.email as created_by_email,
-        wtl.created_at,
-        wtl.updated_at
-      FROM waste_tickets_landfill wtl
-      JOIN institutions i ON wtl.supplier_id = i.id
-      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
-      JOIN sectors s ON wtl.sector_id = s.id
-      LEFT JOIN users u ON wtl.created_by = u.id
-      WHERE wtl.deleted_at IS NULL
+        wtr.created_at,
+        wtr.updated_at
+      FROM waste_tickets_recycling wtr
+      JOIN institutions is ON wtr.supplier_id = is.id
+      JOIN institutions ir ON wtr.recipient_id = ir.id
+      JOIN waste_codes wc ON wtr.waste_code_id = wc.id
+      LEFT JOIN users u ON wtr.created_by = u.id
+      WHERE wtr.deleted_at IS NULL
     `;
 
     const params = [];
     let paramCount = 1;
 
-    // Filter by sector
-    if (sectorId) {
-      query += ` AND wtl.sector_id = $${paramCount}`;
-      params.push(sectorId);
+    // Filter by supplier
+    if (supplierId) {
+      query += ` AND wtr.supplier_id = $${paramCount}`;
+      params.push(supplierId);
       paramCount++;
     }
 
-    // Filter by supplier
-    if (supplierId) {
-      query += ` AND wtl.supplier_id = $${paramCount}`;
-      params.push(supplierId);
+    // Filter by recipient
+    if (recipientId) {
+      query += ` AND wtr.recipient_id = $${paramCount}`;
+      params.push(recipientId);
       paramCount++;
     }
 
     // Filter by waste code
     if (wasteCodeId) {
-      query += ` AND wtl.waste_code_id = $${paramCount}`;
+      query += ` AND wtr.waste_code_id = $${paramCount}`;
       params.push(wasteCodeId);
       paramCount++;
     }
 
     // Filter by date range
     if (startDate) {
-      query += ` AND wtl.ticket_date >= $${paramCount}`;
+      query += ` AND wtr.ticket_date >= $${paramCount}`;
       params.push(startDate);
       paramCount++;
     }
 
     if (endDate) {
-      query += ` AND wtl.ticket_date <= $${paramCount}`;
+      query += ` AND wtr.ticket_date <= $${paramCount}`;
       params.push(endDate);
       paramCount++;
     }
 
     // Search by ticket number or vehicle number
     if (search) {
-      query += ` AND (wtl.ticket_number ILIKE $${paramCount} OR wtl.vehicle_number ILIKE $${paramCount})`;
+      query += ` AND (wtr.ticket_number ILIKE $${paramCount} OR wtr.vehicle_number ILIKE $${paramCount})`;
       params.push(`%${search}%`);
       paramCount++;
     }
@@ -106,7 +108,7 @@ export const getAllLandfillTickets = async (req, res) => {
     const total = parseInt(countResult.rows[0].count);
 
     // Add sorting and pagination
-    query += ` ORDER BY wtl.ticket_date DESC, wtl.ticket_time DESC 
+    query += ` ORDER BY wtr.ticket_date DESC, wtr.ticket_time DESC 
                LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     params.push(limit, offset);
 
@@ -125,64 +127,66 @@ export const getAllLandfillTickets = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Get landfill tickets error:', error);
+    console.error('Get recycling tickets error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la obținerea tichetelor de depozitare'
+      message: 'Eroare la obținerea tichetelor de reciclare'
     });
   }
 };
 
 // ============================================================================
-// GET SINGLE LANDFILL TICKET BY ID
+// GET SINGLE RECYCLING TICKET BY ID
 // ============================================================================
-export const getLandfillTicketById = async (req, res) => {
+export const getRecyclingTicketById = async (req, res) => {
   try {
     const { id } = req.params;
 
     const result = await pool.query(
       `SELECT 
-        wtl.id,
-        wtl.ticket_number,
-        wtl.ticket_date,
-        wtl.ticket_time,
-        wtl.supplier_id,
-        i.name as supplier_name,
-        i.type as supplier_type,
-        wtl.waste_code_id,
+        wtr.id,
+        wtr.ticket_number,
+        wtr.ticket_date,
+        wtr.ticket_time,
+        wtr.supplier_id,
+        is.name as supplier_name,
+        is.type as supplier_type,
+        is.contact_email as supplier_email,
+        wtr.recipient_id,
+        ir.name as recipient_name,
+        ir.type as recipient_type,
+        ir.contact_email as recipient_email,
+        wtr.waste_code_id,
         wc.code as waste_code,
         wc.description as waste_description,
         wc.category as waste_category,
-        wtl.vehicle_number,
-        wtl.sector_id,
-        s.sector_name,
-        s.sector_number,
-        wtl.gross_weight_kg,
-        wtl.tare_weight_kg,
-        wtl.net_weight_kg,
-        wtl.net_weight_tons,
-        wtl.generator_type,
-        wtl.operation_type,
-        wtl.contract_type,
-        wtl.created_by,
+        wtr.vehicle_number,
+        wtr.delivered_quantity_kg,
+        wtr.accepted_quantity_kg,
+        wtr.delivered_quantity_tons,
+        wtr.accepted_quantity_tons,
+        wtr.difference_kg,
+        wtr.difference_tons,
+        wtr.notes,
+        wtr.created_by,
         u.email as created_by_email,
         u.first_name as created_by_first_name,
         u.last_name as created_by_last_name,
-        wtl.created_at,
-        wtl.updated_at
-      FROM waste_tickets_landfill wtl
-      JOIN institutions i ON wtl.supplier_id = i.id
-      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
-      JOIN sectors s ON wtl.sector_id = s.id
-      LEFT JOIN users u ON wtl.created_by = u.id
-      WHERE wtl.id = $1 AND wtl.deleted_at IS NULL`,
+        wtr.created_at,
+        wtr.updated_at
+      FROM waste_tickets_recycling wtr
+      JOIN institutions is ON wtr.supplier_id = is.id
+      JOIN institutions ir ON wtr.recipient_id = ir.id
+      JOIN waste_codes wc ON wtr.waste_code_id = wc.id
+      LEFT JOIN users u ON wtr.created_by = u.id
+      WHERE wtr.id = $1 AND wtr.deleted_at IS NULL`,
       [id]
     );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Tichet de depozitare negăsit'
+        message: 'Tichet de reciclare negăsit'
       });
     }
 
@@ -191,83 +195,72 @@ export const getLandfillTicketById = async (req, res) => {
       data: result.rows[0]
     });
   } catch (error) {
-    console.error('Get landfill ticket error:', error);
+    console.error('Get recycling ticket error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la obținerea tichetului de depozitare'
+      message: 'Eroare la obținerea tichetului de reciclare'
     });
   }
 };
 
 // ============================================================================
-// CREATE LANDFILL TICKET
+// CREATE RECYCLING TICKET
 // ============================================================================
-export const createLandfillTicket = async (req, res) => {
+export const createRecyclingTicket = async (req, res) => {
   try {
     const {
       ticketNumber,
       ticketDate,
       ticketTime,
       supplierId,
+      recipientId,
       wasteCodeId,
       vehicleNumber,
-      sectorId,
-      grossWeightKg,
-      tareWeightKg,
-      generatorType,
-      operationType,
-      contractType
+      deliveredQuantityKg,
+      acceptedQuantityKg,
+      notes
     } = req.body;
 
     // ========== VALIDATION ==========
 
     // Required fields
     if (!ticketNumber || !ticketDate || !ticketTime || !supplierId || 
-        !wasteCodeId || !vehicleNumber || !sectorId || 
-        !grossWeightKg || tareWeightKg === undefined || 
-        !generatorType || !operationType || !contractType) {
+        !recipientId || !wasteCodeId || !vehicleNumber || 
+        !deliveredQuantityKg || acceptedQuantityKg === undefined) {
       return res.status(400).json({
         success: false,
         message: 'Toate câmpurile obligatorii trebuie completate'
       });
     }
 
-    // Validate weights
-    const gross = parseFloat(grossWeightKg);
-    const tare = parseFloat(tareWeightKg);
+    // Validate quantities
+    const delivered = parseFloat(deliveredQuantityKg);
+    const accepted = parseFloat(acceptedQuantityKg);
 
-    if (isNaN(gross) || gross <= 0) {
+    if (isNaN(delivered) || delivered <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Greutatea brută trebuie să fie mai mare decât 0'
+        message: 'Cantitatea livrată trebuie să fie mai mare decât 0'
       });
     }
 
-    if (isNaN(tare) || tare < 0) {
+    if (isNaN(accepted) || accepted < 0) {
       return res.status(400).json({
         success: false,
-        message: 'Greutatea tară nu poate fi negativă'
+        message: 'Cantitatea acceptată nu poate fi negativă'
       });
     }
 
-    if (gross <= tare) {
+    if (accepted > delivered) {
       return res.status(400).json({
         success: false,
-        message: 'Greutatea brută trebuie să fie mai mare decât greutatea tară'
-      });
-    }
-
-    // Validate contract type
-    if (!['Taxa', 'Tarif'].includes(contractType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tip contract invalid. Valori acceptate: Taxa, Tarif'
+        message: 'Cantitatea acceptată nu poate fi mai mare decât cantitatea livrată'
       });
     }
 
     // Check if ticket number already exists
     const existingTicket = await pool.query(
-      'SELECT id FROM waste_tickets_landfill WHERE ticket_number = $1 AND deleted_at IS NULL',
+      'SELECT id FROM waste_tickets_recycling WHERE ticket_number = $1 AND deleted_at IS NULL',
       [ticketNumber]
     );
 
@@ -278,7 +271,7 @@ export const createLandfillTicket = async (req, res) => {
       });
     }
 
-    // ========== VALIDATE SUPPLIER = WASTE_OPERATOR ==========
+    // ========== VALIDATE SUPPLIER = TMB_OPERATOR ==========
     const supplierResult = await pool.query(
       'SELECT id, type, name FROM institutions WHERE id = $1 AND deleted_at IS NULL',
       [supplierId]
@@ -293,16 +286,38 @@ export const createLandfillTicket = async (req, res) => {
 
     const supplier = supplierResult.rows[0];
 
-    if (supplier.type !== 'WASTE_OPERATOR') {
+    if (supplier.type !== 'TMB_OPERATOR') {
       return res.status(400).json({
         success: false,
-        message: `Furnizorul trebuie să fie de tip WASTE_OPERATOR. Tip actual: ${supplier.type}`
+        message: `Furnizorul trebuie să fie de tip TMB_OPERATOR (stație TMB). Tip actual: ${supplier.type}`
       });
     }
 
-    // Validate waste code exists
+    // ========== VALIDATE RECIPIENT = RECYCLING_CLIENT ==========
+    const recipientResult = await pool.query(
+      'SELECT id, type, name FROM institutions WHERE id = $1 AND deleted_at IS NULL',
+      [recipientId]
+    );
+
+    if (recipientResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recipientul specificat nu există'
+      });
+    }
+
+    const recipient = recipientResult.rows[0];
+
+    if (recipient.type !== 'RECYCLING_CLIENT') {
+      return res.status(400).json({
+        success: false,
+        message: `Recipientul trebuie să fie de tip RECYCLING_CLIENT (reciclator). Tip actual: ${recipient.type}`
+      });
+    }
+
+    // ========== VALIDATE WASTE CODE (recyclable materials) ==========
     const wasteCodeResult = await pool.query(
-      'SELECT id FROM waste_codes WHERE id = $1 AND is_active = true',
+      'SELECT id, code, description, category FROM waste_codes WHERE id = $1 AND is_active = true',
       [wasteCodeId]
     );
 
@@ -313,52 +328,49 @@ export const createLandfillTicket = async (req, res) => {
       });
     }
 
-    // Validate sector exists
-    const sectorResult = await pool.query(
-      'SELECT id FROM sectors WHERE id = $1 AND is_active = true',
-      [sectorId]
-    );
+    const wasteCode = wasteCodeResult.rows[0];
 
-    if (sectorResult.rows.length === 0) {
-      return res.status(404).json({
+    // Validate waste code is recyclable
+    const validRecyclableCodes = ['19 12 04', '15 01 04', '15 01 02'];
+    
+    if (!validRecyclableCodes.includes(wasteCode.code)) {
+      return res.status(400).json({
         success: false,
-        message: 'Sectorul specificat nu există sau nu este activ'
+        message: `Codul de deșeu trebuie să fie unul dintre: ${validRecyclableCodes.join(', ')} (materiale reciclabile). Cod specificat: ${wasteCode.code}`
       });
     }
 
     // ========== INSERT TICKET ==========
     const result = await pool.query(
-      `INSERT INTO waste_tickets_landfill (
+      `INSERT INTO waste_tickets_recycling (
         ticket_number,
         ticket_date,
         ticket_time,
         supplier_id,
+        recipient_id,
         waste_code_id,
         vehicle_number,
-        sector_id,
-        gross_weight_kg,
-        tare_weight_kg,
-        generator_type,
-        operation_type,
-        contract_type,
+        delivered_quantity_kg,
+        accepted_quantity_kg,
+        notes,
         created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING 
         id,
         ticket_number,
         ticket_date,
         ticket_time,
         supplier_id,
+        recipient_id,
         waste_code_id,
         vehicle_number,
-        sector_id,
-        gross_weight_kg,
-        tare_weight_kg,
-        net_weight_kg,
-        net_weight_tons,
-        generator_type,
-        operation_type,
-        contract_type,
+        delivered_quantity_kg,
+        accepted_quantity_kg,
+        delivered_quantity_tons,
+        accepted_quantity_tons,
+        difference_kg,
+        difference_tons,
+        notes,
         created_by,
         created_at`,
       [
@@ -366,36 +378,34 @@ export const createLandfillTicket = async (req, res) => {
         ticketDate,
         ticketTime,
         supplierId,
+        recipientId,
         wasteCodeId,
         vehicleNumber,
-        sectorId,
-        gross,
-        tare,
-        generatorType,
-        operationType,
-        contractType,
+        delivered,
+        accepted,
+        notes || null,
         req.user.userId // from auth middleware
       ]
     );
 
     res.status(201).json({
       success: true,
-      message: 'Tichet de depozitare creat cu succes',
+      message: 'Tichet de reciclare creat cu succes',
       data: result.rows[0]
     });
   } catch (error) {
-    console.error('Create landfill ticket error:', error);
+    console.error('Create recycling ticket error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la crearea tichetului de depozitare'
+      message: 'Eroare la crearea tichetului de reciclare'
     });
   }
 };
 
 // ============================================================================
-// UPDATE LANDFILL TICKET
+// UPDATE RECYCLING TICKET
 // ============================================================================
-export const updateLandfillTicket = async (req, res) => {
+export const updateRecyclingTicket = async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -403,33 +413,31 @@ export const updateLandfillTicket = async (req, res) => {
       ticketDate,
       ticketTime,
       supplierId,
+      recipientId,
       wasteCodeId,
       vehicleNumber,
-      sectorId,
-      grossWeightKg,
-      tareWeightKg,
-      generatorType,
-      operationType,
-      contractType
+      deliveredQuantityKg,
+      acceptedQuantityKg,
+      notes
     } = req.body;
 
     // Check if ticket exists
     const existingTicket = await pool.query(
-      'SELECT id FROM waste_tickets_landfill WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id FROM waste_tickets_recycling WHERE id = $1 AND deleted_at IS NULL',
       [id]
     );
 
     if (existingTicket.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Tichet de depozitare negăsit'
+        message: 'Tichet de reciclare negăsit'
       });
     }
 
     // Validate ticket number uniqueness (if changed)
     if (ticketNumber) {
       const duplicateCheck = await pool.query(
-        'SELECT id FROM waste_tickets_landfill WHERE ticket_number = $1 AND id != $2 AND deleted_at IS NULL',
+        'SELECT id FROM waste_tickets_recycling WHERE ticket_number = $1 AND id != $2 AND deleted_at IS NULL',
         [ticketNumber, id]
       );
 
@@ -441,20 +449,20 @@ export const updateLandfillTicket = async (req, res) => {
       }
     }
 
-    // Validate weights if provided
-    if (grossWeightKg !== undefined && tareWeightKg !== undefined) {
-      const gross = parseFloat(grossWeightKg);
-      const tare = parseFloat(tareWeightKg);
+    // Validate quantities if provided
+    if (deliveredQuantityKg !== undefined && acceptedQuantityKg !== undefined) {
+      const delivered = parseFloat(deliveredQuantityKg);
+      const accepted = parseFloat(acceptedQuantityKg);
 
-      if (gross <= tare) {
+      if (accepted > delivered) {
         return res.status(400).json({
           success: false,
-          message: 'Greutatea brută trebuie să fie mai mare decât greutatea tară'
+          message: 'Cantitatea acceptată nu poate fi mai mare decât cantitatea livrată'
         });
       }
     }
 
-    // Validate supplier = WASTE_OPERATOR (if changed)
+    // Validate supplier = TMB_OPERATOR (if changed)
     if (supplierId) {
       const supplierResult = await pool.query(
         'SELECT id, type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
@@ -468,10 +476,32 @@ export const updateLandfillTicket = async (req, res) => {
         });
       }
 
-      if (supplierResult.rows[0].type !== 'WASTE_OPERATOR') {
+      if (supplierResult.rows[0].type !== 'TMB_OPERATOR') {
         return res.status(400).json({
           success: false,
-          message: 'Furnizorul trebuie să fie de tip WASTE_OPERATOR'
+          message: 'Furnizorul trebuie să fie de tip TMB_OPERATOR'
+        });
+      }
+    }
+
+    // Validate recipient = RECYCLING_CLIENT (if changed)
+    if (recipientId) {
+      const recipientResult = await pool.query(
+        'SELECT id, type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
+        [recipientId]
+      );
+
+      if (recipientResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Recipientul specificat nu există'
+        });
+      }
+
+      if (recipientResult.rows[0].type !== 'RECYCLING_CLIENT') {
+        return res.status(400).json({
+          success: false,
+          message: 'Recipientul trebuie să fie de tip RECYCLING_CLIENT'
         });
       }
     }
@@ -479,7 +509,7 @@ export const updateLandfillTicket = async (req, res) => {
     // Validate waste code (if changed)
     if (wasteCodeId) {
       const wasteCodeResult = await pool.query(
-        'SELECT id FROM waste_codes WHERE id = $1 AND is_active = true',
+        'SELECT id, code FROM waste_codes WHERE id = $1 AND is_active = true',
         [wasteCodeId]
       );
 
@@ -489,29 +519,15 @@ export const updateLandfillTicket = async (req, res) => {
           message: 'Codul de deșeu specificat nu există sau nu este activ'
         });
       }
-    }
 
-    // Validate sector (if changed)
-    if (sectorId) {
-      const sectorResult = await pool.query(
-        'SELECT id FROM sectors WHERE id = $1 AND is_active = true',
-        [sectorId]
-      );
-
-      if (sectorResult.rows.length === 0) {
-        return res.status(404).json({
+      const validRecyclableCodes = ['19 12 04', '15 01 04', '15 01 02'];
+      
+      if (!validRecyclableCodes.includes(wasteCodeResult.rows[0].code)) {
+        return res.status(400).json({
           success: false,
-          message: 'Sectorul specificat nu există sau nu este activ'
+          message: `Codul de deșeu trebuie să fie unul dintre: ${validRecyclableCodes.join(', ')}`
         });
       }
-    }
-
-    // Validate contract type (if changed)
-    if (contractType && !['Taxa', 'Tarif'].includes(contractType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tip contract invalid. Valori acceptate: Taxa, Tarif'
-      });
     }
 
     // Build dynamic update query
@@ -539,6 +555,11 @@ export const updateLandfillTicket = async (req, res) => {
       params.push(supplierId);
       paramCount++;
     }
+    if (recipientId) {
+      updates.push(`recipient_id = $${paramCount}`);
+      params.push(recipientId);
+      paramCount++;
+    }
     if (wasteCodeId) {
       updates.push(`waste_code_id = $${paramCount}`);
       params.push(wasteCodeId);
@@ -549,34 +570,19 @@ export const updateLandfillTicket = async (req, res) => {
       params.push(vehicleNumber);
       paramCount++;
     }
-    if (sectorId) {
-      updates.push(`sector_id = $${paramCount}`);
-      params.push(sectorId);
+    if (deliveredQuantityKg !== undefined) {
+      updates.push(`delivered_quantity_kg = $${paramCount}`);
+      params.push(parseFloat(deliveredQuantityKg));
       paramCount++;
     }
-    if (grossWeightKg !== undefined) {
-      updates.push(`gross_weight_kg = $${paramCount}`);
-      params.push(parseFloat(grossWeightKg));
+    if (acceptedQuantityKg !== undefined) {
+      updates.push(`accepted_quantity_kg = $${paramCount}`);
+      params.push(parseFloat(acceptedQuantityKg));
       paramCount++;
     }
-    if (tareWeightKg !== undefined) {
-      updates.push(`tare_weight_kg = $${paramCount}`);
-      params.push(parseFloat(tareWeightKg));
-      paramCount++;
-    }
-    if (generatorType) {
-      updates.push(`generator_type = $${paramCount}`);
-      params.push(generatorType);
-      paramCount++;
-    }
-    if (operationType) {
-      updates.push(`operation_type = $${paramCount}`);
-      params.push(operationType);
-      paramCount++;
-    }
-    if (contractType) {
-      updates.push(`contract_type = $${paramCount}`);
-      params.push(contractType);
+    if (notes !== undefined) {
+      updates.push(`notes = $${paramCount}`);
+      params.push(notes);
       paramCount++;
     }
 
@@ -591,7 +597,7 @@ export const updateLandfillTicket = async (req, res) => {
     params.push(id);
 
     const query = `
-      UPDATE waste_tickets_landfill 
+      UPDATE waste_tickets_recycling 
       SET ${updates.join(', ')}
       WHERE id = $${paramCount}
       RETURNING 
@@ -600,16 +606,16 @@ export const updateLandfillTicket = async (req, res) => {
         ticket_date,
         ticket_time,
         supplier_id,
+        recipient_id,
         waste_code_id,
         vehicle_number,
-        sector_id,
-        gross_weight_kg,
-        tare_weight_kg,
-        net_weight_kg,
-        net_weight_tons,
-        generator_type,
-        operation_type,
-        contract_type,
+        delivered_quantity_kg,
+        accepted_quantity_kg,
+        delivered_quantity_tons,
+        accepted_quantity_tons,
+        difference_kg,
+        difference_tons,
+        notes,
         updated_at
     `;
 
@@ -617,72 +623,74 @@ export const updateLandfillTicket = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Tichet de depozitare actualizat cu succes',
+      message: 'Tichet de reciclare actualizat cu succes',
       data: result.rows[0]
     });
   } catch (error) {
-    console.error('Update landfill ticket error:', error);
+    console.error('Update recycling ticket error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la actualizarea tichetului de depozitare'
+      message: 'Eroare la actualizarea tichetului de reciclare'
     });
   }
 };
 
 // ============================================================================
-// DELETE LANDFILL TICKET (SOFT DELETE)
+// DELETE RECYCLING TICKET (SOFT DELETE)
 // ============================================================================
-export const deleteLandfillTicket = async (req, res) => {
+export const deleteRecyclingTicket = async (req, res) => {
   try {
     const { id } = req.params;
 
     // Check if ticket exists
     const existingTicket = await pool.query(
-      'SELECT id FROM waste_tickets_landfill WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id FROM waste_tickets_recycling WHERE id = $1 AND deleted_at IS NULL',
       [id]
     );
 
     if (existingTicket.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Tichet de depozitare negăsit'
+        message: 'Tichet de reciclare negăsit'
       });
     }
 
     // Soft delete (set deleted_at timestamp)
     await pool.query(
-      'UPDATE waste_tickets_landfill SET deleted_at = NOW() WHERE id = $1',
+      'UPDATE waste_tickets_recycling SET deleted_at = NOW() WHERE id = $1',
       [id]
     );
 
     res.json({
       success: true,
-      message: 'Tichet de depozitare șters cu succes'
+      message: 'Tichet de reciclare șters cu succes'
     });
   } catch (error) {
-    console.error('Delete landfill ticket error:', error);
+    console.error('Delete recycling ticket error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la ștergerea tichetului de depozitare'
+      message: 'Eroare la ștergerea tichetului de reciclare'
     });
   }
 };
 
 // ============================================================================
-// GET LANDFILL STATISTICS
+// GET RECYCLING STATISTICS
 // ============================================================================
-export const getLandfillStats = async (req, res) => {
+export const getRecyclingStats = async (req, res) => {
   try {
-    const { startDate, endDate, sectorId } = req.query;
+    const { startDate, endDate, recipientId } = req.query;
 
     let query = `
       SELECT 
         COUNT(*) as total_tickets,
-        SUM(net_weight_tons) as total_tons,
-        AVG(net_weight_tons) as avg_tons_per_ticket,
+        SUM(delivered_quantity_tons) as total_delivered_tons,
+        SUM(accepted_quantity_tons) as total_accepted_tons,
+        SUM(difference_tons) as total_difference_tons,
+        AVG(accepted_quantity_tons) as avg_accepted_per_ticket,
         MIN(ticket_date) as first_ticket_date,
         MAX(ticket_date) as last_ticket_date
-      FROM waste_tickets_landfill
+      FROM waste_tickets_recycling
       WHERE deleted_at IS NULL
     `;
 
@@ -701,29 +709,39 @@ export const getLandfillStats = async (req, res) => {
       paramCount++;
     }
 
-    if (sectorId) {
-      query += ` AND sector_id = $${paramCount}`;
-      params.push(sectorId);
+    if (recipientId) {
+      query += ` AND recipient_id = $${paramCount}`;
+      params.push(recipientId);
       paramCount++;
     }
 
     const result = await pool.query(query, params);
 
+    // Calculate acceptance rate
+    const totalDelivered = parseFloat(result.rows[0].total_delivered_tons) || 0;
+    const totalAccepted = parseFloat(result.rows[0].total_accepted_tons) || 0;
+    const acceptanceRate = totalDelivered > 0 
+      ? ((totalAccepted / totalDelivered) * 100).toFixed(2)
+      : 0;
+
     res.json({
       success: true,
       data: {
         total_tickets: parseInt(result.rows[0].total_tickets) || 0,
-        total_tons: parseFloat(result.rows[0].total_tons) || 0,
-        avg_tons_per_ticket: parseFloat(result.rows[0].avg_tons_per_ticket) || 0,
+        total_delivered_tons: totalDelivered,
+        total_accepted_tons: totalAccepted,
+        total_difference_tons: parseFloat(result.rows[0].total_difference_tons) || 0,
+        acceptance_rate: parseFloat(acceptanceRate),
+        avg_accepted_per_ticket: parseFloat(result.rows[0].avg_accepted_per_ticket) || 0,
         first_ticket_date: result.rows[0].first_ticket_date,
         last_ticket_date: result.rows[0].last_ticket_date
       }
     });
   } catch (error) {
-    console.error('Get landfill stats error:', error);
+    console.error('Get recycling stats error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la obținerea statisticilor'
+      message: 'Eroare la obținerea statisticilor de reciclare'
     });
   }
 };
