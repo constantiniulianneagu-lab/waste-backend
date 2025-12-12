@@ -29,7 +29,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
   origin: [
     'http://localhost:5173',
-    'https://waste-frontend-6xmk0aqql.vercel.app',
+    'https://waste-frontend-n20bxl5lx.vercel.app',
     /\.webcontainer\.io$/,
     /\.local-credentialless\.webcontainer\.io$/
   ],
