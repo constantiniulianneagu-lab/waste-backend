@@ -1,5 +1,5 @@
 // ============================================================================
-// RECYCLING REPORTS CONTROLLER - FIX 403
+// RECYCLING REPORTS CONTROLLER - FIXED
 // ============================================================================
 
 import db from '../config/database.js';
@@ -17,6 +17,8 @@ export const getRecyclingTickets = async (req, res) => {
     const { year, start_date, end_date, sector_id, page = 1, limit = 10 } = req.query;
     const { userId, userRole } = req.user;
 
+    console.log('♻️ RECYCLING REPORT - User:', userId, 'Role:', userRole);
+
     // Date range
     const startDate = start_date || `${year}-01-01`;
     const endDate = end_date || `${year}-12-31`;
@@ -26,8 +28,8 @@ export const getRecyclingTickets = async (req, res) => {
     let sectorParams = [];
 
     if (userRole === 'PLATFORM_ADMIN') {
-      // ✅ ADMIN: vede toate datele, poate filtra opțional pe sector
-      console.log('✅ PLATFORM_ADMIN access - no sector restrictions');
+      console.log('✅ PLATFORM_ADMIN - full access');
+      // Admin vede toate datele
       if (sector_id) {
         sectorFilter = `AND EXISTS (
           SELECT 1 FROM institution_sectors inst_sect 
@@ -47,16 +49,14 @@ export const getRecyclingTickets = async (req, res) => {
       const userSectorsResult = await db.query(userSectorsQuery, [userId]);
       const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
 
+      console.log('🔐 User sectors:', userSectorIds);
+
       if (userSectorIds.length === 0) {
-        console.log('⚠️ User has no assigned sectors - showing all data');
-        // Nu aplica filtru - vezi toate datele (sau returnează 403 dacă vrei strict RBAC)
-        // return res.status(403).json({
-        //   success: false,
-        //   message: 'Access denied: No sectors assigned'
-        // });
+        console.log('⚠️ User has no assigned sectors - allowing access to all data');
+        // Permite accesul chiar dacă nu are sectoare (sau schimbă în 403 dacă vrei strict RBAC)
       } else {
         if (sector_id) {
-          if (!userSectorIds.includes(parseInt(sector_id))) {
+          if (!userSectorIds.includes(sector_id)) {
             return res.status(403).json({
               success: false,
               message: 'Access denied: Sector not accessible'
@@ -95,6 +95,8 @@ export const getRecyclingTickets = async (req, res) => {
     `;
     const summaryResult = await db.query(summaryQuery, baseParams);
 
+    console.log('📊 Summary:', summaryResult.rows[0]);
+
     // SUPPLIERS (furnizori - operatori TMB) - GRUPAT PE CODURI
     const suppliersQuery = `
       SELECT 
@@ -131,7 +133,11 @@ export const getRecyclingTickets = async (req, res) => {
       });
     });
 
-    const suppliers = Object.values(suppliersMap).sort((a, b) => b.total - a.total).slice(0, 10);
+    const suppliers = Object.values(suppliersMap)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10);
+
+    console.log('🏭 Suppliers:', suppliers.length);
 
     // CLIENTS (reciclatori) - GRUPAT PE CODURI
     const clientsQuery = `
@@ -169,7 +175,11 @@ export const getRecyclingTickets = async (req, res) => {
       });
     });
 
-    const clients = Object.values(clientsMap).sort((a, b) => b.total - a.total).slice(0, 10);
+    const clients = Object.values(clientsMap)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10);
+
+    console.log('♻️ Clients:', clients.length);
 
     // TICKETS (paginated)
     const offset = (page - 1) * limit;
@@ -207,6 +217,8 @@ export const getRecyclingTickets = async (req, res) => {
       LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}
     `;
     const ticketsResult = await db.query(ticketsQuery, [...baseParams, limit, offset]);
+
+    console.log('🎫 Tickets:', ticketsResult.rows.length);
 
     // COUNT
     const countQuery = `
@@ -258,6 +270,9 @@ export const getRecyclingTickets = async (req, res) => {
         }
       }
     });
+
+    console.log('✅ RECYCLING REPORT SUCCESS');
+
   } catch (error) {
     console.error('❌ getRecyclingTickets error:', error);
     res.status(500).json({
