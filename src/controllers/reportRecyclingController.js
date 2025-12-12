@@ -1,5 +1,5 @@
 // ============================================================================
-// RECYCLING REPORTS CONTROLLER - FIXED
+// RECYCLING REPORTS CONTROLLER - CORRECT VERSION
 // ============================================================================
 
 import db from '../config/database.js';
@@ -29,17 +29,11 @@ export const getRecyclingTickets = async (req, res) => {
 
     if (userRole === 'PLATFORM_ADMIN') {
       console.log('✅ PLATFORM_ADMIN - full access');
-      // Admin vede toate datele
       if (sector_id) {
-        sectorFilter = `AND EXISTS (
-          SELECT 1 FROM institution_sectors inst_sect 
-          WHERE inst_sect.institution_id = wtr.supplier_id 
-          AND inst_sect.sector_id = $3
-        )`;
+        sectorFilter = 'AND wtr.sector_id = $3';
         sectorParams = [sector_id];
       }
     } else {
-      // Non-admin: verifică sectoarele utilizatorului
       const userSectorsQuery = `
         SELECT DISTINCT is_table.sector_id
         FROM user_institutions ui
@@ -52,8 +46,8 @@ export const getRecyclingTickets = async (req, res) => {
       console.log('🔐 User sectors:', userSectorIds);
 
       if (userSectorIds.length === 0) {
-        console.log('⚠️ User has no assigned sectors - allowing access to all data');
-        // Permite accesul chiar dacă nu are sectoare (sau schimbă în 403 dacă vrei strict RBAC)
+        console.log('⚠️ User has no assigned sectors - showing all data');
+        // Permite accesul la toate datele (sau schimbă în 403 dacă vrei strict RBAC)
       } else {
         if (sector_id) {
           if (!userSectorIds.includes(sector_id)) {
@@ -62,24 +56,20 @@ export const getRecyclingTickets = async (req, res) => {
               message: 'Access denied: Sector not accessible'
             });
           }
-          sectorFilter = `AND EXISTS (
-            SELECT 1 FROM institution_sectors inst_sect 
-            WHERE inst_sect.institution_id = wtr.supplier_id 
-            AND inst_sect.sector_id = $3
-          )`;
+          sectorFilter = 'AND wtr.sector_id = $3';
           sectorParams = [sector_id];
         } else {
-          sectorFilter = `AND EXISTS (
-            SELECT 1 FROM institution_sectors inst_sect 
-            WHERE inst_sect.institution_id = wtr.supplier_id 
-            AND inst_sect.sector_id = ANY($3)
-          )`;
+          sectorFilter = 'AND wtr.sector_id = ANY($3)';
           sectorParams = [userSectorIds];
         }
       }
     }
 
     const baseParams = [startDate, endDate, ...sectorParams];
+
+    console.log('📅 Date range:', startDate, 'to', endDate);
+    console.log('🔍 Sector filter:', sectorFilter);
+    console.log('📦 Base params:', baseParams);
 
     // SUMMARY
     const summaryQuery = `
@@ -95,7 +85,7 @@ export const getRecyclingTickets = async (req, res) => {
     `;
     const summaryResult = await db.query(summaryQuery, baseParams);
 
-    console.log('📊 Summary:', summaryResult.rows[0]);
+    console.log('📊 Summary result:', summaryResult.rows[0]);
 
     // SUPPLIERS (furnizori - operatori TMB) - GRUPAT PE CODURI
     const suppliersQuery = `
@@ -111,9 +101,12 @@ export const getRecyclingTickets = async (req, res) => {
         AND wtr.ticket_date <= $2
         ${sectorFilter}
       GROUP BY i.name, wc.code
-      ORDER BY i.name, total_tons DESC
+      ORDER BY i.name, SUM(wtr.accepted_quantity_tons) DESC
     `;
+    
+    console.log('🔍 Executing suppliers query...');
     const suppliersResult = await db.query(suppliersQuery, baseParams);
+    console.log('✅ Suppliers query returned:', suppliersResult.rows.length, 'rows');
 
     // Group suppliers by name with their codes
     const suppliersMap = {};
@@ -137,7 +130,10 @@ export const getRecyclingTickets = async (req, res) => {
       .sort((a, b) => b.total - a.total)
       .slice(0, 10);
 
-    console.log('🏭 Suppliers:', suppliers.length);
+    console.log('🏭 Suppliers after grouping:', suppliers.length);
+    if (suppliers.length > 0) {
+      console.log('🏭 First supplier example:', JSON.stringify(suppliers[0], null, 2));
+    }
 
     // CLIENTS (reciclatori) - GRUPAT PE CODURI
     const clientsQuery = `
@@ -153,9 +149,12 @@ export const getRecyclingTickets = async (req, res) => {
         AND wtr.ticket_date <= $2
         ${sectorFilter}
       GROUP BY i.name, wc.code
-      ORDER BY i.name, total_tons DESC
+      ORDER BY i.name, SUM(wtr.accepted_quantity_tons) DESC
     `;
+    
+    console.log('🔍 Executing clients query...');
     const clientsResult = await db.query(clientsQuery, baseParams);
+    console.log('✅ Clients query returned:', clientsResult.rows.length, 'rows');
 
     // Group clients by name with their codes
     const clientsMap = {};
@@ -179,7 +178,7 @@ export const getRecyclingTickets = async (req, res) => {
       .sort((a, b) => b.total - a.total)
       .slice(0, 10);
 
-    console.log('♻️ Clients:', clients.length);
+    console.log('♻️ Clients after grouping:', clients.length);
 
     // TICKETS (paginated)
     const offset = (page - 1) * limit;
@@ -207,8 +206,7 @@ export const getRecyclingTickets = async (req, res) => {
       JOIN institutions client ON wtr.recipient_id = client.id
       JOIN institutions supplier ON wtr.supplier_id = supplier.id
       JOIN waste_codes wc ON wtr.waste_code_id = wc.id
-      LEFT JOIN institution_sectors inst_sect ON supplier.id = inst_sect.institution_id
-      LEFT JOIN sectors s ON inst_sect.sector_id = s.id
+      JOIN sectors s ON wtr.sector_id = s.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
         AND wtr.ticket_date <= $2
@@ -232,7 +230,9 @@ export const getRecyclingTickets = async (req, res) => {
     const countResult = await db.query(countQuery, baseParams);
     const totalRecords = parseInt(countResult.rows[0].total);
 
-    res.json({
+    console.log('📊 Total records:', totalRecords);
+
+    const response = {
       success: true,
       data: {
         summary: {
@@ -269,12 +269,21 @@ export const getRecyclingTickets = async (req, res) => {
           total_pages: Math.ceil(totalRecords / limit)
         }
       }
-    });
+    };
 
     console.log('✅ RECYCLING REPORT SUCCESS');
+    console.log('📤 Response summary:', {
+      total_quantity: response.data.summary.total_quantity,
+      suppliers_count: response.data.suppliers.length,
+      clients_count: response.data.clients.length,
+      tickets_count: response.data.tickets.length
+    });
+
+    res.json(response);
 
   } catch (error) {
     console.error('❌ getRecyclingTickets error:', error);
+    console.error('❌ Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch recycling tickets',
