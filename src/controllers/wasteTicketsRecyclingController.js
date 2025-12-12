@@ -675,6 +675,256 @@ export const deleteRecyclingTicket = async (req, res) => {
 };
 
 // ============================================================================
+// GET RECYCLING REPORTS (pentru pagina Reports)
+// ============================================================================
+export const getRecyclingReports = async (req, res) => {
+  try {
+    const { 
+      year = new Date().getFullYear(),
+      from,
+      to,
+      sector_id,
+      page = 1,
+      per_page = 10
+    } = req.query;
+
+    const offset = (page - 1) * per_page;
+
+    // ========== SUMMARY DATA ==========
+    
+    // Total quantity
+    let summaryQuery = `
+      SELECT 
+        COALESCE(SUM(accepted_quantity_tons), 0) as total_quantity
+      FROM waste_tickets_recycling
+      WHERE deleted_at IS NULL
+        AND EXTRACT(YEAR FROM ticket_date) = $1
+    `;
+    const summaryParams = [year];
+    let paramCount = 2;
+
+    if (from) {
+      summaryQuery += ` AND ticket_date >= $${paramCount}`;
+      summaryParams.push(from);
+      paramCount++;
+    }
+    if (to) {
+      summaryQuery += ` AND ticket_date <= $${paramCount}`;
+      summaryParams.push(to);
+      paramCount++;
+    }
+
+    const summaryResult = await pool.query(summaryQuery, summaryParams);
+    const totalQuantity = parseFloat(summaryResult.rows[0].total_quantity) || 0;
+
+    // ========== SUPPLIERS (Operatori TMB) - GRUPAT PE CODURI ==========
+    let suppliersQuery = `
+      SELECT 
+        i.name as supplier_name,
+        wc.code as waste_code,
+        SUM(wtr.accepted_quantity_tons) as total_tons
+      FROM waste_tickets_recycling wtr
+      JOIN institutions i ON wtr.supplier_id = i.id
+      JOIN waste_codes wc ON wtr.waste_code_id = wc.id
+      WHERE wtr.deleted_at IS NULL
+        AND EXTRACT(YEAR FROM wtr.ticket_date) = $1
+    `;
+    const suppliersParams = [year];
+    let supplierParamCount = 2;
+
+    if (from) {
+      suppliersQuery += ` AND wtr.ticket_date >= $${supplierParamCount}`;
+      suppliersParams.push(from);
+      supplierParamCount++;
+    }
+    if (to) {
+      suppliersQuery += ` AND wtr.ticket_date <= $${supplierParamCount}`;
+      suppliersParams.push(to);
+      supplierParamCount++;
+    }
+
+    suppliersQuery += `
+      GROUP BY i.name, wc.code
+      ORDER BY i.name, SUM(wtr.accepted_quantity_tons) DESC
+    `;
+
+    const suppliersResult = await pool.query(suppliersQuery, suppliersParams);
+
+    // Group suppliers by name with their codes
+    const suppliersMap = {};
+    suppliersResult.rows.forEach(row => {
+      if (!suppliersMap[row.supplier_name]) {
+        suppliersMap[row.supplier_name] = {
+          name: row.supplier_name,
+          total: 0,
+          codes: []
+        };
+      }
+      suppliersMap[row.supplier_name].total += parseFloat(row.total_tons);
+      suppliersMap[row.supplier_name].codes.push({
+        code: row.waste_code,
+        quantity: parseFloat(row.total_tons)
+      });
+    });
+
+    const suppliers = Object.values(suppliersMap).sort((a, b) => b.total - a.total);
+
+    // ========== CLIENTS (Reciclatori) - GRUPAT PE CODURI ==========
+    let clientsQuery = `
+      SELECT 
+        i.name as client_name,
+        wc.code as waste_code,
+        SUM(wtr.accepted_quantity_tons) as total_tons
+      FROM waste_tickets_recycling wtr
+      JOIN institutions i ON wtr.recipient_id = i.id
+      JOIN waste_codes wc ON wtr.waste_code_id = wc.id
+      WHERE wtr.deleted_at IS NULL
+        AND EXTRACT(YEAR FROM wtr.ticket_date) = $1
+    `;
+    const clientsParams = [year];
+    let clientParamCount = 2;
+
+    if (from) {
+      clientsQuery += ` AND wtr.ticket_date >= $${clientParamCount}`;
+      clientsParams.push(from);
+      clientParamCount++;
+    }
+    if (to) {
+      clientsQuery += ` AND wtr.ticket_date <= $${clientParamCount}`;
+      clientsParams.push(to);
+      clientParamCount++;
+    }
+
+    clientsQuery += `
+      GROUP BY i.name, wc.code
+      ORDER BY i.name, SUM(wtr.accepted_quantity_tons) DESC
+    `;
+
+    const clientsResult = await pool.query(clientsQuery, clientsParams);
+
+    // Group clients by name with their codes
+    const clientsMap = {};
+    clientsResult.rows.forEach(row => {
+      if (!clientsMap[row.client_name]) {
+        clientsMap[row.client_name] = {
+          name: row.client_name,
+          total: 0,
+          codes: []
+        };
+      }
+      clientsMap[row.client_name].total += parseFloat(row.total_tons);
+      clientsMap[row.client_name].codes.push({
+        code: row.waste_code,
+        quantity: parseFloat(row.total_tons)
+      });
+    });
+
+    const clients = Object.values(clientsMap).sort((a, b) => b.total - a.total);
+
+    // ========== TICKETS TABLE DATA ==========
+    let ticketsQuery = `
+      SELECT 
+        wtr.id,
+        wtr.ticket_number,
+        wtr.ticket_date,
+        wtr.ticket_time,
+        is.name as supplier_name,
+        ir.name as client_name,
+        wc.code as waste_code,
+        wc.description as waste_description,
+        wtr.vehicle_number,
+        wtr.delivered_quantity_tons,
+        wtr.accepted_quantity_tons,
+        wtr.difference_tons,
+        s.sector_name
+      FROM waste_tickets_recycling wtr
+      JOIN institutions is ON wtr.supplier_id = is.id
+      JOIN institutions ir ON wtr.recipient_id = ir.id
+      JOIN waste_codes wc ON wtr.waste_code_id = wc.id
+      LEFT JOIN sectors s ON s.id = (
+        SELECT sector_id FROM institution_sectors 
+        WHERE institution_id = wtr.supplier_id 
+        LIMIT 1
+      )
+      WHERE wtr.deleted_at IS NULL
+        AND EXTRACT(YEAR FROM wtr.ticket_date) = $1
+    `;
+    const ticketsParams = [year];
+    let ticketParamCount = 2;
+
+    if (from) {
+      ticketsQuery += ` AND wtr.ticket_date >= $${ticketParamCount}`;
+      ticketsParams.push(from);
+      ticketParamCount++;
+    }
+    if (to) {
+      ticketsQuery += ` AND wtr.ticket_date <= $${ticketParamCount}`;
+      ticketsParams.push(to);
+      ticketParamCount++;
+    }
+    if (sector_id) {
+      ticketsQuery += ` AND s.id = $${ticketParamCount}`;
+      ticketsParams.push(sector_id);
+      ticketParamCount++;
+    }
+
+    // Count total
+    const countQuery = ticketsQuery.replace(
+      /SELECT .+ FROM/s,
+      'SELECT COUNT(*) FROM'
+    );
+    const countResult = await pool.query(countQuery, ticketsParams);
+    const totalRecords = parseInt(countResult.rows[0].count);
+
+    // Add pagination
+    ticketsQuery += ` ORDER BY wtr.ticket_date DESC, wtr.ticket_time DESC
+                      LIMIT $${ticketParamCount} OFFSET $${ticketParamCount + 1}`;
+    ticketsParams.push(per_page, offset);
+
+    const ticketsResult = await pool.query(ticketsQuery, ticketsParams);
+
+    // Calculate acceptance percentage for each ticket
+    const tickets = ticketsResult.rows.map(ticket => ({
+      ...ticket,
+      acceptance_percentage: ticket.delivered_quantity_tons > 0
+        ? ((ticket.accepted_quantity_tons / ticket.delivered_quantity_tons) * 100).toFixed(2)
+        : 0
+    }));
+
+    // ========== RESPONSE ==========
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          total_quantity: totalQuantity,
+          period: {
+            year: parseInt(year),
+            date_from: from || `${year}-01-01`,
+            date_to: to || `${year}-12-31`,
+            sector: sector_id ? 'Sector specific' : 'București'
+          }
+        },
+        suppliers: suppliers,
+        clients: clients,
+        tickets: tickets,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(per_page),
+          total_pages: Math.ceil(totalRecords / per_page),
+          total_records: totalRecords
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get recycling reports error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Eroare la obținerea rapoartelor de reciclare'
+    });
+  }
+};
+
+// ============================================================================
 // GET RECYCLING STATISTICS
 // ============================================================================
 export const getRecyclingStats = async (req, res) => {
