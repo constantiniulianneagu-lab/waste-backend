@@ -266,33 +266,11 @@ export const getLandfillReports = async (req, res) => {
       operation: row.operation_type || `Eliminare ${row.sector_name}`
     }));
 
-    console.log('📅 Fetching available years...');
-
-    const availableYearsQuery = `
-      SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
-      FROM waste_tickets_landfill
-      WHERE deleted_at IS NULL
-      ORDER BY year DESC
-    `;
-
-    let availableYears = [];
-
-    try {
-      const yearsResult = await db.query(availableYearsQuery);
-      availableYears = yearsResult.rows.map(row => row.year);
-      console.log(`✅ Available years:`, availableYears);
-    } catch (yearsError) {
-      console.error('❌ Available years query failed:', yearsError);
-      // Fallback la anul curent dacă query-ul eșuează
-      availableYears = [new Date().getFullYear()];
-    }
-
     console.log('✅ Reports data fetched successfully');
 
     res.json({
       success: true,
       data: {
-        available_years: availableYears,  // ✅ ADAUGĂ ACEASTĂ LINIE
         summary: {
           total_quantity: formatNumber(totalQuantity),
           period: {
