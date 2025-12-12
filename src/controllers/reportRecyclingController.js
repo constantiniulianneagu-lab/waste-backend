@@ -35,7 +35,7 @@ export const getRecyclingTickets = async (req, res) => {
         SELECT DISTINCT is_table.sector_id
         FROM user_institutions ui
         JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
-        WHERE ui.user_id = $1 AND ui.deleted_at IS NULL
+        WHERE ui.user_id = $1
       `;
       const userSectorsResult = await db.query(userSectorsQuery, [userId]);
       const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
@@ -106,16 +106,15 @@ export const getRecyclingTickets = async (req, res) => {
           codes: []
         };
       }
-      suppliersMap[row.supplier_name].total += parseFloat(row.total_tons);
+      const tons = parseFloat(row.total_tons);
+      suppliersMap[row.supplier_name].total += tons;
       suppliersMap[row.supplier_name].codes.push({
         code: row.waste_code,
-        quantity: parseFloat(row.total_tons)
+        quantity: tons
       });
     });
 
-    const suppliers = Object.values(suppliersMap)
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10); // Top 10
+    const suppliers = Object.values(suppliersMap).sort((a, b) => b.total - a.total).slice(0, 10);
 
     // CLIENTS (reciclatori) - GRUPAT PE CODURI
     const clientsQuery = `
@@ -124,7 +123,7 @@ export const getRecyclingTickets = async (req, res) => {
         wc.code as waste_code,
         SUM(wtr.accepted_quantity_tons) as total_tons
       FROM waste_tickets_recycling wtr
-      JOIN institutions i ON wtr.recipient_id = i.id
+      JOIN institutions i ON wtr.client_id = i.id
       JOIN waste_codes wc ON wtr.waste_code_id = wc.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
@@ -145,16 +144,15 @@ export const getRecyclingTickets = async (req, res) => {
           codes: []
         };
       }
-      clientsMap[row.client_name].total += parseFloat(row.total_tons);
+      const tons = parseFloat(row.total_tons);
+      clientsMap[row.client_name].total += tons;
       clientsMap[row.client_name].codes.push({
         code: row.waste_code,
-        quantity: parseFloat(row.total_tons)
+        quantity: tons
       });
     });
 
-    const clients = Object.values(clientsMap)
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10); // Top 10
+    const clients = Object.values(clientsMap).sort((a, b) => b.total - a.total).slice(0, 10);
 
     // TICKETS (paginated)
     const offset = (page - 1) * limit;
@@ -163,7 +161,6 @@ export const getRecyclingTickets = async (req, res) => {
         wtr.id,
         wtr.ticket_number,
         wtr.ticket_date,
-        wtr.ticket_time,
         client.name as client_name,
         supplier.name as supplier_name,
         wc.code as waste_code,
@@ -173,22 +170,17 @@ export const getRecyclingTickets = async (req, res) => {
         wtr.delivered_quantity_tons,
         wtr.accepted_quantity_tons,
         wtr.difference_tons,
-        CASE 
-          WHEN wtr.delivered_quantity_tons > 0 
-          THEN (wtr.accepted_quantity_tons / wtr.delivered_quantity_tons * 100)
-          ELSE 0 
-        END as acceptance_percentage
+        wtr.acceptance_percentage
       FROM waste_tickets_recycling wtr
-      JOIN institutions client ON wtr.recipient_id = client.id
+      JOIN institutions client ON wtr.client_id = client.id
       JOIN institutions supplier ON wtr.supplier_id = supplier.id
       JOIN waste_codes wc ON wtr.waste_code_id = wc.id
-      LEFT JOIN institution_sectors inst_sect ON supplier.id = inst_sect.institution_id
-      LEFT JOIN sectors s ON inst_sect.sector_id = s.id
+      JOIN sectors s ON wtr.sector_id = s.id
       WHERE wtr.deleted_at IS NULL
         AND wtr.ticket_date >= $1
         AND wtr.ticket_date <= $2
         ${sectorFilter}
-      ORDER BY wtr.ticket_date DESC, wtr.ticket_time DESC
+      ORDER BY wtr.ticket_date DESC
       LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}
     `;
     const ticketsResult = await db.query(ticketsQuery, [...baseParams, limit, offset]);
@@ -223,17 +215,16 @@ export const getRecyclingTickets = async (req, res) => {
           id: t.id,
           ticket_number: t.ticket_number,
           ticket_date: t.ticket_date,
-          ticket_time: t.ticket_time,
           client_name: t.client_name,
           supplier_name: t.supplier_name,
           waste_code: t.waste_code,
           waste_description: t.waste_description,
-          sector_name: t.sector_name || 'N/A',
+          sector_name: t.sector_name,
           vehicle_number: t.vehicle_number,
           delivered_quantity_tons: parseFloat(t.delivered_quantity_tons),
           accepted_quantity_tons: parseFloat(t.accepted_quantity_tons),
           difference_tons: parseFloat(t.difference_tons),
-          acceptance_percentage: parseFloat(t.acceptance_percentage).toFixed(2)
+          acceptance_percentage: parseFloat(t.acceptance_percentage)
         })),
         pagination: {
           current_page: parseInt(page),
