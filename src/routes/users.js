@@ -9,7 +9,8 @@ import {
   getUserStats,
   getUserProfile,      // ✅ ADĂUGAT
   updateProfile,       // ✅ ADĂUGAT
-  updatePassword       // ✅ ADĂUGAT
+  updatePassword,       // ✅ ADĂUGAT
+  getProfileOperators
 } from '../controllers/userController.js';
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 
@@ -24,6 +25,8 @@ router.use(authenticateToken);
 
 // GET current user profile
 router.get('/profile', getUserProfile);
+
+router.get('/profile/operators', getProfileOperators);
 
 // PUT update current user profile
 router.put('/profile', updateProfile);
