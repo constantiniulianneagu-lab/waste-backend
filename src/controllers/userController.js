@@ -578,157 +578,163 @@ export const getProfileOperators = async (req, res) => {
       });
     }
 
-    // ========== STEP 2: Get operators with contracts ==========
-    const operators = [];
+   // ========== STEP 2: Get operators with contracts ==========
+const operators = [];
 
-    // IMPORTANT:
-    // ❌ Nu folosim DISTINCT pentru ca avem json_agg (json nu are equality operator)
-    // ✅ Folosim GROUP BY i.id si COALESCE(json_agg(...) FILTER(...), '[]'::json)
+// IMPORTANT:
+// ❌ Nu folosim DISTINCT pentru ca avem json_agg (json nu are equality operator)
+// ✅ Folosim GROUP BY i.id si COALESCE(json_agg(...) FILTER(...), '[]'::json)
 
-    // 1) WASTE COLLECTORS
-    const collectorsQuery = `
-      SELECT
-        i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
-        'WASTE_COLLECTOR' as operator_type,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'contract_id', woc.id,
-              'contract_number', woc.contract_number,
-              'contract_date_start', woc.contract_date_start,
-              'contract_date_end', woc.contract_date_end,
-              'sector_id', woc.sector_id,
-              'sector_name', s.sector_name,
-              'sector_number', s.sector_number,
-              'is_active', woc.is_active,
-              'notes', woc.notes,
-              'has_file', (woc.contract_file_url IS NOT NULL)
-            )
-            ORDER BY s.sector_number, woc.contract_date_start
-          ) FILTER (WHERE woc.id IS NOT NULL),
-          '[]'::json
-        ) as contracts
-      FROM institutions i
-      JOIN waste_operator_contracts woc ON i.id = woc.institution_id
-      JOIN sectors s ON woc.sector_id = s.id
-      WHERE i.deleted_at IS NULL
-        AND woc.deleted_at IS NULL
-        AND woc.sector_id = ANY($1)
-      GROUP BY i.id
-    `;
+// 1) WASTE COLLECTORS
+const collectorsQuery = `
+  SELECT
+    i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+    'WASTE_COLLECTOR' as operator_type,
+    COALESCE(
+      json_agg(
+        json_build_object(
+          'contract_id', woc.id,
+          'contract_number', woc.contract_number,
+          'contract_date_start', woc.contract_date_start,
+          'contract_date_end', woc.contract_date_end,
+          'sector_id', woc.sector_id,
+          'sector_name', s.sector_name,
+          'sector_number', s.sector_number,
+          'is_active', woc.is_active,
+          'notes', woc.notes,
+          'has_file', (woc.contract_file_url IS NOT NULL)
+        )
+        ORDER BY s.sector_number, woc.contract_date_start
+      ) FILTER (WHERE woc.id IS NOT NULL),
+      '[]'::json
+    ) as contracts
+  FROM institutions i
+  JOIN waste_operator_contracts woc ON i.id = woc.institution_id
+  JOIN sectors s ON woc.sector_id = s.id
+  WHERE i.deleted_at IS NULL
+    AND woc.deleted_at IS NULL
+    AND woc.sector_id = ANY($1)
+  GROUP BY i.id
+`;
 
-    // 2) SORTING OPERATORS
-    const sortingQuery = `
-      SELECT
-        i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
-        'SORTING_OPERATOR' as operator_type,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'contract_id', soc.id,
-              'contract_number', soc.contract_number,
-              'contract_date_start', soc.contract_date_start,
-              'contract_date_end', soc.contract_date_end,
-              'sector_id', soc.sector_id,
-              'sector_name', s.sector_name,
-              'sector_number', s.sector_number,
-              'tariff_per_ton', soc.tariff_per_ton,
-              'estimated_quantity_tons', soc.estimated_quantity_tons,
-              'currency', soc.currency,
-              'is_active', soc.is_active,
-              'notes', soc.notes,
-              'has_file', (soc.contract_file_url IS NOT NULL)
-            )
-            ORDER BY s.sector_number, soc.contract_date_start
-          ) FILTER (WHERE soc.id IS NOT NULL),
-          '[]'::json
-        ) as contracts
-      FROM institutions i
-      JOIN sorting_operator_contracts soc ON i.id = soc.institution_id
-      JOIN sectors s ON soc.sector_id = s.id
-      WHERE i.deleted_at IS NULL
-        AND soc.deleted_at IS NULL
-        AND soc.sector_id = ANY($1)
-      GROUP BY i.id
-    `;
+// 2) SORTING OPERATORS
+const sortingQuery = `
+  SELECT
+    i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+    'SORTING_OPERATOR' as operator_type,
+    COALESCE(
+      json_agg(
+        json_build_object(
+          'contract_id', soc.id,
+          'contract_number', soc.contract_number,
+          'contract_date_start', soc.contract_date_start,
+          'contract_date_end', soc.contract_date_end,
+          'sector_id', soc.sector_id,
+          'sector_name', s.sector_name,
+          'sector_number', s.sector_number,
+          'tariff_per_ton', soc.tariff_per_ton,
+          'estimated_quantity_tons', soc.estimated_quantity_tons,
+          'currency', soc.currency,
+          'is_active', soc.is_active,
+          'notes', soc.notes,
+          'has_file', (soc.contract_file_url IS NOT NULL)
+        )
+        ORDER BY s.sector_number, soc.contract_date_start
+      ) FILTER (WHERE soc.id IS NOT NULL),
+      '[]'::json
+    ) as contracts
+  FROM institutions i
+  JOIN sorting_operator_contracts soc ON i.id = soc.institution_id
+  JOIN sectors s ON soc.sector_id = s.id
+  WHERE i.deleted_at IS NULL
+    AND soc.deleted_at IS NULL
+    AND soc.sector_id = ANY($1)
+  GROUP BY i.id
+`;
 
-    // 3) TMB OPERATORS
-    const tmbQuery = `
-      SELECT
-        i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
-        'TMB_OPERATOR' as operator_type,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'contract_id', tc.id,
-              'contract_number', tc.contract_number,
-              'contract_date_start', tc.contract_date_start,
-              'contract_date_end', tc.contract_date_end,
-              'sector_id', tc.sector_id,
-              'sector_name', s.sector_name,
-              'sector_number', s.sector_number,
-              'tariff_per_ton', tc.tariff_per_ton,
-              'estimated_quantity_tons', tc.estimated_quantity_tons,
-              'contract_value', tc.contract_value,
-              'currency', tc.currency,
-              'is_active', tc.is_active,
-              'notes', tc.notes,
-              'has_file', (tc.contract_file_url IS NOT NULL)
-            )
-            ORDER BY s.sector_number, tc.contract_date_start
-          ) FILTER (WHERE tc.id IS NOT NULL),
-          '[]'::json
-        ) as contracts
-      FROM institutions i
-      -- IMPORTANT: daca legatura ta reala e pe institution_sectors, pastram logica ta:
-      JOIN institution_sectors ins ON i.id = ins.institution_id
-      JOIN tmb_contracts tc ON ins.sector_id = tc.sector_id
-      JOIN sectors s ON tc.sector_id = s.id
-      WHERE i.type = 'TMB_OPERATOR'
-        AND i.deleted_at IS NULL
-        AND tc.deleted_at IS NULL
-        AND tc.sector_id = ANY($1)
-      GROUP BY i.id
-    `;
+// 3) TMB OPERATORS  ✅ FIX: legatura reala este tmb_associations + tmb_contracts
+const tmbQuery = `
+  SELECT
+    i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+    'TMB_OPERATOR' as operator_type,
+    COALESCE(
+      json_agg(
+        json_build_object(
+          'contract_id', tc.id,
+          'contract_number', tc.contract_number,
+          'contract_date_start', tc.contract_date_start,
+          'contract_date_end', tc.contract_date_end,
+          'sector_id', tc.sector_id,
+          'sector_name', s.sector_name,
+          'sector_number', s.sector_number,
+          'tariff_per_ton', tc.tariff_per_ton,
+          'estimated_quantity_tons', tc.estimated_quantity_tons,
+          'contract_value', tc.contract_value,
+          'currency', tc.currency,
+          'is_active', tc.is_active,
+          'notes', tc.notes,
+          'has_file', (tc.contract_file_url IS NOT NULL),
+          'association_role',
+            CASE 
+              WHEN ta.primary_operator_id = i.id THEN 'PRIMARY'
+              WHEN ta.secondary_operator_id = i.id THEN 'SECONDARY'
+              ELSE NULL
+            END
+        )
+        ORDER BY s.sector_number, tc.contract_date_start
+      ) FILTER (WHERE tc.id IS NOT NULL),
+      '[]'::json
+    ) as contracts
+  FROM tmb_associations ta
+  JOIN tmb_contracts tc ON ta.sector_id = tc.sector_id
+  JOIN sectors s ON tc.sector_id = s.id
+  JOIN institutions i
+    ON i.id = ta.primary_operator_id OR i.id = ta.secondary_operator_id
+  WHERE i.deleted_at IS NULL
+    AND ta.is_active = true
+    AND tc.deleted_at IS NULL
+    AND ta.sector_id = ANY($1)
+  GROUP BY i.id
+`;
 
-    // 4) DISPOSAL OPERATORS
-    const disposalQuery = `
-      SELECT
-        i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
-        'DISPOSAL_OPERATOR' as operator_type,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'contract_id', dc.id,
-              'contract_number', dc.contract_number,
-              'contract_date_start', dc.contract_date_start,
-              'contract_date_end', dc.contract_date_end,
-              'sector_id', dcs.sector_id,
-              'sector_name', s.sector_name,
-              'sector_number', s.sector_number,
-              'tariff_per_ton', dcs.tariff_per_ton,
-              'cec_tax_per_ton', dcs.cec_tax_per_ton,
-              'total_per_ton', dcs.total_per_ton,
-              'contracted_quantity_tons', dcs.contracted_quantity_tons,
-              'sector_value', dcs.sector_value,
-              'currency', dcs.currency,
-              'is_active', dc.is_active,
-              'notes', dc.notes,
-              'has_file', (dc.contract_file_url IS NOT NULL)
-            )
-            ORDER BY s.sector_number, dc.contract_date_start
-          ) FILTER (WHERE dc.id IS NOT NULL),
-          '[]'::json
-        ) as contracts
-      FROM institutions i
-      JOIN disposal_contracts dc ON i.id = dc.institution_id
-      JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id
-      JOIN sectors s ON dcs.sector_id = s.id
-      WHERE i.deleted_at IS NULL
-        AND dc.deleted_at IS NULL
-        AND dcs.sector_id = ANY($1)
-      GROUP BY i.id
-    `;
+// 4) DISPOSAL OPERATORS
+const disposalQuery = `
+  SELECT
+    i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+    'DISPOSAL_OPERATOR' as operator_type,
+    COALESCE(
+      json_agg(
+        json_build_object(
+          'contract_id', dc.id,
+          'contract_number', dc.contract_number,
+          'contract_date_start', dc.contract_date_start,
+          'contract_date_end', dc.contract_date_end,
+          'sector_id', dcs.sector_id,
+          'sector_name', s.sector_name,
+          'sector_number', s.sector_number,
+          'tariff_per_ton', dcs.tariff_per_ton,
+          'cec_tax_per_ton', dcs.cec_tax_per_ton,
+          'total_per_ton', dcs.total_per_ton,
+          'contracted_quantity_tons', dcs.contracted_quantity_tons,
+          'sector_value', dcs.sector_value,
+          'currency', dcs.currency,
+          'is_active', dc.is_active,
+          'notes', dc.notes,
+          'has_file', (dc.contract_file_url IS NOT NULL)
+        )
+        ORDER BY s.sector_number, dc.contract_date_start
+      ) FILTER (WHERE dc.id IS NOT NULL),
+      '[]'::json
+    ) as contracts
+  FROM institutions i
+  JOIN disposal_contracts dc ON i.id = dc.institution_id
+  JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id
+  JOIN sectors s ON dcs.sector_id = s.id
+  WHERE i.deleted_at IS NULL
+    AND dc.deleted_at IS NULL
+    AND dcs.sector_id = ANY($1)
+  GROUP BY i.id
+`;
 
     // ✅ EXECUTĂ toate query-urile
     const collectorsResult = await pool.query(collectorsQuery, [accessibleSectorIds]);
