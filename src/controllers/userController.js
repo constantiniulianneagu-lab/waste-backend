@@ -773,13 +773,21 @@ const disposalQuery = `
         }
 
         const amendmentsResult = await pool.query(`
-          SELECT id, amendment_number, amendment_date, reason, notes,
-                 new_tariff_per_ton, new_estimated_quantity_tons, new_contract_date_end, changes_description,
-                 (amendment_file_url IS NOT NULL) as has_file
-          FROM ${amendmentsTable}
-          WHERE contract_id = $1 AND deleted_at IS NULL
-          ORDER BY amendment_date DESC
-        `, [contract.contract_id]);
+  SELECT 
+    id,
+    amendment_number,
+    amendment_date,
+    reason,
+    notes,
+    new_tariff_per_ton,
+    new_estimated_quantity_tons,
+    new_contract_date_end,
+    (amendment_file_url IS NOT NULL) as has_file
+  FROM ${amendmentsTable}
+  WHERE contract_id = $1 AND deleted_at IS NULL
+  ORDER BY amendment_date DESC
+`, [contract.contract_id]);
+
 
         contract.amendments = amendmentsResult.rows;
         contract.amendments_count = amendmentsResult.rows.length;
