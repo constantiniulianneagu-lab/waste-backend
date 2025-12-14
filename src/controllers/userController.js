@@ -515,27 +515,27 @@ export const updatePassword = async (req, res) => {
 };
 
 // ============================================================================
-// GET PROFILE OPERATORS (✅ NOU - ADĂUGAT)
+// GET PROFILE OPERATORS (FIXED - no DISTINCT on JSON + executes all queries)
 // ============================================================================
 export const getProfileOperators = async (req, res) => {
   console.log('\n👥 ==================== GET PROFILE OPERATORS ====================');
-  
+
   try {
     const userId = req.user.id;
     const userRole = req.user.role;
-    
+
     console.log('📋 User:', { userId, userRole });
 
     // ========== STEP 1: Determine accessible sectors ==========
     let accessibleSectorIds = [];
-    
+
     if (userRole === 'PLATFORM_ADMIN') {
       console.log('✅ PLATFORM_ADMIN - full access to all operators');
       const sectorsResult = await pool.query(`
         SELECT id FROM sectors WHERE is_active = true
       `);
       accessibleSectorIds = sectorsResult.rows.map(r => r.id);
-      
+
     } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
       const userInstitutionQuery = `
         SELECT ui.institution_id, i.name as institution_name
@@ -545,7 +545,7 @@ export const getProfileOperators = async (req, res) => {
         LIMIT 1
       `;
       const userInstResult = await pool.query(userInstitutionQuery, [userId]);
-      
+
       if (userInstResult.rows.length === 0) {
         return res.json({
           success: true,
@@ -553,12 +553,12 @@ export const getProfileOperators = async (req, res) => {
           message: 'No institution assigned'
         });
       }
-      
+
       const institutionId = userInstResult.rows[0].institution_id;
       const institutionName = userInstResult.rows[0].institution_name;
-      
+
       console.log('🏢 Institution:', { institutionId, institutionName });
-      
+
       const sectorsQuery = `
         SELECT DISTINCT sector_id
         FROM institution_sectors
@@ -566,7 +566,7 @@ export const getProfileOperators = async (req, res) => {
       `;
       const sectorsResult = await pool.query(sectorsQuery, [institutionId]);
       accessibleSectorIds = sectorsResult.rows.map(r => r.sector_id);
-      
+
       console.log('📍 Accessible sectors:', accessibleSectorIds.length);
     }
 
@@ -580,109 +580,181 @@ export const getProfileOperators = async (req, res) => {
 
     // ========== STEP 2: Get operators with contracts ==========
     const operators = [];
-    
-    // 1. WASTE COLLECTORS (linia ~540)
-const collectorsQuery = `
-SELECT DISTINCT
-  i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
-  'WASTE_COLLECTOR' as operator_type,
-  json_agg(
-    json_build_object(
-      'contract_id', woc.id, 'contract_number', woc.contract_number,
-      'contract_date_start', woc.contract_date_start, 'contract_date_end', woc.contract_date_end,
-      'sector_id', woc.sector_id, 'sector_name', s.sector_name, 'sector_number', s.sector_number,
-      'is_active', woc.is_active, 'notes', woc.notes,
-      'has_file', (woc.contract_file_url IS NOT NULL)
-    )
-  ) as contracts
-FROM institutions i
-JOIN waste_operator_contracts woc ON i.id = woc.institution_id
-JOIN sectors s ON woc.sector_id = s.id
-WHERE i.type = 'WASTE_COLLECTOR' AND i.deleted_at IS NULL AND woc.deleted_at IS NULL
-  AND woc.sector_id = ANY($1)
-GROUP BY i.id
-`;
 
-// 2. SORTING OPERATORS (linia ~560)
-const sortingQuery = `
-SELECT DISTINCT
-  i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
-  'SORTING_OPERATOR' as operator_type,
-  json_agg(
-    json_build_object(
-      'contract_id', soc.id, 'contract_number', soc.contract_number,
-      'contract_date_start', soc.contract_date_start, 'contract_date_end', soc.contract_date_end,
-      'sector_id', soc.sector_id, 'sector_name', s.sector_name, 'sector_number', s.sector_number,
-      'tariff_per_ton', soc.tariff_per_ton, 'estimated_quantity_tons', soc.estimated_quantity_tons,
-      'currency', soc.currency, 'is_active', soc.is_active, 'notes', soc.notes,
-      'has_file', (soc.contract_file_url IS NOT NULL)
-    )
-  ) as contracts
-FROM institutions i
-JOIN sorting_operator_contracts soc ON i.id = soc.institution_id
-JOIN sectors s ON soc.sector_id = s.id
-WHERE i.type = 'SORTING_OPERATOR' AND i.deleted_at IS NULL AND soc.deleted_at IS NULL
-  AND soc.sector_id = ANY($1)
-GROUP BY i.id
-`;
+    // IMPORTANT:
+    // ❌ Nu folosim DISTINCT pentru ca avem json_agg (json nu are equality operator)
+    // ✅ Folosim GROUP BY i.id si COALESCE(json_agg(...) FILTER(...), '[]'::json)
 
-// 3. TMB OPERATORS (linia ~580)
-const tmbQuery = `
-SELECT DISTINCT
-  i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
-  'TMB_OPERATOR' as operator_type,
-  json_agg(
-    json_build_object(
-      'contract_id', tc.id, 'contract_number', tc.contract_number,
-      'contract_date_start', tc.contract_date_start, 'contract_date_end', tc.contract_date_end,
-      'sector_id', tc.sector_id, 'sector_name', s.sector_name, 'sector_number', s.sector_number,
-      'tariff_per_ton', tc.tariff_per_ton, 'estimated_quantity_tons', tc.estimated_quantity_tons,
-      'contract_value', tc.contract_value, 'currency', tc.currency,
-      'is_active', tc.is_active, 'notes', tc.notes,
-      'has_file', (tc.contract_file_url IS NOT NULL)
-    )
-  ) as contracts
-FROM institutions i
-JOIN institution_sectors ins ON i.id = ins.institution_id
-JOIN tmb_contracts tc ON ins.sector_id = tc.sector_id
-JOIN sectors s ON tc.sector_id = s.id
-WHERE i.type = 'TMB_OPERATOR' AND i.deleted_at IS NULL AND tc.deleted_at IS NULL
-  AND tc.sector_id = ANY($1)
-GROUP BY i.id
-`;
+    // 1) WASTE COLLECTORS
+    const collectorsQuery = `
+      SELECT
+        i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+        'WASTE_COLLECTOR' as operator_type,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'contract_id', woc.id,
+              'contract_number', woc.contract_number,
+              'contract_date_start', woc.contract_date_start,
+              'contract_date_end', woc.contract_date_end,
+              'sector_id', woc.sector_id,
+              'sector_name', s.sector_name,
+              'sector_number', s.sector_number,
+              'is_active', woc.is_active,
+              'notes', woc.notes,
+              'has_file', (woc.contract_file_url IS NOT NULL)
+            )
+            ORDER BY s.sector_number, woc.contract_date_start
+          ) FILTER (WHERE woc.id IS NOT NULL),
+          '[]'::json
+        ) as contracts
+      FROM institutions i
+      JOIN waste_operator_contracts woc ON i.id = woc.institution_id
+      JOIN sectors s ON woc.sector_id = s.id
+      WHERE i.type = 'WASTE_COLLECTOR'
+        AND i.deleted_at IS NULL
+        AND woc.deleted_at IS NULL
+        AND woc.sector_id = ANY($1)
+      GROUP BY i.id
+    `;
 
-// 4. DISPOSAL OPERATORS (linia ~600)
-const disposalQuery = `
-SELECT DISTINCT
-  i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
-  'DISPOSAL_OPERATOR' as operator_type,
-  json_agg(
-    json_build_object(
-      'contract_id', dc.id, 'contract_number', dc.contract_number,
-      'contract_date_start', dc.contract_date_start, 'contract_date_end', dc.contract_date_end,
-      'sector_id', dcs.sector_id, 'sector_name', s.sector_name, 'sector_number', s.sector_number,
-      'tariff_per_ton', dcs.tariff_per_ton, 'cec_tax_per_ton', dcs.cec_tax_per_ton,
-      'total_per_ton', dcs.total_per_ton, 'contracted_quantity_tons', dcs.contracted_quantity_tons,
-      'sector_value', dcs.sector_value, 'currency', dcs.currency,
-      'is_active', dc.is_active, 'notes', dc.notes,
-      'has_file', (dc.contract_file_url IS NOT NULL)
-    )
-  ) as contracts
-FROM institutions i
-JOIN disposal_contracts dc ON i.id = dc.institution_id
-JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id
-JOIN sectors s ON dcs.sector_id = s.id
-WHERE i.type = 'DISPOSAL_OPERATOR' AND i.deleted_at IS NULL AND dc.deleted_at IS NULL
-  AND dcs.sector_id = ANY($1)
-GROUP BY i.id
-`;
+    // 2) SORTING OPERATORS
+    const sortingQuery = `
+      SELECT
+        i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+        'SORTING_OPERATOR' as operator_type,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'contract_id', soc.id,
+              'contract_number', soc.contract_number,
+              'contract_date_start', soc.contract_date_start,
+              'contract_date_end', soc.contract_date_end,
+              'sector_id', soc.sector_id,
+              'sector_name', s.sector_name,
+              'sector_number', s.sector_number,
+              'tariff_per_ton', soc.tariff_per_ton,
+              'estimated_quantity_tons', soc.estimated_quantity_tons,
+              'currency', soc.currency,
+              'is_active', soc.is_active,
+              'notes', soc.notes,
+              'has_file', (soc.contract_file_url IS NOT NULL)
+            )
+            ORDER BY s.sector_number, soc.contract_date_start
+          ) FILTER (WHERE soc.id IS NOT NULL),
+          '[]'::json
+        ) as contracts
+      FROM institutions i
+      JOIN sorting_operator_contracts soc ON i.id = soc.institution_id
+      JOIN sectors s ON soc.sector_id = s.id
+      WHERE i.type = 'SORTING_OPERATOR'
+        AND i.deleted_at IS NULL
+        AND soc.deleted_at IS NULL
+        AND soc.sector_id = ANY($1)
+      GROUP BY i.id
+    `;
+
+    // 3) TMB OPERATORS
+    const tmbQuery = `
+      SELECT
+        i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+        'TMB_OPERATOR' as operator_type,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'contract_id', tc.id,
+              'contract_number', tc.contract_number,
+              'contract_date_start', tc.contract_date_start,
+              'contract_date_end', tc.contract_date_end,
+              'sector_id', tc.sector_id,
+              'sector_name', s.sector_name,
+              'sector_number', s.sector_number,
+              'tariff_per_ton', tc.tariff_per_ton,
+              'estimated_quantity_tons', tc.estimated_quantity_tons,
+              'contract_value', tc.contract_value,
+              'currency', tc.currency,
+              'is_active', tc.is_active,
+              'notes', tc.notes,
+              'has_file', (tc.contract_file_url IS NOT NULL)
+            )
+            ORDER BY s.sector_number, tc.contract_date_start
+          ) FILTER (WHERE tc.id IS NOT NULL),
+          '[]'::json
+        ) as contracts
+      FROM institutions i
+      -- IMPORTANT: daca legatura ta reala e pe institution_sectors, pastram logica ta:
+      JOIN institution_sectors ins ON i.id = ins.institution_id
+      JOIN tmb_contracts tc ON ins.sector_id = tc.sector_id
+      JOIN sectors s ON tc.sector_id = s.id
+      WHERE i.type = 'TMB_OPERATOR'
+        AND i.deleted_at IS NULL
+        AND tc.deleted_at IS NULL
+        AND tc.sector_id = ANY($1)
+      GROUP BY i.id
+    `;
+
+    // 4) DISPOSAL OPERATORS
+    const disposalQuery = `
+      SELECT
+        i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+        'DISPOSAL_OPERATOR' as operator_type,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'contract_id', dc.id,
+              'contract_number', dc.contract_number,
+              'contract_date_start', dc.contract_date_start,
+              'contract_date_end', dc.contract_date_end,
+              'sector_id', dcs.sector_id,
+              'sector_name', s.sector_name,
+              'sector_number', s.sector_number,
+              'tariff_per_ton', dcs.tariff_per_ton,
+              'cec_tax_per_ton', dcs.cec_tax_per_ton,
+              'total_per_ton', dcs.total_per_ton,
+              'contracted_quantity_tons', dcs.contracted_quantity_tons,
+              'sector_value', dcs.sector_value,
+              'currency', dcs.currency,
+              'is_active', dc.is_active,
+              'notes', dc.notes,
+              'has_file', (dc.contract_file_url IS NOT NULL)
+            )
+            ORDER BY s.sector_number, dc.contract_date_start
+          ) FILTER (WHERE dc.id IS NOT NULL),
+          '[]'::json
+        ) as contracts
+      FROM institutions i
+      JOIN disposal_contracts dc ON i.id = dc.institution_id
+      JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id
+      JOIN sectors s ON dcs.sector_id = s.id
+      WHERE i.type = 'DISPOSAL_OPERATOR'
+        AND i.deleted_at IS NULL
+        AND dc.deleted_at IS NULL
+        AND dcs.sector_id = ANY($1)
+      GROUP BY i.id
+    `;
+
+    // ✅ EXECUTĂ toate query-urile
+    const collectorsResult = await pool.query(collectorsQuery, [accessibleSectorIds]);
+    operators.push(...collectorsResult.rows);
+    console.log('🚛 Collectors:', collectorsResult.rows.length);
+
+    const sortingResult = await pool.query(sortingQuery, [accessibleSectorIds]);
+    operators.push(...sortingResult.rows);
+    console.log('🧺 Sorting:', sortingResult.rows.length);
+
+    const tmbResult = await pool.query(tmbQuery, [accessibleSectorIds]);
+    operators.push(...tmbResult.rows);
+    console.log('🏭 TMB:', tmbResult.rows.length);
+
     const disposalResult = await pool.query(disposalQuery, [accessibleSectorIds]);
     operators.push(...disposalResult.rows);
     console.log('🗑️ Disposal:', disposalResult.rows.length);
 
     // ========== STEP 3: Get amendments ==========
     for (const operator of operators) {
-      for (const contract of operator.contracts) {
+      const contracts = Array.isArray(operator.contracts) ? operator.contracts : [];
+
+      for (const contract of contracts) {
         let amendmentsTable = '';
         switch (operator.operator_type) {
           case 'WASTE_COLLECTOR': amendmentsTable = 'waste_operator_contract_amendments'; break;
@@ -690,42 +762,48 @@ GROUP BY i.id
           case 'TMB_OPERATOR': amendmentsTable = 'tmb_contract_amendments'; break;
           case 'DISPOSAL_OPERATOR': amendmentsTable = 'disposal_contract_amendments'; break;
         }
-        
-        if (amendmentsTable) {
-          const amendmentsResult = await pool.query(`
-            SELECT id, amendment_number, amendment_date, reason, notes,
-                   new_tariff_per_ton, new_estimated_quantity_tons, new_contract_date_end, changes_description,
-                   amendment_file_url IS NOT NULL as has_file
-            FROM ${amendmentsTable}
-            WHERE contract_id = $1 AND deleted_at IS NULL
-            ORDER BY amendment_date DESC
-          `, [contract.contract_id]);
-          
-          contract.amendments = amendmentsResult.rows;
-          contract.amendments_count = amendmentsResult.rows.length;
-        } else {
+
+        if (!amendmentsTable || !contract?.contract_id) {
           contract.amendments = [];
           contract.amendments_count = 0;
+          continue;
         }
+
+        const amendmentsResult = await pool.query(`
+          SELECT id, amendment_number, amendment_date, reason, notes,
+                 new_tariff_per_ton, new_estimated_quantity_tons, new_contract_date_end, changes_description,
+                 (amendment_file_url IS NOT NULL) as has_file
+          FROM ${amendmentsTable}
+          WHERE contract_id = $1 AND deleted_at IS NULL
+          ORDER BY amendment_date DESC
+        `, [contract.contract_id]);
+
+        contract.amendments = amendmentsResult.rows;
+        contract.amendments_count = amendmentsResult.rows.length;
       }
+
+      // reasigneaza inapoi (siguranta)
+      operator.contracts = contracts;
     }
 
     // ========== STEP 4: Calculate summary ==========
     operators.forEach(operator => {
-      const uniqueSectors = [...new Set(operator.contracts.map(c => c.sector_number))].sort();
+      const contracts = Array.isArray(operator.contracts) ? operator.contracts : [];
+      const uniqueSectors = [...new Set(contracts.map(c => c.sector_number).filter(Boolean))].sort((a, b) => a - b);
+
       operator.sectors_served = uniqueSectors.join(', ');
       operator.sectors_count = uniqueSectors.length;
-      operator.active_contracts_count = operator.contracts.filter(c => c.is_active).length;
-      operator.total_contracts_count = operator.contracts.length;
+      operator.active_contracts_count = contracts.filter(c => c.is_active).length;
+      operator.total_contracts_count = contracts.length;
       operator.status = operator.active_contracts_count > 0 ? 'Activ' : 'Inactiv';
     });
 
     console.log('✅ Total operators:', operators.length);
 
-    res.json({
+    return res.json({
       success: true,
       data: {
-        operators: operators,
+        operators,
         accessible_sectors: accessibleSectorIds,
         total_count: operators.length,
         by_type: {
@@ -739,7 +817,8 @@ GROUP BY i.id
 
   } catch (error) {
     console.error('❌ getProfileOperators error:', error);
-    res.status(500).json({
+
+    return res.status(500).json({
       success: false,
       message: 'Failed to fetch operators',
       error: error.message
