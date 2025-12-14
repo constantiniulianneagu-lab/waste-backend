@@ -789,6 +789,7 @@ const disposalQuery = `
 `, [contract.contract_id]);
 
 
+
         contract.amendments = amendmentsResult.rows;
         contract.amendments_count = amendmentsResult.rows.length;
       }
