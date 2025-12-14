@@ -611,8 +611,7 @@ export const getProfileOperators = async (req, res) => {
       FROM institutions i
       JOIN waste_operator_contracts woc ON i.id = woc.institution_id
       JOIN sectors s ON woc.sector_id = s.id
-      WHERE i.type = 'WASTE_COLLECTOR'
-        AND i.deleted_at IS NULL
+      WHERE i.deleted_at IS NULL
         AND woc.deleted_at IS NULL
         AND woc.sector_id = ANY($1)
       GROUP BY i.id
@@ -647,8 +646,7 @@ export const getProfileOperators = async (req, res) => {
       FROM institutions i
       JOIN sorting_operator_contracts soc ON i.id = soc.institution_id
       JOIN sectors s ON soc.sector_id = s.id
-      WHERE i.type = 'SORTING_OPERATOR'
-        AND i.deleted_at IS NULL
+      WHERE i.deleted_at IS NULL
         AND soc.deleted_at IS NULL
         AND soc.sector_id = ANY($1)
       GROUP BY i.id
@@ -726,8 +724,7 @@ export const getProfileOperators = async (req, res) => {
       JOIN disposal_contracts dc ON i.id = dc.institution_id
       JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id
       JOIN sectors s ON dcs.sector_id = s.id
-      WHERE i.type = 'DISPOSAL_OPERATOR'
-        AND i.deleted_at IS NULL
+      WHERE i.deleted_at IS NULL
         AND dc.deleted_at IS NULL
         AND dcs.sector_id = ANY($1)
       GROUP BY i.id
