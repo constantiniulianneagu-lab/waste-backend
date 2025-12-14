@@ -753,50 +753,111 @@ const disposalQuery = `
     operators.push(...disposalResult.rows);
     console.log('🗑️ Disposal:', disposalResult.rows.length);
 
-    // ========== STEP 3: Get amendments ==========
-    for (const operator of operators) {
-      const contracts = Array.isArray(operator.contracts) ? operator.contracts : [];
+    // ========== STEP 3: Get amendments (FIXED per-table schema) ==========
+for (const operator of operators) {
+  const contracts = Array.isArray(operator.contracts) ? operator.contracts : [];
 
-      for (const contract of contracts) {
-        let amendmentsTable = '';
-        switch (operator.operator_type) {
-          case 'WASTE_COLLECTOR': amendmentsTable = 'waste_operator_contract_amendments'; break;
-          case 'SORTING_OPERATOR': amendmentsTable = 'sorting_operator_contract_amendments'; break;
-          case 'TMB_OPERATOR': amendmentsTable = 'tmb_contract_amendments'; break;
-          case 'DISPOSAL_OPERATOR': amendmentsTable = 'disposal_contract_amendments'; break;
-        }
-
-        if (!amendmentsTable || !contract?.contract_id) {
-          contract.amendments = [];
-          contract.amendments_count = 0;
-          continue;
-        }
-
-        const amendmentsResult = await pool.query(`
-  SELECT 
-    id,
-    amendment_number,
-    amendment_date,
-    reason,
-    notes,
-    new_tariff_per_ton,
-    new_estimated_quantity_tons,
-    new_contract_date_end,
-    (amendment_file_url IS NOT NULL) as has_file
-  FROM ${amendmentsTable}
-  WHERE contract_id = $1 AND deleted_at IS NULL
-  ORDER BY amendment_date DESC
-`, [contract.contract_id]);
-
-
-
-        contract.amendments = amendmentsResult.rows;
-        contract.amendments_count = amendmentsResult.rows.length;
-      }
-
-      // reasigneaza inapoi (siguranta)
-      operator.contracts = contracts;
+  for (const contract of contracts) {
+    let amendmentsTable = '';
+    switch (operator.operator_type) {
+      case 'WASTE_COLLECTOR': amendmentsTable = 'waste_operator_contract_amendments'; break;
+      case 'SORTING_OPERATOR': amendmentsTable = 'sorting_operator_contract_amendments'; break;
+      case 'TMB_OPERATOR': amendmentsTable = 'tmb_contract_amendments'; break;
+      case 'DISPOSAL_OPERATOR': amendmentsTable = 'disposal_contract_amendments'; break;
+      default: amendmentsTable = ''; break;
     }
+
+    if (!amendmentsTable || !contract?.contract_id) {
+      contract.amendments = [];
+      contract.amendments_count = 0;
+      continue;
+    }
+
+    let amendmentsQuery = '';
+
+    // ✅ TMB amendments: NU are amendment_file_url, NU are changes_description
+    if (amendmentsTable === 'tmb_contract_amendments') {
+      amendmentsQuery = `
+        SELECT
+          id,
+          amendment_number,
+          amendment_date,
+          reason,
+          notes,
+          new_tariff_per_ton,
+          new_estimated_quantity_tons,
+          new_contract_date_end,
+          false as has_file
+        FROM tmb_contract_amendments
+        WHERE contract_id = $1 AND deleted_at IS NULL
+        ORDER BY amendment_date DESC
+      `;
+    }
+
+    // ✅ Sorting amendments: ARE amendment_file_url
+    else if (amendmentsTable === 'sorting_operator_contract_amendments') {
+      amendmentsQuery = `
+        SELECT
+          id,
+          amendment_number,
+          amendment_date,
+          reason,
+          notes,
+          new_tariff_per_ton,
+          new_estimated_quantity_tons,
+          new_contract_date_end,
+          (amendment_file_url IS NOT NULL) as has_file
+        FROM sorting_operator_contract_amendments
+        WHERE contract_id = $1 AND deleted_at IS NULL
+        ORDER BY amendment_date DESC
+      `;
+    }
+
+    // ✅ Disposal amendments: ARE amendment_file_url + changes_description
+    else if (amendmentsTable === 'disposal_contract_amendments') {
+      amendmentsQuery = `
+        SELECT
+          id,
+          amendment_number,
+          amendment_date,
+          reason,
+          notes,
+          new_contract_date_end,
+          changes_description,
+          (amendment_file_url IS NOT NULL) as has_file
+        FROM disposal_contract_amendments
+        WHERE contract_id = $1 AND deleted_at IS NULL
+        ORDER BY amendment_date DESC
+      `;
+    }
+
+    // ✅ Waste operator amendments: în fișierul tău nu apare structura tabelului completă,
+    // deci mergem safe (nu folosim amendment_file_url ca să nu crape).
+    else if (amendmentsTable === 'waste_operator_contract_amendments') {
+      amendmentsQuery = `
+        SELECT
+          id,
+          amendment_number,
+          amendment_date,
+          reason,
+          notes,
+          new_contract_date_end,
+          false as has_file
+        FROM waste_operator_contract_amendments
+        WHERE contract_id = $1 AND deleted_at IS NULL
+        ORDER BY amendment_date DESC
+      `;
+    }
+
+    const amendmentsResult = await pool.query(amendmentsQuery, [contract.contract_id]);
+
+    contract.amendments = amendmentsResult.rows;
+    contract.amendments_count = amendmentsResult.rows.length;
+  }
+
+  operator.contracts = contracts;
+}
+
 
     // ========== STEP 4: Calculate summary ==========
     operators.forEach(operator => {
