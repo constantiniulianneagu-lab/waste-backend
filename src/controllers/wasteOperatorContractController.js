@@ -18,7 +18,7 @@ export const getWasteOperatorContracts = async (req, res) => {
   try {
     const { institutionId } = req.params;
     
-    // 1. Verifică că instituția există și e WASTE_COLLECTOR
+    // 1. Verifică că instituția există și e WASTE_OPERATOR
     const institutionCheck = await pool.query(
       'SELECT id, type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
       [institutionId]
@@ -31,8 +31,8 @@ export const getWasteOperatorContracts = async (req, res) => {
       });
     }
     
-    if (institutionCheck.rows[0].type !== 'WASTE_COLLECTOR')
-    return res.json({
+    if (institutionCheck.rows[0].type !== 'WASTE_OPERATOR') {
+      return res.json({
         success: true,
         data: []
       });
