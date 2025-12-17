@@ -290,8 +290,8 @@ export const getInstitutionStats = async (req, res) => {
         COUNT(*) as total,
         COUNT(*) FILTER (WHERE is_active = true) as active,
         COUNT(*) FILTER (WHERE type = 'MUNICIPALITY') as municipalities,
-        COUNT(*) FILTER (WHERE type = 'WASTE_OPERATOR') as operators
-      FROM institutions
+        COUNT(*) FILTER (WHERE type = 'WASTE_COLLECTOR') as collectors
+        FROM institutions
       WHERE deleted_at IS NULL
     `);
 

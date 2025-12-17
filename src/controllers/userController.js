@@ -609,7 +609,7 @@ const collectorsQuery = `
       '[]'::json
     ) as contracts
   FROM institutions i
-  JOIN waste_operator_contracts woc ON i.id = woc.institution_id
+  JOIN waste_collector_contracts woc ON i.id = woc.institution_id
   JOIN sectors s ON woc.sector_id = s.id
   WHERE i.deleted_at IS NULL
     AND woc.deleted_at IS NULL
@@ -760,7 +760,7 @@ for (const operator of operators) {
   for (const contract of contracts) {
     let amendmentsTable = '';
     switch (operator.operator_type) {
-      case 'WASTE_COLLECTOR': amendmentsTable = 'waste_operator_contract_amendments'; break;
+      case 'WASTE_COLLECTOR': amendmentsTable = 'waste_collector_contract_amendments'; break;
       case 'SORTING_OPERATOR': amendmentsTable = 'sorting_operator_contract_amendments'; break;
       case 'TMB_OPERATOR': amendmentsTable = 'tmb_contract_amendments'; break;
       case 'DISPOSAL_OPERATOR': amendmentsTable = 'disposal_contract_amendments'; break;
@@ -833,7 +833,7 @@ for (const operator of operators) {
 
     // ✅ Waste operator amendments: în fișierul tău nu apare structura tabelului completă,
     // deci mergem safe (nu folosim amendment_file_url ca să nu crape).
-    else if (amendmentsTable === 'waste_operator_contract_amendments') {
+    else if (amendmentsTable === 'waste_collector_contract_amendments') {
       amendmentsQuery = `
         SELECT
           id,
@@ -843,7 +843,7 @@ for (const operator of operators) {
           notes,
           new_contract_date_end,
           false as has_file
-        FROM waste_operator_contract_amendments
+        FROM waste_collector_contract_amendments
         WHERE contract_id = $1 AND deleted_at IS NULL
         ORDER BY amendment_date DESC
       `;

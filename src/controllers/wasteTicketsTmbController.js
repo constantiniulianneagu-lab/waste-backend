@@ -291,7 +291,7 @@ export const createTmbTicket = async (req, res) => {
       });
     }
 
-    // ========== VALIDATE SUPPLIER = WASTE_OPERATOR ==========
+    // ========== VALIDATE SUPPLIER = WASTE_COLLECTOR ==========
     const supplierResult = await pool.query(
       'SELECT id, type, name FROM institutions WHERE id = $1 AND deleted_at IS NULL',
       [supplierId]
@@ -306,10 +306,10 @@ export const createTmbTicket = async (req, res) => {
 
     const supplier = supplierResult.rows[0];
 
-    if (supplier.type !== 'WASTE_OPERATOR') {
+    if (supplier.type !== 'WASTE_COLLECTOR') {
       return res.status(400).json({
         success: false,
-        message: `Furnizorul trebuie să fie de tip WASTE_OPERATOR. Tip actual: ${supplier.type}`
+        message: `Furnizorul trebuie să fie de tip WASTE_COLLECTOR. Tip actual: ${supplier.type}`
       });
     }
 
@@ -515,7 +515,7 @@ export const updateTmbTicket = async (req, res) => {
       }
     }
 
-    // Validate supplier = WASTE_OPERATOR (if changed)
+    // Validate supplier = WASTE_COLLECTOR (if changed)
     if (supplierId) {
       const supplierResult = await pool.query(
         'SELECT id, type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
@@ -529,10 +529,10 @@ export const updateTmbTicket = async (req, res) => {
         });
       }
 
-      if (supplierResult.rows[0].type !== 'WASTE_OPERATOR') {
+      if (supplierResult.rows[0].type !== 'WASTE_COLLECTOR') {
         return res.status(400).json({
           success: false,
-          message: 'Furnizorul trebuie să fie de tip WASTE_OPERATOR'
+          message: 'Furnizorul trebuie să fie de tip WASTE_COLLECTOR'
         });
       }
     }

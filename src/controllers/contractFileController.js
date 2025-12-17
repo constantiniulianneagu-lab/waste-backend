@@ -24,7 +24,7 @@ const CONTRACT_TYPE_MAPPINGS = {
     bucket: 'tmb-contracts'
   },
   'waste': {
-    table: 'waste_operator_contracts',
+    table: 'waste_collector_contracts',
     bucket: 'waste-operator-contracts'
   },
   'sorting': {

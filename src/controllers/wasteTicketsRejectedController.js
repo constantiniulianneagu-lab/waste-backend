@@ -181,7 +181,7 @@ export const createRejectedTicket = async (req, res) => {
       });
     }
 
-    // Validate supplier = WASTE_OPERATOR
+    // Validate supplier = WASTE_COLLECTOR
     const supplierResult = await pool.query(
       'SELECT type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
       [supplierId]
@@ -194,10 +194,10 @@ export const createRejectedTicket = async (req, res) => {
       });
     }
 
-    if (supplierResult.rows[0].type !== 'WASTE_OPERATOR') {
+    if (supplierResult.rows[0].type !== 'WASTE_COLLECTOR') {
       return res.status(400).json({
         success: false,
-        message: 'Furnizorul trebuie să fie de tip WASTE_OPERATOR'
+        message: 'Furnizorul trebuie să fie de tip WASTE_COLLECTOR'
       });
     }
 

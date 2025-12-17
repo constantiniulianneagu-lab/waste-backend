@@ -18,7 +18,7 @@ export const getWasteOperatorContracts = async (req, res) => {
   try {
     const { institutionId } = req.params;
     
-    // 1. Verifică că instituția există și e WASTE_OPERATOR
+    // 1. Verifică că instituția există și e WASTE_COLLECTOR
     const institutionCheck = await pool.query(
       'SELECT id, type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
       [institutionId]
@@ -31,8 +31,8 @@ export const getWasteOperatorContracts = async (req, res) => {
       });
     }
     
-    if (institutionCheck.rows[0].type !== 'WASTE_OPERATOR') {
-      return res.json({
+    if (institutionCheck.rows[0].type !== 'WASTE_COLLECTOR')
+    return res.json({
         success: true,
         data: []
       });
@@ -51,7 +51,7 @@ export const getWasteOperatorContracts = async (req, res) => {
           WHEN c.contract_date_start > CURRENT_DATE THEN false
           ELSE true
         END as is_currently_active
-       FROM waste_operator_contracts c
+       FROM waste_collector_contracts c
        LEFT JOIN sectors s ON s.id = c.sector_id
        WHERE c.institution_id = $1
        AND c.deleted_at IS NULL
@@ -73,7 +73,7 @@ export const getWasteOperatorContracts = async (req, res) => {
           wc.code as waste_code,
           wc.description as waste_description,
           wc.category as waste_category
-         FROM waste_operator_contract_codes wcc
+         FROM waste_collector_contract_codes wcc
          JOIN waste_codes wc ON wc.id = wcc.waste_code_id
          WHERE wcc.contract_id IN (${placeholders})
          AND wcc.deleted_at IS NULL
@@ -89,7 +89,7 @@ export const getWasteOperatorContracts = async (req, res) => {
       const placeholders = contractIds.map((_, i) => `$${i + 1}`).join(',');
       const amendmentsResult = await pool.query(
         `SELECT *
-         FROM waste_operator_contract_amendments
+         FROM waste_collector_contract_amendments
          WHERE contract_id IN (${placeholders})
          AND deleted_at IS NULL
          ORDER BY amendment_date DESC`,
@@ -151,7 +151,7 @@ export const getWasteOperatorContractById = async (req, res) => {
         c.*,
         s.sector_name,
         s.sector_number
-       FROM waste_operator_contracts c
+       FROM waste_collector_contracts c
        LEFT JOIN sectors s ON s.id = c.sector_id
        WHERE c.id = $1 AND c.deleted_at IS NULL`,
       [contractId]
@@ -171,7 +171,7 @@ export const getWasteOperatorContractById = async (req, res) => {
         wc.code as waste_code,
         wc.description as waste_description,
         wc.category as waste_category
-       FROM waste_operator_contract_codes wcc
+       FROM waste_collector_contract_codes wcc
        JOIN waste_codes wc ON wc.id = wcc.waste_code_id
        WHERE wcc.contract_id = $1
        AND wcc.deleted_at IS NULL
@@ -182,7 +182,7 @@ export const getWasteOperatorContractById = async (req, res) => {
     // Get amendments
     const amendmentsResult = await pool.query(
       `SELECT *
-       FROM waste_operator_contract_amendments
+       FROM waste_collector_contract_amendments
        WHERE contract_id = $1
        AND deleted_at IS NULL
        ORDER BY amendment_date DESC`,
@@ -239,7 +239,7 @@ export const createWasteOperatorContract = async (req, res) => {
     
     // Check duplicate contract number
     const duplicateCheck = await client.query(
-      'SELECT id FROM waste_operator_contracts WHERE institution_id = $1 AND contract_number = $2 AND deleted_at IS NULL',
+      'SELECT id FROM waste_collector_contracts WHERE institution_id = $1 AND contract_number = $2 AND deleted_at IS NULL',
       [institution_id, contract_number]
     );
     
@@ -253,7 +253,7 @@ export const createWasteOperatorContract = async (req, res) => {
     
     // Insert contract
     const contractResult = await client.query(
-      `INSERT INTO waste_operator_contracts (
+      `INSERT INTO waste_collector_contracts (
         institution_id, contract_number, contract_date_start, contract_date_end,
         sector_id, notes, is_active, created_by
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -277,7 +277,7 @@ export const createWasteOperatorContract = async (req, res) => {
     for (const wc of waste_codes) {
       if (wc.waste_code_id && wc.tariff && wc.unit) {
         const wcResult = await client.query(
-          `INSERT INTO waste_operator_contract_codes (
+          `INSERT INTO waste_collector_contract_codes (
             contract_id, waste_code_id, tariff, unit, estimated_quantity
           ) VALUES ($1, $2, $3, $4, $5)
           RETURNING *`,
@@ -340,7 +340,7 @@ export const updateWasteOperatorContract = async (req, res) => {
     
     // Check if contract exists
     const existingContract = await client.query(
-      'SELECT id FROM waste_operator_contracts WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id FROM waste_collector_contracts WHERE id = $1 AND deleted_at IS NULL',
       [contractId]
     );
     
@@ -392,7 +392,7 @@ export const updateWasteOperatorContract = async (req, res) => {
     params.push(contractId);
     
     const updateQuery = `
-      UPDATE waste_operator_contracts
+      UPDATE waste_collector_contracts
       SET ${updates.join(', ')}
       WHERE id = $${paramCount}
       RETURNING *
@@ -404,7 +404,7 @@ export const updateWasteOperatorContract = async (req, res) => {
     if (waste_codes.length > 0) {
       // Soft delete existing
       await client.query(
-        'UPDATE waste_operator_contract_codes SET deleted_at = NOW() WHERE contract_id = $1',
+        'UPDATE waste_collector_contract_codes SET deleted_at = NOW() WHERE contract_id = $1',
         [contractId]
       );
       
@@ -412,7 +412,7 @@ export const updateWasteOperatorContract = async (req, res) => {
       for (const wc of waste_codes) {
         if (wc.waste_code_id && wc.tariff && wc.unit) {
           await client.query(
-            `INSERT INTO waste_operator_contract_codes (
+            `INSERT INTO waste_collector_contract_codes (
               contract_id, waste_code_id, tariff, unit, estimated_quantity
             ) VALUES ($1, $2, $3, $4, $5)`,
             [
@@ -456,7 +456,7 @@ export const deleteWasteOperatorContract = async (req, res) => {
     const { contractId } = req.params;
     
     const result = await pool.query(
-      'UPDATE waste_operator_contracts SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id',
+      'UPDATE waste_collector_contracts SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id',
       [contractId]
     );
     
@@ -507,7 +507,7 @@ export const createWasteOperatorAmendment = async (req, res) => {
     
     // Check duplicate
     const duplicateCheck = await pool.query(
-      'SELECT id FROM waste_operator_contract_amendments WHERE contract_id = $1 AND amendment_number = $2 AND deleted_at IS NULL',
+      'SELECT id FROM waste_collector_contract_amendments WHERE contract_id = $1 AND amendment_number = $2 AND deleted_at IS NULL',
       [contractId, amendment_number]
     );
     
@@ -519,7 +519,7 @@ export const createWasteOperatorAmendment = async (req, res) => {
     }
     
     const result = await pool.query(
-      `INSERT INTO waste_operator_contract_amendments (
+      `INSERT INTO waste_collector_contract_amendments (
         contract_id, amendment_number, amendment_date, new_contract_date_end,
         changes_description, reason, notes, created_by
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -560,7 +560,7 @@ export const deleteWasteOperatorAmendment = async (req, res) => {
     const { amendmentId } = req.params;
     
     const result = await pool.query(
-      'UPDATE waste_operator_contract_amendments SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id',
+      'UPDATE waste_collector_contract_amendments SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id',
       [amendmentId]
     );
     
