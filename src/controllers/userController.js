@@ -6,44 +6,79 @@ import pool from '../config/database.js';
 // USER MANAGEMENT (PLATFORM_ADMIN)
 // ============================================================================
 
-// GET ALL USERS (with pagination & filters)
+// GET ALL USERS (with pagination & filters + institutions)
 export const getAllUsers = async (req, res) => {
   try {
-    const { page = 1, limit = 10, role, search } = req.query;
+    const { page = 1, limit = 10, role, search, institutionId } = req.query;
     const offset = (page - 1) * limit;
 
     let query = `
-      SELECT id, email, first_name, last_name, role, is_active, 
-             created_at, updated_at
-      FROM users 
-      WHERE deleted_at IS NULL
+      SELECT 
+        u.id, 
+        u.email, 
+        u.first_name, 
+        u.last_name, 
+        u.role, 
+        u.is_active, 
+        u.created_at, 
+        u.updated_at,
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id', i.id,
+            'name', i.name,
+            'type', i.type
+          )
+        ) FILTER (WHERE i.id IS NOT NULL) as institutions
+      FROM users u
+      LEFT JOIN user_institutions ui ON u.id = ui.user_id
+      LEFT JOIN institutions i ON ui.institution_id = i.id AND i.deleted_at IS NULL
+      WHERE u.deleted_at IS NULL
     `;
     const params = [];
     let paramCount = 1;
 
     // Filter by role
     if (role) {
-      query += ` AND role = $${paramCount}`;
+      query += ` AND u.role = $${paramCount}`;
       params.push(role);
       paramCount++;
     }
 
     // Search by email or name
     if (search) {
-      query += ` AND (email ILIKE $${paramCount} OR first_name ILIKE $${paramCount} OR last_name ILIKE $${paramCount})`;
+      query += ` AND (u.email ILIKE $${paramCount} OR u.first_name ILIKE $${paramCount} OR u.last_name ILIKE $${paramCount})`;
       params.push(`%${search}%`);
       paramCount++;
     }
 
-    // Get total count
-    const countResult = await pool.query(
-      query.replace('SELECT id, email, first_name, last_name, role, is_active, created_at, updated_at', 'SELECT COUNT(*)'),
-      params
-    );
+    // Filter by institution
+    if (institutionId) {
+      query += ` AND EXISTS (
+        SELECT 1 FROM user_institutions ui2 
+        WHERE ui2.user_id = u.id AND ui2.institution_id = $${paramCount}
+      )`;
+      params.push(institutionId);
+      paramCount++;
+    }
+
+    // Add GROUP BY
+    query += ` GROUP BY u.id`;
+
+    // Get total count (before pagination)
+    const countQuery = `
+      SELECT COUNT(DISTINCT u.id) as count
+      FROM users u
+      LEFT JOIN user_institutions ui ON u.id = ui.user_id
+      WHERE u.deleted_at IS NULL
+      ${role ? `AND u.role = $1` : ''}
+      ${search ? `AND (u.email ILIKE $${role ? 2 : 1} OR u.first_name ILIKE $${role ? 2 : 1} OR u.last_name ILIKE $${role ? 2 : 1})` : ''}
+      ${institutionId ? `AND EXISTS (SELECT 1 FROM user_institutions ui2 WHERE ui2.user_id = u.id AND ui2.institution_id = $${paramCount - 1})` : ''}
+    `;
+    const countResult = await pool.query(countQuery, params.slice(0, paramCount - 1));
     const total = parseInt(countResult.rows[0].count) || 0;
     
     // Add pagination
-    query += ` ORDER BY created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    query += ` ORDER BY u.created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     params.push(limit, offset);
 
     const result = await pool.query(query, params);
@@ -104,8 +139,10 @@ export const getUserById = async (req, res) => {
 
 // CREATE USER
 export const createUser = async (req, res) => {
+  const client = await pool.connect();
+  
   try {
-    const { email, password, firstName, lastName, role } = req.body;
+    const { email, password, firstName, lastName, role, isActive = true, institutionIds = [] } = req.body;
 
     // Validare
     if (!email || !password || !firstName || !lastName || !role) {
@@ -116,7 +153,7 @@ export const createUser = async (req, res) => {
     }
 
     // Verifică dacă email-ul există
-    const existingUser = await pool.query(
+    const existingUser = await client.query(
       'SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL',
       [email.toLowerCase()]
     );
@@ -131,36 +168,78 @@ export const createUser = async (req, res) => {
     // Hash password
     const passwordHash = await bcrypt.hash(password, 10);
 
+    await client.query('BEGIN');
+
     // Inserează user
-    const result = await pool.query(
+    const result = await client.query(
       `INSERT INTO users (email, password_hash, first_name, last_name, role, is_active)
-       VALUES ($1, $2, $3, $4, $5, true)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, email, first_name, last_name, role, is_active, created_at`,
-      [email.toLowerCase(), passwordHash, firstName, lastName, role]
+      [email.toLowerCase(), passwordHash, firstName, lastName, role, isActive]
+    );
+
+    const userId = result.rows[0].id;
+
+    // Asociază cu instituțiile
+    if (institutionIds && institutionIds.length > 0) {
+      for (const instId of institutionIds) {
+        await client.query(
+          `INSERT INTO user_institutions (user_id, institution_id)
+           VALUES ($1, $2)
+           ON CONFLICT (user_id, institution_id) DO NOTHING`,
+          [userId, instId]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+
+    // Get user with institutions
+    const userWithInstitutions = await client.query(
+      `SELECT 
+        u.*,
+        json_agg(
+          jsonb_build_object(
+            'id', i.id,
+            'name', i.name,
+            'type', i.type
+          )
+        ) FILTER (WHERE i.id IS NOT NULL) as institutions
+      FROM users u
+      LEFT JOIN user_institutions ui ON u.id = ui.user_id
+      LEFT JOIN institutions i ON ui.institution_id = i.id
+      WHERE u.id = $1
+      GROUP BY u.id`,
+      [userId]
     );
 
     res.status(201).json({
       success: true,
       message: 'Utilizator creat cu succes',
-      data: result.rows[0]
+      data: userWithInstitutions.rows[0]
     });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Create user error:', error);
     res.status(500).json({
       success: false,
       message: 'Eroare la crearea utilizatorului'
     });
+  } finally {
+    client.release();
   }
 };
 
 // UPDATE USER
 export const updateUser = async (req, res) => {
+  const client = await pool.connect();
+  
   try {
     const { id } = req.params;
-    const { email, firstName, lastName, role, isActive, password } = req.body;
+    const { email, firstName, lastName, role, isActive, password, institutionIds } = req.body;
 
     // Verifică dacă user-ul există
-    const existingUser = await pool.query(
+    const existingUser = await client.query(
       'SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL',
       [id]
     );
@@ -174,7 +253,7 @@ export const updateUser = async (req, res) => {
 
     // Verifică dacă noul email e deja folosit de alt user
     if (email) {
-      const emailCheck = await pool.query(
+      const emailCheck = await client.query(
         'SELECT id FROM users WHERE email = $1 AND id != $2 AND deleted_at IS NULL',
         [email.toLowerCase(), id]
       );
@@ -187,7 +266,9 @@ export const updateUser = async (req, res) => {
       }
     }
 
-    // Construiește query dinamic
+    await client.query('BEGIN');
+
+    // Construiește query dinamic pentru user update
     const updates = [];
     const params = [];
     let paramCount = 1;
@@ -234,19 +315,64 @@ export const updateUser = async (req, res) => {
       RETURNING id, email, first_name, last_name, role, is_active, updated_at
     `;
 
-    const result = await pool.query(query, params);
+    await client.query(query, params);
+
+    // Update institution associations dacă sunt furnizate
+    if (institutionIds !== undefined) {
+      // Delete existing associations
+      await client.query(
+        'DELETE FROM user_institutions WHERE user_id = $1',
+        [id]
+      );
+
+      // Insert new associations
+      if (institutionIds && institutionIds.length > 0) {
+        for (const instId of institutionIds) {
+          await client.query(
+            `INSERT INTO user_institutions (user_id, institution_id)
+             VALUES ($1, $2)
+             ON CONFLICT (user_id, institution_id) DO NOTHING`,
+            [id, instId]
+          );
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+
+    // Get updated user with institutions
+    const userWithInstitutions = await client.query(
+      `SELECT 
+        u.*,
+        json_agg(
+          jsonb_build_object(
+            'id', i.id,
+            'name', i.name,
+            'type', i.type
+          )
+        ) FILTER (WHERE i.id IS NOT NULL) as institutions
+      FROM users u
+      LEFT JOIN user_institutions ui ON u.id = ui.user_id
+      LEFT JOIN institutions i ON ui.institution_id = i.id AND i.deleted_at IS NULL
+      WHERE u.id = $1
+      GROUP BY u.id`,
+      [id]
+    );
 
     res.json({
       success: true,
       message: 'Utilizator actualizat cu succes',
-      data: result.rows[0]
+      data: userWithInstitutions.rows[0]
     });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Update user error:', error);
     res.status(500).json({
       success: false,
       message: 'Eroare la actualizarea utilizatorului'
     });
+  } finally {
+    client.release();
   }
 };
 
