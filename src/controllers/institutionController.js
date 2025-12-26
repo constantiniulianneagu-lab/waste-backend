@@ -1,66 +1,91 @@
 // src/controllers/institutionController.js
 import pool from '../config/database.js';
 
-// GET ALL INSTITUTIONS
+// GET ALL INSTITUTIONS (with sectors)
 export const getAllInstitutions = async (req, res) => {
   try {
     const { page = 1, limit = 10, type, sector, search } = req.query;
     const offset = (page - 1) * limit;
 
-    let query = `
-      SELECT id, name, short_name, type, sector, contact_email, contact_phone,
-             address, website, fiscal_code, registration_no, is_active, 
-             created_at, updated_at
-      FROM institutions 
-      WHERE deleted_at IS NULL
-    `;
+    let whereClause = 'WHERE i.deleted_at IS NULL';
     const params = [];
     let paramCount = 1;
 
     // Filter by type
     if (type) {
-      query += ` AND type = $${paramCount}`;
+      whereClause += ` AND i.type = $${paramCount}`;
       params.push(type);
       paramCount++;
     }
 
     // Filter by sector
     if (sector) {
-      query += ` AND sector = $${paramCount}`;
+      whereClause += ` AND i.sector = $${paramCount}`;
       params.push(sector);
       paramCount++;
     }
 
     // Search by name or email
     if (search) {
-      query += ` AND (name ILIKE $${paramCount} OR contact_email ILIKE $${paramCount})`;
+      whereClause += ` AND (i.name ILIKE $${paramCount} OR i.contact_email ILIKE $${paramCount})`;
       params.push(`%${search}%`);
       paramCount++;
     }
 
+    // Main query with sectors joined
+    let query = `
+      SELECT 
+        i.id, 
+        i.name, 
+        i.short_name, 
+        i.type, 
+        i.sector, 
+        i.contact_email, 
+        i.contact_phone,
+        i.address, 
+        i.website, 
+        i.fiscal_code, 
+        i.registration_no, 
+        i.is_active, 
+        i.created_at, 
+        i.updated_at,
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id', s.id,
+            'sector_number', s.sector_number,
+            'sector_name', s.sector_name
+          )
+        ) FILTER (WHERE s.id IS NOT NULL) as sectors
+      FROM institutions i
+      LEFT JOIN institution_sectors ins ON i.id = ins.institution_id
+      LEFT JOIN sectors s ON ins.sector_id = s.id
+      ${whereClause}
+      GROUP BY i.id
+    `;
+
     // Get total count
-    const countResult = await pool.query(
-      query.replace('SELECT id, name, short_name, type, sector, contact_email, contact_phone, address, website, fiscal_code, registration_no, is_active, created_at, updated_at', 'SELECT COUNT(*)'),
-      params
-    );
+    const countQuery = `
+      SELECT COUNT(DISTINCT i.id) as count
+      FROM institutions i
+      ${whereClause}
+    `;
+    const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].count);
 
     // Add pagination
-    query += ` ORDER BY created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    query += ` ORDER BY i.created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     params.push(limit, offset);
 
     const result = await pool.query(query, params);
 
     res.json({
       success: true,
-      data: {
-        institutions: result.rows,
-        pagination: {
-          total,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(total / limit)
-        }
+      data: result.rows,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
       }
     });
   } catch (error) {
@@ -291,7 +316,7 @@ export const getInstitutionStats = async (req, res) => {
         COUNT(*) FILTER (WHERE is_active = true) as active,
         COUNT(*) FILTER (WHERE type = 'MUNICIPALITY') as municipalities,
         COUNT(*) FILTER (WHERE type = 'WASTE_COLLECTOR') as collectors
-        FROM institutions
+      FROM institutions
       WHERE deleted_at IS NULL
     `);
 
