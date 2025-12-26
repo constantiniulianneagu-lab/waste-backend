@@ -16,8 +16,8 @@ import reportsRoutes from './routes/reports/index.js';
 import reportTmbRoutes from './routes/reports/tmb.js';
 import tmbRoutes from './routes/tmb/tmb.js';
 import contractFilesRoutes from './routes/contractFiles.js';
-import wasteCodesRoutes from './routes/wasteCodes.js'; // 🆕 NOU
-import sectorsRoutes from './routes/sectors.js'; // 🆕 NOU
+import wasteCodesRoutes from './routes/wasteCodes.js';
+import sectorsRoutes from './routes/sectors.js'; // ✅ ACTUALIZAT
 
 // Dashboard Routes
 import dashboardLandfillRoutes from './routes/dashboard/landfill.js';
@@ -69,8 +69,8 @@ app.get('/', (req, res) => {
       tmb: '/api/tmb/*',
       reports: '/api/reports/*',
       contracts: '/api/contracts/*',
-      wasteCodes: '/api/waste-codes/*', // 🆕 NOU
-      sectors: '/api/sectors/*' // 🆕 NOU
+      wasteCodes: '/api/waste-codes/*',
+      sectors: '/api/sectors/*' // ✅ ACTUALIZAT
     }
   });
 });
@@ -115,11 +115,11 @@ app.use('/api/reports/tmb', reportTmbRoutes);
 console.log('📍 Mounting contract files routes at /api/contracts');
 app.use('/api/contracts', contractFilesRoutes);
 
-console.log('📍 Mounting waste codes routes at /api/waste-codes'); // 🆕 NOU
-app.use('/api/waste-codes', wasteCodesRoutes); // 🆕 NOU
+console.log('📍 Mounting waste codes routes at /api/waste-codes');
+app.use('/api/waste-codes', wasteCodesRoutes);
 
-console.log('📍 Mounting sectors routes at /api/sectors'); // 🆕 NOU
-app.use('/api/sectors', sectorsRoutes); // 🆕 NOU
+console.log('📍 Mounting sectors routes at /api/sectors'); // ✅ ACTUALIZAT
+app.use('/api/sectors', sectorsRoutes); // ✅ ACTUALIZAT
 
 // Dashboard Routes
 console.log('📍 Mounting dashboard landfill routes at /api/dashboard/landfill');

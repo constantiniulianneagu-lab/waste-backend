@@ -8,7 +8,7 @@
  */
 
 import express from 'express';
-import { getAllSectors, getSectorById } from '../controllers/sectorsController.js';
+import { getAllSectors, getSectorById } from '../controllers/sectorController.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
