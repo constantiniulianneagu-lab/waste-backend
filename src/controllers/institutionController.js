@@ -4,90 +4,88 @@ import pool from '../config/database.js';
 // GET ALL INSTITUTIONS (with sectors)
 export const getAllInstitutions = async (req, res) => {
   try {
-    const { page = 1, limit = 10, type, sector, search } = req.query;
-    const offset = (page - 1) * limit;
+    const { limit = 1000, type, search } = req.query;
 
-    let whereClause = 'WHERE i.deleted_at IS NULL';
+    let whereConditions = ['i.deleted_at IS NULL'];
     const params = [];
     let paramCount = 1;
 
     // Filter by type
     if (type) {
-      whereClause += ` AND i.type = $${paramCount}`;
+      whereConditions.push(`i.type = $${paramCount}`);
       params.push(type);
       paramCount++;
     }
 
-    // Filter by sector
-    if (sector) {
-      whereClause += ` AND i.sector = $${paramCount}`;
-      params.push(sector);
-      paramCount++;
-    }
-
-    // Search by name or email
+    // Search
     if (search) {
-      whereClause += ` AND (i.name ILIKE $${paramCount} OR i.contact_email ILIKE $${paramCount})`;
+      whereConditions.push(`(i.name ILIKE $${paramCount} OR i.short_name ILIKE $${paramCount})`);
       params.push(`%${search}%`);
       paramCount++;
     }
 
-    // Main query with sectors joined
-    let query = `
+    const whereClause = whereConditions.join(' AND ');
+
+    const query = `
       SELECT 
-        i.id, 
-        i.name, 
-        i.short_name, 
-        i.type, 
-        i.sector, 
-        i.contact_email, 
+        i.id,
+        i.name,
+        i.short_name,
+        i.type,
+        i.contact_email,
         i.contact_phone,
-        i.address, 
-        i.website, 
-        i.fiscal_code, 
-        i.registration_no, 
-        i.is_active, 
-        i.created_at, 
+        i.address,
+        i.website,
+        i.fiscal_code,
+        i.registration_no,
+        i.is_active,
+        i.created_at,
         i.updated_at,
-        json_agg(
-          DISTINCT jsonb_build_object(
-            'id', s.id,
-            'sector_number', s.sector_number,
-            'sector_name', s.sector_name
+        
+        -- Sectoare asociate ca string (pentru compatibility)
+        (
+          SELECT string_agg(s.sector_number::text, ',' ORDER BY s.sector_number)
+          FROM institution_sectors ins
+          JOIN sectors s ON ins.sector_id = s.id
+          WHERE ins.institution_id = i.id
+            AND s.is_active = true
+            AND (s.deleted_at IS NULL OR s.deleted_at > NOW())
+        ) as sector,
+        
+        -- Sectoare ca array pentru frontend
+        (
+          SELECT json_agg(
+            json_build_object(
+              'id', s.id,
+              'sector_number', s.sector_number,
+              'sector_name', s.sector_name
+            ) ORDER BY s.sector_number
           )
-        ) FILTER (WHERE s.id IS NOT NULL) as sectors
+          FROM institution_sectors ins
+          JOIN sectors s ON ins.sector_id = s.id
+          WHERE ins.institution_id = i.id
+            AND s.is_active = true
+            AND (s.deleted_at IS NULL OR s.deleted_at > NOW())
+        ) as sectors
+        
       FROM institutions i
-      LEFT JOIN institution_sectors ins ON i.id = ins.institution_id
-      LEFT JOIN sectors s ON ins.sector_id = s.id
-      ${whereClause}
-      GROUP BY i.id
+      WHERE ${whereClause}
+      ORDER BY i.name
+      LIMIT $${paramCount}
     `;
 
-    // Get total count
-    const countQuery = `
-      SELECT COUNT(DISTINCT i.id) as count
-      FROM institutions i
-      ${whereClause}
-    `;
-    const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].count);
-
-    // Add pagination
-    query += ` ORDER BY i.created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
-    params.push(limit, offset);
+    params.push(limit);
 
     const result = await pool.query(query, params);
 
     res.json({
       success: true,
-      data: result.rows,
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / limit)
+      data: {
+        institutions: result.rows,
+        total: result.rows.length
       }
     });
+
   } catch (error) {
     console.error('Get institutions error:', error);
     res.status(500).json({
