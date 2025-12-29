@@ -264,9 +264,9 @@ export const createUser = async (req, res) => {
   }
 };
 
-// UPDATE USER
-// ⚠️ BACKEND FIX - Înlocuiește funcția updateUser în userController.js ⚠️
+// ⚠️ FIX BACKEND - Înlocuiește funcția updateUser în userController.js ⚠️
 
+// UPDATE USER
 export const updateUser = async (req, res) => {
   const client = await pool.connect();
   
@@ -274,9 +274,7 @@ export const updateUser = async (req, res) => {
     const { id } = req.params;
     const { email, firstName, lastName, role, isActive, password, institutionIds, phone, position, department } = req.body;
 
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('🔧 UPDATE USER - Backend');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('User ID:', id);
     console.log('Request body:', JSON.stringify(req.body, null, 2));
 
@@ -326,56 +324,47 @@ export const updateUser = async (req, res) => {
       updates.push(`email = $${paramCount}`);
       params.push(email.toLowerCase());
       paramCount++;
-      console.log(`  ➕ email = ${email.toLowerCase()}`);
     }
     if (firstName) {
       updates.push(`first_name = $${paramCount}`);
       params.push(firstName);
       paramCount++;
-      console.log(`  ➕ first_name = ${firstName}`);
     }
     if (lastName) {
       updates.push(`last_name = $${paramCount}`);
       params.push(lastName);
       paramCount++;
-      console.log(`  ➕ last_name = ${lastName}`);
     }
     if (phone !== undefined) {
       updates.push(`phone = $${paramCount}`);
       params.push(phone);
       paramCount++;
-      console.log(`  ➕ phone = ${phone}`);
     }
     if (position !== undefined) {
       updates.push(`position = $${paramCount}`);
       params.push(position);
       paramCount++;
-      console.log(`  ➕ position = ${position}`);
     }
     if (department !== undefined) {
       updates.push(`department = $${paramCount}`);
       params.push(department);
       paramCount++;
-      console.log(`  ➕ department = ${department}`);
     }
     if (role) {
       updates.push(`role = $${paramCount}`);
       params.push(role);
       paramCount++;
-      console.log(`  ➕ role = ${role}`);
     }
     if (isActive !== undefined) {
       updates.push(`is_active = $${paramCount}`);
       params.push(isActive);
       paramCount++;
-      console.log(`  ➕ is_active = ${isActive}`);
     }
     if (password) {
       const passwordHash = await bcrypt.hash(password, 10);
       updates.push(`password_hash = $${paramCount}`);
       params.push(passwordHash);
       paramCount++;
-      console.log(`  ➕ password_hash = [HIDDEN]`);
     }
 
     updates.push(`updated_at = NOW()`);
@@ -388,31 +377,40 @@ export const updateUser = async (req, res) => {
       RETURNING id, email, first_name, last_name, role, is_active, updated_at
     `;
 
-    console.log('📝 SQL Query:', query);
-    console.log('📝 SQL Params:', params.map((p, i) => i === params.length - 2 && password ? '[HIDDEN]' : p));
-
+    console.log('📝 Executing user update...');
     const updateResult = await client.query(query, params);
     console.log('✅ User updated successfully');
 
-    // Update institution associations dacă sunt furnizate
+    // ========== FIX: Update institution associations FĂRĂ ON CONFLICT ==========
     if (institutionIds !== undefined) {
       console.log('🏢 Updating institutions:', institutionIds);
       
-      // Delete existing associations
+      // Delete existing associations (inclusiv cele cu deleted_at NOT NULL)
       await client.query(
         'DELETE FROM user_institutions WHERE user_id = $1',
         [id]
       );
       console.log('  ✅ Deleted old associations');
 
-      // Insert new associations
+      // Insert new associations - FĂRĂ ON CONFLICT
       if (institutionIds && institutionIds.length > 0) {
         for (const instId of institutionIds) {
           console.log(`  ➕ Adding institution: ${instId}`);
+          
+          // Check dacă instituția există
+          const instCheck = await client.query(
+            'SELECT id FROM institutions WHERE id = $1 AND deleted_at IS NULL',
+            [instId]
+          );
+          
+          if (instCheck.rows.length === 0) {
+            console.log(`  ⚠️ Institution ${instId} not found, skipping`);
+            continue;
+          }
+          
+          // Insert simplu fără ON CONFLICT (am șters deja toate asocierile mai sus)
           await client.query(
-            `INSERT INTO user_institutions (user_id, institution_id)
-             VALUES ($1, $2)
-             ON CONFLICT (user_id, institution_id) DO NOTHING`,
+            'INSERT INTO user_institutions (user_id, institution_id) VALUES ($1, $2)',
             [id, instId]
           );
         }
@@ -442,9 +440,7 @@ export const updateUser = async (req, res) => {
       [id]
     );
 
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('✅ UPDATE SUCCESSFUL');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     res.json({
       success: true,
@@ -454,17 +450,13 @@ export const updateUser = async (req, res) => {
   } catch (error) {
     await client.query('ROLLBACK');
     
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('❌ UPDATE ERROR');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.error('❌ UPDATE ERROR');
     console.error('Error name:', error.name);
     console.error('Error message:', error.message);
     console.error('Error code:', error.code);
     console.error('Error detail:', error.detail);
     console.error('Error stack:', error.stack);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
-    // Trimite eroarea detaliată către frontend (doar în development)
     res.status(500).json({
       success: false,
       message: error.message || 'Eroare la actualizarea utilizatorului',
