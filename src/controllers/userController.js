@@ -303,6 +303,9 @@ export const createUser = async (req, res) => {
 };
 
 // UPDATE USER
+// ⚠️ FINAL FIX BACKEND - Înlocuiește funcția updateUser în userController.js ⚠️
+
+// UPDATE USER
 export const updateUser = async (req, res) => {
   const client = await pool.connect();
   
@@ -312,7 +315,6 @@ export const updateUser = async (req, res) => {
 
     console.log('🔧 UPDATE USER - Backend');
     console.log('User ID:', id);
-    console.log('Request body:', JSON.stringify(req.body, null, 2));
 
     // Verifică dacă user-ul există
     const existingUser = await client.query(
@@ -321,14 +323,11 @@ export const updateUser = async (req, res) => {
     );
 
     if (existingUser.rows.length === 0) {
-      console.log('❌ User not found:', id);
       return res.status(404).json({
         success: false,
         message: 'Utilizator negăsit'
       });
     }
-
-    console.log('✅ User exists');
 
     // Verifică dacă noul email e deja folosit de alt user
     if (email) {
@@ -338,7 +337,6 @@ export const updateUser = async (req, res) => {
       );
 
       if (emailCheck.rows.length > 0) {
-        console.log('❌ Email already in use:', email);
         return res.status(400).json({
           success: false,
           message: 'Email-ul este deja utilizat'
@@ -346,10 +344,7 @@ export const updateUser = async (req, res) => {
       }
     }
 
-    console.log('✅ Email check passed');
-
     await client.query('BEGIN');
-    console.log('✅ Transaction started');
 
     // Construiește query dinamic pentru user update
     const updates = [];
@@ -413,26 +408,20 @@ export const updateUser = async (req, res) => {
       RETURNING id, email, first_name, last_name, role, is_active, updated_at
     `;
 
-    console.log('📝 Executing user update...');
-    const updateResult = await client.query(query, params);
-    console.log('✅ User updated successfully');
+    await client.query(query, params);
+    console.log('✅ User updated');
 
-    // ========== FIX: Update institution associations FĂRĂ ON CONFLICT ==========
+    // Update institution associations
     if (institutionIds !== undefined) {
-      console.log('🏢 Updating institutions:', institutionIds);
-      
-      // Delete existing associations (inclusiv cele cu deleted_at NOT NULL)
+      // Delete existing associations
       await client.query(
         'DELETE FROM user_institutions WHERE user_id = $1',
         [id]
       );
-      console.log('  ✅ Deleted old associations');
 
-      // Insert new associations - FĂRĂ ON CONFLICT
+      // Insert new associations
       if (institutionIds && institutionIds.length > 0) {
         for (const instId of institutionIds) {
-          console.log(`  ➕ Adding institution: ${instId}`);
-          
           // Check dacă instituția există
           const instCheck = await client.query(
             'SELECT id FROM institutions WHERE id = $1 AND deleted_at IS NULL',
@@ -440,24 +429,21 @@ export const updateUser = async (req, res) => {
           );
           
           if (instCheck.rows.length === 0) {
-            console.log(`  ⚠️ Institution ${instId} not found, skipping`);
             continue;
           }
           
-          // Insert simplu fără ON CONFLICT (am șters deja toate asocierile mai sus)
+          // Insert simplu fără ON CONFLICT
           await client.query(
             'INSERT INTO user_institutions (user_id, institution_id) VALUES ($1, $2)',
             [id, instId]
           );
         }
-        console.log('  ✅ New associations created');
       }
     }
 
     await client.query('COMMIT');
-    console.log('✅ Transaction committed');
 
-    // Get updated user with institutions
+    // ✅ FIX: Get updated user with institutions (FĂRĂ ui.deleted_at)
     const userWithInstitutions = await client.query(
       `SELECT 
         u.*,
@@ -469,7 +455,7 @@ export const updateUser = async (req, res) => {
           )
         ) FILTER (WHERE i.id IS NOT NULL) as institutions
       FROM users u
-      LEFT JOIN user_institutions ui ON u.id = ui.user_id AND ui.deleted_at IS NULL
+      LEFT JOIN user_institutions ui ON u.id = ui.user_id
       LEFT JOIN institutions i ON ui.institution_id = i.id AND i.deleted_at IS NULL
       WHERE u.id = $1
       GROUP BY u.id`,
@@ -487,21 +473,11 @@ export const updateUser = async (req, res) => {
     await client.query('ROLLBACK');
     
     console.error('❌ UPDATE ERROR');
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    console.error('Error code:', error.code);
-    console.error('Error detail:', error.detail);
-    console.error('Error stack:', error.stack);
+    console.error('Error:', error.message);
     
     res.status(500).json({
       success: false,
-      message: error.message || 'Eroare la actualizarea utilizatorului',
-      error: process.env.NODE_ENV === 'development' ? {
-        name: error.name,
-        message: error.message,
-        code: error.code,
-        detail: error.detail
-      } : undefined
+      message: error.message || 'Eroare la actualizarea utilizatorului'
     });
   } finally {
     client.release();
