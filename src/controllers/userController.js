@@ -171,12 +171,17 @@ export const getUserById = async (req, res) => {
   }
 };
 
+// ⚠️ FIX BACKEND - Înlocuiește funcția createUser în userController.js ⚠️
+
 // CREATE USER
 export const createUser = async (req, res) => {
   const client = await pool.connect();
   
   try {
-    const { email, password, firstName, lastName, role, isActive = true, institutionIds = [] } = req.body;
+    const { email, password, firstName, lastName, role, isActive = true, institutionIds = [], phone, position, department } = req.body;
+
+    console.log('🔧 CREATE USER - Backend');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
 
     // Validare
     if (!email || !password || !firstName || !lastName || !role) {
@@ -203,30 +208,48 @@ export const createUser = async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     await client.query('BEGIN');
+    console.log('✅ Transaction started');
 
-    // Inserează user
+    // Inserează user cu toate câmpurile
     const result = await client.query(
-      `INSERT INTO users (email, password_hash, first_name, last_name, role, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO users (email, password_hash, first_name, last_name, phone, position, department, role, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id, email, first_name, last_name, role, is_active, created_at`,
-      [email.toLowerCase(), passwordHash, firstName, lastName, role, isActive]
+      [email.toLowerCase(), passwordHash, firstName, lastName, phone || null, position || null, department || null, role, isActive]
     );
 
     const userId = result.rows[0].id;
+    console.log('✅ User created with ID:', userId);
 
-    // Asociază cu instituțiile
+    // ========== FIX: Asociază cu instituțiile FĂRĂ ON CONFLICT ==========
     if (institutionIds && institutionIds.length > 0) {
+      console.log('🏢 Adding institutions:', institutionIds);
+      
       for (const instId of institutionIds) {
+        console.log(`  ➕ Adding institution: ${instId}`);
+        
+        // Check dacă instituția există
+        const instCheck = await client.query(
+          'SELECT id FROM institutions WHERE id = $1 AND deleted_at IS NULL',
+          [instId]
+        );
+        
+        if (instCheck.rows.length === 0) {
+          console.log(`  ⚠️ Institution ${instId} not found, skipping`);
+          continue;
+        }
+        
+        // Insert simplu fără ON CONFLICT
         await client.query(
-          `INSERT INTO user_institutions (user_id, institution_id)
-           VALUES ($1, $2)
-           ON CONFLICT (user_id, institution_id) DO NOTHING`,
+          'INSERT INTO user_institutions (user_id, institution_id) VALUES ($1, $2)',
           [userId, instId]
         );
       }
+      console.log('  ✅ Institution associations created');
     }
 
     await client.query('COMMIT');
+    console.log('✅ Transaction committed');
 
     // Get user with institutions
     const userWithInstitutions = await client.query(
@@ -240,12 +263,14 @@ export const createUser = async (req, res) => {
           )
         ) FILTER (WHERE i.id IS NOT NULL) as institutions
       FROM users u
-      LEFT JOIN user_institutions ui ON u.id = ui.user_id
-      LEFT JOIN institutions i ON ui.institution_id = i.id
+      LEFT JOIN user_institutions ui ON u.id = ui.user_id AND ui.deleted_at IS NULL
+      LEFT JOIN institutions i ON ui.institution_id = i.id AND i.deleted_at IS NULL
       WHERE u.id = $1
       GROUP BY u.id`,
       [userId]
     );
+
+    console.log('✅ CREATE SUCCESSFUL');
 
     res.status(201).json({
       success: true,
@@ -254,17 +279,28 @@ export const createUser = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Create user error:', error);
+    
+    console.error('❌ CREATE ERROR');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error code:', error.code);
+    console.error('Error detail:', error.detail);
+    console.error('Error stack:', error.stack);
+    
     res.status(500).json({
       success: false,
-      message: 'Eroare la crearea utilizatorului'
+      message: error.message || 'Eroare la crearea utilizatorului',
+      error: process.env.NODE_ENV === 'development' ? {
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        detail: error.detail
+      } : undefined
     });
   } finally {
     client.release();
   }
 };
-
-// ⚠️ FIX BACKEND - Înlocuiește funcția updateUser în userController.js ⚠️
 
 // UPDATE USER
 export const updateUser = async (req, res) => {
