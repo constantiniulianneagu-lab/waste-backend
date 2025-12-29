@@ -265,12 +265,20 @@ export const createUser = async (req, res) => {
 };
 
 // UPDATE USER
+// ⚠️ BACKEND FIX - Înlocuiește funcția updateUser în userController.js ⚠️
+
 export const updateUser = async (req, res) => {
   const client = await pool.connect();
   
   try {
     const { id } = req.params;
-    const { email, firstName, lastName, role, isActive, password, institutionIds } = req.body;
+    const { email, firstName, lastName, role, isActive, password, institutionIds, phone, position, department } = req.body;
+
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🔧 UPDATE USER - Backend');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('User ID:', id);
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
 
     // Verifică dacă user-ul există
     const existingUser = await client.query(
@@ -279,11 +287,14 @@ export const updateUser = async (req, res) => {
     );
 
     if (existingUser.rows.length === 0) {
+      console.log('❌ User not found:', id);
       return res.status(404).json({
         success: false,
         message: 'Utilizator negăsit'
       });
     }
+
+    console.log('✅ User exists');
 
     // Verifică dacă noul email e deja folosit de alt user
     if (email) {
@@ -293,6 +304,7 @@ export const updateUser = async (req, res) => {
       );
 
       if (emailCheck.rows.length > 0) {
+        console.log('❌ Email already in use:', email);
         return res.status(400).json({
           success: false,
           message: 'Email-ul este deja utilizat'
@@ -300,7 +312,10 @@ export const updateUser = async (req, res) => {
       }
     }
 
+    console.log('✅ Email check passed');
+
     await client.query('BEGIN');
+    console.log('✅ Transaction started');
 
     // Construiește query dinamic pentru user update
     const updates = [];
@@ -311,32 +326,56 @@ export const updateUser = async (req, res) => {
       updates.push(`email = $${paramCount}`);
       params.push(email.toLowerCase());
       paramCount++;
+      console.log(`  ➕ email = ${email.toLowerCase()}`);
     }
     if (firstName) {
       updates.push(`first_name = $${paramCount}`);
       params.push(firstName);
       paramCount++;
+      console.log(`  ➕ first_name = ${firstName}`);
     }
     if (lastName) {
       updates.push(`last_name = $${paramCount}`);
       params.push(lastName);
       paramCount++;
+      console.log(`  ➕ last_name = ${lastName}`);
+    }
+    if (phone !== undefined) {
+      updates.push(`phone = $${paramCount}`);
+      params.push(phone);
+      paramCount++;
+      console.log(`  ➕ phone = ${phone}`);
+    }
+    if (position !== undefined) {
+      updates.push(`position = $${paramCount}`);
+      params.push(position);
+      paramCount++;
+      console.log(`  ➕ position = ${position}`);
+    }
+    if (department !== undefined) {
+      updates.push(`department = $${paramCount}`);
+      params.push(department);
+      paramCount++;
+      console.log(`  ➕ department = ${department}`);
     }
     if (role) {
       updates.push(`role = $${paramCount}`);
       params.push(role);
       paramCount++;
+      console.log(`  ➕ role = ${role}`);
     }
     if (isActive !== undefined) {
       updates.push(`is_active = $${paramCount}`);
       params.push(isActive);
       paramCount++;
+      console.log(`  ➕ is_active = ${isActive}`);
     }
     if (password) {
       const passwordHash = await bcrypt.hash(password, 10);
       updates.push(`password_hash = $${paramCount}`);
       params.push(passwordHash);
       paramCount++;
+      console.log(`  ➕ password_hash = [HIDDEN]`);
     }
 
     updates.push(`updated_at = NOW()`);
@@ -349,19 +388,27 @@ export const updateUser = async (req, res) => {
       RETURNING id, email, first_name, last_name, role, is_active, updated_at
     `;
 
-    await client.query(query, params);
+    console.log('📝 SQL Query:', query);
+    console.log('📝 SQL Params:', params.map((p, i) => i === params.length - 2 && password ? '[HIDDEN]' : p));
+
+    const updateResult = await client.query(query, params);
+    console.log('✅ User updated successfully');
 
     // Update institution associations dacă sunt furnizate
     if (institutionIds !== undefined) {
+      console.log('🏢 Updating institutions:', institutionIds);
+      
       // Delete existing associations
       await client.query(
         'DELETE FROM user_institutions WHERE user_id = $1',
         [id]
       );
+      console.log('  ✅ Deleted old associations');
 
       // Insert new associations
       if (institutionIds && institutionIds.length > 0) {
         for (const instId of institutionIds) {
+          console.log(`  ➕ Adding institution: ${instId}`);
           await client.query(
             `INSERT INTO user_institutions (user_id, institution_id)
              VALUES ($1, $2)
@@ -369,10 +416,12 @@ export const updateUser = async (req, res) => {
             [id, instId]
           );
         }
+        console.log('  ✅ New associations created');
       }
     }
 
     await client.query('COMMIT');
+    console.log('✅ Transaction committed');
 
     // Get updated user with institutions
     const userWithInstitutions = await client.query(
@@ -386,12 +435,16 @@ export const updateUser = async (req, res) => {
           )
         ) FILTER (WHERE i.id IS NOT NULL) as institutions
       FROM users u
-      LEFT JOIN user_institutions ui ON u.id = ui.user_id
+      LEFT JOIN user_institutions ui ON u.id = ui.user_id AND ui.deleted_at IS NULL
       LEFT JOIN institutions i ON ui.institution_id = i.id AND i.deleted_at IS NULL
       WHERE u.id = $1
       GROUP BY u.id`,
       [id]
     );
+
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('✅ UPDATE SUCCESSFUL');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     res.json({
       success: true,
@@ -400,10 +453,27 @@ export const updateUser = async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Update user error:', error);
+    
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('❌ UPDATE ERROR');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error code:', error.code);
+    console.error('Error detail:', error.detail);
+    console.error('Error stack:', error.stack);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    
+    // Trimite eroarea detaliată către frontend (doar în development)
     res.status(500).json({
       success: false,
-      message: 'Eroare la actualizarea utilizatorului'
+      message: error.message || 'Eroare la actualizarea utilizatorului',
+      error: process.env.NODE_ENV === 'development' ? {
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        detail: error.detail
+      } : undefined
     });
   } finally {
     client.release();
