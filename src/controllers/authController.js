@@ -76,13 +76,11 @@ export const login = async (req, res) => {
     }
 
     console.log('🔒 Comparing passwords...');
-    console.log('  Password from request:', password);
-    console.log('  Hash from database:', user.password_hash?.substring(0, 30));
-
+    
     // Verifică parola
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
-    console.log('🔑 Password comparison result:', isPasswordValid);
+    console.log('🔑 Password comparison result:', isPasswordValid ? 'valid' : 'invalid');
 
     if (!isPasswordValid) {
       console.log('❌ Password does not match');

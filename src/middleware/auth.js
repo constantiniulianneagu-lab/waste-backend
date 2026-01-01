@@ -1,5 +1,7 @@
 // src/middleware/auth.js
 import jwt from 'jsonwebtoken';
+import pool from '../config/database.js';  // ← ADAUGĂ
+
 
 // Verifică JWT token din header
 export const authenticateToken = (req, res, next) => {
