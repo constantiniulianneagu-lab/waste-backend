@@ -1,9 +1,11 @@
 // ============================================================================
-// RECYCLING REPORTS CONTROLLER - FINAL HYBRID
-// Structure: Simple like Recovery/Disposal + Your grouped data
+// RECYCLING REPORTS CONTROLLER - UPDATED WITH ACCESS CONTROL
+// ============================================================================
+// Updated: 2025-01-02 - Integrated with centralized access control
 // ============================================================================
 
 import db from '../config/database.js';
+import { getAccessibleSectors } from '../utils/accessControl.js';
 
 const formatNumber = (num) => {
   if (!num && num !== 0) return '0.00';
@@ -11,65 +13,86 @@ const formatNumber = (num) => {
 };
 
 export const getRecyclingTickets = async (req, res) => {
+  console.log('\n♻️ ==================== RECYCLING TICKETS REPORT ====================');
+  console.log('📥 Query params:', req.query);
+  console.log('👤 User:', { id: req.user?.id, role: req.user?.role });
+
   try {
     const { year, start_date, end_date, sector_id, page = 1, limit = 10 } = req.query;
 
-    // ✅ CORRECT: Same as TMB controller (which works)
     const userId = req.user.id;
     const userRole = req.user.role;
 
-    console.log('♻️ RECYCLING REPORT - User:', userId, 'Role:', userRole);
+    // ✅ NOUA LOGICĂ: Calculează acces prin accessControl
+    const access = await getAccessibleSectors(userId, userRole);
+
+    console.log('🔐 Access control:', {
+      userId,
+      role: userRole,
+      accessType: access.accessType,
+      sectorsCount: access.sectorIds.length,
+      institutionName: access.institutionName,
+      canEdit: access.canEdit,
+      isPMB: access.isPMB
+    });
+
+    // Verifică dacă user-ul are acces la cel puțin un sector
+    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu ai acces la niciun sector'
+      });
+    }
 
     // Date range
-    const startDate = start_date || `${year}-01-01`;
-    const endDate = end_date || `${year}-12-31`;
+    const currentYear = year || new Date().getFullYear();
+    const startDate = start_date || `${currentYear}-01-01`;
+    const endDate = end_date || `${currentYear}-12-31`;
 
-    // RBAC - Sector filtering (same as Recovery/Disposal)
+    console.log('📅 Date range:', startDate, 'to', endDate);
+
+    // ✅ Sector filtering cu noua logică
     let sectorFilter = '';
     let sectorParams = [];
 
-    if (userRole === 'PLATFORM_ADMIN') {
-      console.log('✅ PLATFORM_ADMIN access');
-      if (sector_id) {
-        sectorFilter = 'AND wtr.sector_id = $3';
-        sectorParams = [sector_id];
-      }
-    } else {
-      const userSectorsQuery = `
-        SELECT DISTINCT is_table.sector_id
-        FROM user_institutions ui
-        JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
-        WHERE ui.user_id = $1 AND ui.deleted_at IS NULL
-      `;
-      const userSectorsResult = await db.query(userSectorsQuery, [userId]);
-      const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
-
-      if (userSectorIds.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: No sectors assigned'
-        });
+    if (sector_id) {
+      // User cere un sector specific
+      let sectorUuid = sector_id;
+      
+      // Convertește sector_number → UUID dacă e necesar
+      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
+        const sectorQuery = await db.query(
+          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
+          [parseInt(sector_id)]
+        );
+        if (sectorQuery.rows.length > 0) {
+          sectorUuid = sectorQuery.rows[0].id;
+        }
       }
 
-      if (sector_id) {
-        if (!userSectorIds.includes(sector_id)) {
+      // Verifică dacă user-ul are acces la acest sector
+      if (access.accessType !== 'PLATFORM_ALL') {
+        if (!access.sectorIds.includes(sectorUuid)) {
           return res.status(403).json({
             success: false,
-            message: 'Access denied: Sector not accessible'
+            message: 'Nu ai acces la acest sector'
           });
         }
-        sectorFilter = 'AND wtr.sector_id = $3';
-        sectorParams = [sector_id];
-      } else {
+      }
+
+      sectorFilter = 'AND wtr.sector_id = $3';
+      sectorParams = [sectorUuid];
+    } else {
+      // User nu cere sector specific → filtrează automat la sectoarele accesibile
+      if (access.accessType !== 'PLATFORM_ALL') {
         sectorFilter = 'AND wtr.sector_id = ANY($3)';
-        sectorParams = [userSectorIds];
+        sectorParams = [access.sectorIds];
       }
     }
 
     const baseParams = [startDate, endDate, ...sectorParams];
 
-    console.log('📅 Date range:', startDate, 'to', endDate);
-    console.log('🔍 Sector filter:', sectorFilter);
+    console.log('🔍 WHERE clause built with sector filter');
 
     // SUMMARY
     const summaryQuery = `
@@ -87,7 +110,7 @@ export const getRecyclingTickets = async (req, res) => {
 
     console.log('📊 Summary:', summaryResult.rows[0]);
 
-    // SUPPLIERS - Simple format (like Recovery/Disposal) for compatibility
+    // SUPPLIERS
     const suppliersQuery = `
       SELECT 
         i.id,
@@ -111,7 +134,7 @@ export const getRecyclingTickets = async (req, res) => {
 
     console.log('🏭 Suppliers:', suppliersResult.rows.length, 'rows');
 
-    // CLIENTS - Simple format
+    // CLIENTS
     const clientsQuery = `
       SELECT 
         i.id,
@@ -238,6 +261,14 @@ export const getRecyclingTickets = async (req, res) => {
           per_page: parseInt(limit),
           total_records: totalRecords,
           total_pages: Math.ceil(totalRecords / limit)
+        },
+        // ✅ Info pentru debugging/UI
+        access_info: {
+          accessible_sectors: access.sectorIds.length,
+          access_type: access.accessType,
+          institution_name: access.institutionName,
+          is_pmb: access.isPMB,
+          can_export: true
         }
       }
     };
@@ -256,7 +287,7 @@ export const getRecyclingTickets = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch recycling tickets',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

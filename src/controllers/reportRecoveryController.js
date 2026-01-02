@@ -1,8 +1,11 @@
 // ============================================================================
-// RECOVERY REPORTS CONTROLLER
+// RECOVERY REPORTS CONTROLLER - UPDATED WITH ACCESS CONTROL
+// ============================================================================
+// Updated: 2025-01-02 - Integrated with centralized access control
 // ============================================================================
 
 import db from '../config/database.js';
+import { getAccessibleSectors } from '../utils/accessControl.js';
 
 const formatNumber = (num) => {
   if (!num && num !== 0) return '0.00';
@@ -13,59 +16,86 @@ const formatNumber = (num) => {
  * GET RECOVERY TICKETS
  */
 export const getRecoveryTickets = async (req, res) => {
+  console.log('\n⚡ ==================== RECOVERY TICKETS REPORT ====================');
+  console.log('📥 Query params:', req.query);
+  console.log('👤 User:', { id: req.user?.id, role: req.user?.role });
+
   try {
     const { year, start_date, end_date, sector_id, page = 1, limit = 10 } = req.query;
     
-    // ✅ FIXED: Correct req.user structure from JWT
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const userRole = req.user.role;
 
-    // Date range
-    const startDate = start_date || `${year}-01-01`;
-    const endDate = end_date || `${year}-12-31`;
+    // ✅ NOUA LOGICĂ: Calculează acces prin accessControl
+    const access = await getAccessibleSectors(userId, userRole);
 
-    // RBAC - Sector filtering
+    console.log('🔐 Access control:', {
+      userId,
+      role: userRole,
+      accessType: access.accessType,
+      sectorsCount: access.sectorIds.length,
+      institutionName: access.institutionName,
+      canEdit: access.canEdit,
+      isPMB: access.isPMB
+    });
+
+    // Verifică dacă user-ul are acces la cel puțin un sector
+    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu ai acces la niciun sector'
+      });
+    }
+
+    // Date range
+    const currentYear = year || new Date().getFullYear();
+    const startDate = start_date || `${currentYear}-01-01`;
+    const endDate = end_date || `${currentYear}-12-31`;
+
+    console.log('📅 Date range:', startDate, 'to', endDate);
+
+    // ✅ Sector filtering cu noua logică
     let sectorFilter = '';
     let sectorParams = [];
 
-    if (userRole === 'PLATFORM_ADMIN') {
-      if (sector_id) {
-        sectorFilter = 'AND wtv.sector_id = $3';
-        sectorParams = [sector_id];
-      }
-    } else {
-      const userSectorsQuery = `
-        SELECT DISTINCT is_table.sector_id
-        FROM user_institutions ui
-        JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
-        WHERE ui.user_id = $1
-      `;
-      const userSectorsResult = await db.query(userSectorsQuery, [userId]);
-      const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
-
-      if (userSectorIds.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: No sectors assigned'
-        });
+    if (sector_id) {
+      // User cere un sector specific
+      let sectorUuid = sector_id;
+      
+      // Convertește sector_number → UUID dacă e necesar
+      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
+        const sectorQuery = await db.query(
+          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
+          [parseInt(sector_id)]
+        );
+        if (sectorQuery.rows.length > 0) {
+          sectorUuid = sectorQuery.rows[0].id;
+        }
       }
 
-      if (sector_id) {
-        if (!userSectorIds.includes(sector_id)) {
+      // Verifică dacă user-ul are acces la acest sector
+      if (access.accessType !== 'PLATFORM_ALL') {
+        if (!access.sectorIds.includes(sectorUuid)) {
           return res.status(403).json({
             success: false,
-            message: 'Access denied: Sector not accessible'
+            message: 'Nu ai acces la acest sector'
           });
         }
-        sectorFilter = 'AND wtv.sector_id = $3';
-        sectorParams = [sector_id];
-      } else {
+      }
+
+      sectorFilter = 'AND wtv.sector_id = $3';
+      sectorParams = [sectorUuid];
+    } else {
+      // User nu cere sector specific → filtrează automat la sectoarele accesibile
+      if (access.accessType !== 'PLATFORM_ALL') {
         sectorFilter = 'AND wtv.sector_id = ANY($3)';
-        sectorParams = [userSectorIds];
+        sectorParams = [access.sectorIds];
       }
     }
 
     const baseParams = [startDate, endDate, ...sectorParams];
+
+    console.log('🔍 WHERE clause built with sector filter');
 
     // SUMMARY
     const summaryQuery = `
@@ -80,6 +110,8 @@ export const getRecoveryTickets = async (req, res) => {
         ${sectorFilter}
     `;
     const summaryResult = await db.query(summaryQuery, baseParams);
+
+    console.log('📊 Summary:', summaryResult.rows[0]);
 
     // SUPPLIERS (furnizori - operatori TMB)
     const suppliersQuery = `
@@ -103,6 +135,8 @@ export const getRecoveryTickets = async (req, res) => {
     `;
     const suppliersResult = await db.query(suppliersQuery, baseParams);
 
+    console.log('🏭 Suppliers:', suppliersResult.rows.length, 'rows');
+
     // CLIENTS (valorificatori)
     const clientsQuery = `
       SELECT 
@@ -120,6 +154,8 @@ export const getRecoveryTickets = async (req, res) => {
       LIMIT 10
     `;
     const clientsResult = await db.query(clientsQuery, baseParams);
+
+    console.log('⚡ Clients:', clientsResult.rows.length, 'rows');
 
     // TICKETS (paginated)
     const offset = (page - 1) * limit;
@@ -149,6 +185,8 @@ export const getRecoveryTickets = async (req, res) => {
       LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}
     `;
     const ticketsResult = await db.query(ticketsQuery, [...baseParams, limit, offset]);
+
+    console.log('🎫 Tickets:', ticketsResult.rows.length);
 
     // COUNT
     const countQuery = `
@@ -185,7 +223,7 @@ export const getRecoveryTickets = async (req, res) => {
     res.json({
       success: true,
       data: {
-        available_years: availableYears,  // ✅ ADAUGĂ
+        available_years: availableYears,
         summary: {
           total_delivered: formatNumber(summaryResult.rows[0].total_delivered),
           total_accepted: formatNumber(summaryResult.rows[0].total_accepted),
@@ -221,15 +259,26 @@ export const getRecoveryTickets = async (req, res) => {
           per_page: parseInt(limit),
           total_records: totalRecords,
           total_pages: Math.ceil(totalRecords / limit)
+        },
+        // ✅ Info pentru debugging/UI
+        access_info: {
+          accessible_sectors: access.sectorIds.length,
+          access_type: access.accessType,
+          institution_name: access.institutionName,
+          is_pmb: access.isPMB,
+          can_export: true
         }
       }
     });
+
+    console.log('✅ Recovery tickets fetched successfully');
+
   } catch (error) {
     console.error('❌ getRecoveryTickets error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch recovery tickets',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

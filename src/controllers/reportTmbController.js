@@ -10,6 +10,7 @@
 // ============================================================================
 
 import pool from '../config/database.js';
+import { getAccessibleSectors } from '../utils/accessControl.js';
 
 const formatNumber = (num) => {
   return num ? parseFloat(num).toFixed(2) : '0.00';
@@ -21,6 +22,7 @@ const formatNumber = (num) => {
 export const getTmbTickets = async (req, res) => {
   console.log('\n📊 ==================== TMB TICKETS REPORT ====================');
   console.log('📥 Query params:', req.query);
+  console.log('👤 User:', { id: req.user.id, role: req.user.role });
   
   try {
     const { 
@@ -37,28 +39,25 @@ export const getTmbTickets = async (req, res) => {
     const userId = req.user.id;
     const userRole = req.user.role;
 
-    // RBAC - Sector Access Control
-    let accessibleSectorIds = [];
-    
-    if (userRole === 'PLATFORM_ADMIN') {
-      console.log('✅ PLATFORM_ADMIN - full access');
-    } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
-      const userSectorsQuery = `
-        SELECT DISTINCT is_table.sector_id
-        FROM user_institutions ui
-        JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
-        WHERE ui.user_id = $1 AND ui.deleted_at IS NULL
-      `;
-      
-      const userSectorsResult = await pool.query(userSectorsQuery, [userId]);
-      accessibleSectorIds = userSectorsResult.rows.map(row => row.sector_id);
-      
-      if (accessibleSectorIds.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: No sectors assigned'
-        });
-      }
+    // ✅ NOUA LOGICĂ: Calculează acces prin accessControl
+    const access = await getAccessibleSectors(userId, userRole);
+
+    console.log('🔐 Access control:', {
+      userId,
+      role: userRole,
+      accessType: access.accessType,
+      sectorsCount: access.sectorIds.length,
+      institutionName: access.institutionName,
+      canEdit: access.canEdit,
+      isPMB: access.isPMB
+    });
+
+    // Verifică dacă user-ul are acces la cel puțin un sector
+    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu ai acces la niciun sector'
+      });
     }
 
     // Build WHERE clause
@@ -84,38 +83,48 @@ export const getTmbTickets = async (req, res) => {
       }
     }
 
-    // Sector filter
-    let sectorUuid = null;
+    // ✅ Sector filtering cu noua logică
     if (sector_id) {
+      // User cere un sector specific
+      let sectorUuid = sector_id;
+      
+      // Convertește sector_number → UUID dacă e necesar
       if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
         const sectorQuery = await pool.query(
-          `SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true`,
+          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
           [parseInt(sector_id)]
         );
         if (sectorQuery.rows.length > 0) {
           sectorUuid = sectorQuery.rows[0].id;
         }
-      } else {
-        sectorUuid = sector_id;
       }
-      
-      if (accessibleSectorIds.length > 0 && !accessibleSectorIds.includes(sectorUuid)) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: Sector not accessible'
-        });
+
+      // Verifică dacă user-ul are acces la acest sector
+      if (access.accessType !== 'PLATFORM_ALL') {
+        if (!access.sectorIds.includes(sectorUuid)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Nu ai acces la acest sector'
+          });
+        }
       }
-      
+
       whereConditions.push(`wtt.sector_id = $${paramIndex}`);
       queryParams.push(sectorUuid);
       paramIndex++;
-    } else if (accessibleSectorIds.length > 0) {
-      whereConditions.push(`wtt.sector_id = ANY($${paramIndex})`);
-      queryParams.push(accessibleSectorIds);
-      paramIndex++;
+    } else {
+      // User nu cere sector specific → filtrează automat la sectoarele accesibile
+      if (access.accessType !== 'PLATFORM_ALL') {
+        whereConditions.push(`wtt.sector_id = ANY($${paramIndex})`);
+        queryParams.push(access.sectorIds);
+        paramIndex++;
+      }
     }
 
     const whereClause = whereConditions.join(' AND ');
+
+    console.log('🔍 WHERE clause:', whereClause);
+    console.log('📊 Query params:', queryParams);
 
     // 1. GET SUMMARY STATS
     const summaryQuery = `
@@ -128,6 +137,8 @@ export const getTmbTickets = async (req, res) => {
     
     const summaryResult = await pool.query(summaryQuery, queryParams);
     const summary = summaryResult.rows[0];
+
+    console.log('📈 Summary:', summary);
 
     // 2. GET TOP SUPPLIERS (Furnizori - colectori)
     const suppliersQuery = `
@@ -198,7 +209,7 @@ export const getTmbTickets = async (req, res) => {
     queryParams.push(parseInt(limit), offset);
     const ticketsResult = await pool.query(ticketsQuery, queryParams);
 
-    console.log('✅ TMB Tickets fetched successfully');
+    console.log(`✅ Found ${ticketsResult.rows.length} tickets for current page`);
 
     res.json({
       success: true,
@@ -215,16 +226,24 @@ export const getTmbTickets = async (req, res) => {
           per_page: parseInt(limit),
           total_records: parseInt(summary.total_tickets),
           total_pages: Math.ceil(parseInt(summary.total_tickets) / parseInt(limit))
+        },
+        // ✅ Info pentru debugging/UI
+        access_info: {
+          accessible_sectors: access.sectorIds.length,
+          access_type: access.accessType,
+          institution_name: access.institutionName,
+          is_pmb: access.isPMB,
+          can_export: true  // Toți pot exporta
         }
       }
     });
 
   } catch (error) {
-    console.error('❌ TMB Tickets error:', error);
+    console.error('❌ getTmbTickets error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch TMB tickets',
-      error: error.message
+      message: 'Eroare la obținerea raportului TMB',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -234,6 +253,8 @@ export const getTmbTickets = async (req, res) => {
 // ============================================================================
 export const getRecyclingTickets = async (req, res) => {
   console.log('\n♻️ ==================== RECYCLING TICKETS REPORT ====================');
+  console.log('📥 Query params:', req.query);
+  console.log('👤 User:', { id: req.user.id, role: req.user.role });
   
   try {
     const { 
@@ -247,26 +268,125 @@ export const getRecyclingTickets = async (req, res) => {
       sort_order = 'DESC'
     } = req.query;
 
-    // Similar logic ca getTmbTickets, dar pentru waste_tickets_recycling
-    // ... (implementare similară)
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // ✅ Calculează acces
+    const access = await getAccessibleSectors(userId, userRole);
+
+    console.log('🔐 Access control:', {
+      role: userRole,
+      accessType: access.accessType,
+      sectorsCount: access.sectorIds.length
+    });
+
+    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu ai acces la niciun sector'
+      });
+    }
+
+    // Build WHERE clause
+    let whereConditions = ['wtr.deleted_at IS NULL'];
+    let queryParams = [];
+    let paramIndex = 1;
+
+    // Date filters
+    if (year) {
+      whereConditions.push(`EXTRACT(YEAR FROM wtr.ticket_date) = $${paramIndex}`);
+      queryParams.push(parseInt(year));
+      paramIndex++;
+    } else {
+      if (start_date) {
+        whereConditions.push(`wtr.ticket_date >= $${paramIndex}`);
+        queryParams.push(start_date);
+        paramIndex++;
+      }
+      if (end_date) {
+        whereConditions.push(`wtr.ticket_date <= $${paramIndex}`);
+        queryParams.push(end_date);
+        paramIndex++;
+      }
+    }
+
+    // ✅ Sector filtering
+    if (sector_id) {
+      let sectorUuid = sector_id;
+      
+      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
+        const sectorQuery = await pool.query(
+          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
+          [parseInt(sector_id)]
+        );
+        if (sectorQuery.rows.length > 0) {
+          sectorUuid = sectorQuery.rows[0].id;
+        }
+      }
+
+      if (access.accessType !== 'PLATFORM_ALL') {
+        if (!access.sectorIds.includes(sectorUuid)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Nu ai acces la acest sector'
+          });
+        }
+      }
+
+      whereConditions.push(`wtr.sector_id = $${paramIndex}`);
+      queryParams.push(sectorUuid);
+      paramIndex++;
+    } else {
+      if (access.accessType !== 'PLATFORM_ALL') {
+        whereConditions.push(`wtr.sector_id = ANY($${paramIndex})`);
+        queryParams.push(access.sectorIds);
+        paramIndex++;
+      }
+    }
+
+    const whereClause = whereConditions.join(' AND ');
+
+    // Summary
+    const summaryQuery = `
+      SELECT 
+        COUNT(*) as total_tickets,
+        COALESCE(SUM(wtr.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_recycling wtr
+      WHERE ${whereClause}
+    `;
     
+    const summaryResult = await pool.query(summaryQuery, queryParams);
+
     res.json({
       success: true,
       data: {
-        summary: { total_tickets: 0, total_tons: '0.00' },
+        summary: {
+          total_tickets: parseInt(summaryResult.rows[0].total_tickets),
+          total_tons: formatNumber(summaryResult.rows[0].total_tons)
+        },
         suppliers: [],
         recipients: [],
         tickets: [],
-        pagination: { current_page: 1, per_page: 10, total_records: 0, total_pages: 0 }
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total_records: parseInt(summaryResult.rows[0].total_tickets),
+          total_pages: Math.ceil(parseInt(summaryResult.rows[0].total_tickets) / parseInt(limit))
+        },
+        access_info: {
+          accessible_sectors: access.sectorIds.length,
+          access_type: access.accessType,
+          can_export: true
+        }
       }
     });
 
   } catch (error) {
-    console.error('❌ Recycling Tickets error:', error);
+    console.error('❌ getRecyclingTickets error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch recycling tickets',
-      error: error.message
+      message: 'Eroare la obținerea raportului reciclare',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -276,26 +396,140 @@ export const getRecyclingTickets = async (req, res) => {
 // ============================================================================
 export const getRecoveryTickets = async (req, res) => {
   console.log('\n⚡ ==================== RECOVERY TICKETS REPORT ====================');
+  console.log('📥 Query params:', req.query);
+  console.log('👤 User:', { id: req.user.id, role: req.user.role });
   
   try {
-    // Similar cu recycling
+    const { 
+      start_date, 
+      end_date, 
+      year,
+      sector_id,
+      page = 1,
+      limit = 10,
+      sort_by = 'ticket_date',
+      sort_order = 'DESC'
+    } = req.query;
+
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // ✅ Calculează acces
+    const access = await getAccessibleSectors(userId, userRole);
+
+    console.log('🔐 Access control:', {
+      role: userRole,
+      accessType: access.accessType,
+      sectorsCount: access.sectorIds.length
+    });
+
+    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu ai acces la niciun sector'
+      });
+    }
+
+    // Build WHERE clause
+    let whereConditions = ['wtv.deleted_at IS NULL'];
+    let queryParams = [];
+    let paramIndex = 1;
+
+    // Date filters
+    if (year) {
+      whereConditions.push(`EXTRACT(YEAR FROM wtv.ticket_date) = $${paramIndex}`);
+      queryParams.push(parseInt(year));
+      paramIndex++;
+    } else {
+      if (start_date) {
+        whereConditions.push(`wtv.ticket_date >= $${paramIndex}`);
+        queryParams.push(start_date);
+        paramIndex++;
+      }
+      if (end_date) {
+        whereConditions.push(`wtv.ticket_date <= $${paramIndex}`);
+        queryParams.push(end_date);
+        paramIndex++;
+      }
+    }
+
+    // ✅ Sector filtering
+    if (sector_id) {
+      let sectorUuid = sector_id;
+      
+      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
+        const sectorQuery = await pool.query(
+          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
+          [parseInt(sector_id)]
+        );
+        if (sectorQuery.rows.length > 0) {
+          sectorUuid = sectorQuery.rows[0].id;
+        }
+      }
+
+      if (access.accessType !== 'PLATFORM_ALL') {
+        if (!access.sectorIds.includes(sectorUuid)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Nu ai acces la acest sector'
+          });
+        }
+      }
+
+      whereConditions.push(`wtv.sector_id = $${paramIndex}`);
+      queryParams.push(sectorUuid);
+      paramIndex++;
+    } else {
+      if (access.accessType !== 'PLATFORM_ALL') {
+        whereConditions.push(`wtv.sector_id = ANY($${paramIndex})`);
+        queryParams.push(access.sectorIds);
+        paramIndex++;
+      }
+    }
+
+    const whereClause = whereConditions.join(' AND ');
+
+    // Summary
+    const summaryQuery = `
+      SELECT 
+        COUNT(*) as total_tickets,
+        COALESCE(SUM(wtv.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_recovery wtv
+      WHERE ${whereClause}
+    `;
+    
+    const summaryResult = await pool.query(summaryQuery, queryParams);
+
     res.json({
       success: true,
       data: {
-        summary: { total_tickets: 0, total_tons: '0.00' },
+        summary: {
+          total_tickets: parseInt(summaryResult.rows[0].total_tickets),
+          total_tons: formatNumber(summaryResult.rows[0].total_tons)
+        },
         suppliers: [],
         recipients: [],
         tickets: [],
-        pagination: { current_page: 1, per_page: 10, total_records: 0, total_pages: 0 }
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total_records: parseInt(summaryResult.rows[0].total_tickets),
+          total_pages: Math.ceil(parseInt(summaryResult.rows[0].total_tickets) / parseInt(limit))
+        },
+        access_info: {
+          accessible_sectors: access.sectorIds.length,
+          access_type: access.accessType,
+          can_export: true
+        }
       }
     });
 
   } catch (error) {
-    console.error('❌ Recovery Tickets error:', error);
+    console.error('❌ getRecoveryTickets error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch recovery tickets',
-      error: error.message
+      message: 'Eroare la obținerea raportului valorificare',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -305,26 +539,140 @@ export const getRecoveryTickets = async (req, res) => {
 // ============================================================================
 export const getDisposalTickets = async (req, res) => {
   console.log('\n🗑️ ==================== DISPOSAL TICKETS REPORT ====================');
+  console.log('📥 Query params:', req.query);
+  console.log('👤 User:', { id: req.user.id, role: req.user.role });
   
   try {
-    // Similar cu recycling
+    const { 
+      start_date, 
+      end_date, 
+      year,
+      sector_id,
+      page = 1,
+      limit = 10,
+      sort_by = 'ticket_date',
+      sort_order = 'DESC'
+    } = req.query;
+
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // ✅ Calculează acces
+    const access = await getAccessibleSectors(userId, userRole);
+
+    console.log('🔐 Access control:', {
+      role: userRole,
+      accessType: access.accessType,
+      sectorsCount: access.sectorIds.length
+    });
+
+    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu ai acces la niciun sector'
+      });
+    }
+
+    // Build WHERE clause
+    let whereConditions = ['wtd.deleted_at IS NULL'];
+    let queryParams = [];
+    let paramIndex = 1;
+
+    // Date filters
+    if (year) {
+      whereConditions.push(`EXTRACT(YEAR FROM wtd.ticket_date) = $${paramIndex}`);
+      queryParams.push(parseInt(year));
+      paramIndex++;
+    } else {
+      if (start_date) {
+        whereConditions.push(`wtd.ticket_date >= $${paramIndex}`);
+        queryParams.push(start_date);
+        paramIndex++;
+      }
+      if (end_date) {
+        whereConditions.push(`wtd.ticket_date <= $${paramIndex}`);
+        queryParams.push(end_date);
+        paramIndex++;
+      }
+    }
+
+    // ✅ Sector filtering
+    if (sector_id) {
+      let sectorUuid = sector_id;
+      
+      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
+        const sectorQuery = await pool.query(
+          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
+          [parseInt(sector_id)]
+        );
+        if (sectorQuery.rows.length > 0) {
+          sectorUuid = sectorQuery.rows[0].id;
+        }
+      }
+
+      if (access.accessType !== 'PLATFORM_ALL') {
+        if (!access.sectorIds.includes(sectorUuid)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Nu ai acces la acest sector'
+          });
+        }
+      }
+
+      whereConditions.push(`wtd.sector_id = $${paramIndex}`);
+      queryParams.push(sectorUuid);
+      paramIndex++;
+    } else {
+      if (access.accessType !== 'PLATFORM_ALL') {
+        whereConditions.push(`wtd.sector_id = ANY($${paramIndex})`);
+        queryParams.push(access.sectorIds);
+        paramIndex++;
+      }
+    }
+
+    const whereClause = whereConditions.join(' AND ');
+
+    // Summary
+    const summaryQuery = `
+      SELECT 
+        COUNT(*) as total_tickets,
+        COALESCE(SUM(wtd.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_disposal wtd
+      WHERE ${whereClause}
+    `;
+    
+    const summaryResult = await pool.query(summaryQuery, queryParams);
+
     res.json({
       success: true,
       data: {
-        summary: { total_tickets: 0, total_tons: '0.00' },
+        summary: {
+          total_tickets: parseInt(summaryResult.rows[0].total_tickets),
+          total_tons: formatNumber(summaryResult.rows[0].total_tons)
+        },
         suppliers: [],
         recipients: [],
         tickets: [],
-        pagination: { current_page: 1, per_page: 10, total_records: 0, total_pages: 0 }
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total_records: parseInt(summaryResult.rows[0].total_tickets),
+          total_pages: Math.ceil(parseInt(summaryResult.rows[0].total_tickets) / parseInt(limit))
+        },
+        access_info: {
+          accessible_sectors: access.sectorIds.length,
+          access_type: access.accessType,
+          can_export: true
+        }
       }
     });
 
   } catch (error) {
-    console.error('❌ Disposal Tickets error:', error);
+    console.error('❌ getDisposalTickets error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch disposal tickets',
-      error: error.message
+      message: 'Eroare la obținerea raportului depozitare',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -334,26 +682,140 @@ export const getDisposalTickets = async (req, res) => {
 // ============================================================================
 export const getRejectedTickets = async (req, res) => {
   console.log('\n❌ ==================== REJECTED TICKETS REPORT ====================');
+  console.log('📥 Query params:', req.query);
+  console.log('👤 User:', { id: req.user.id, role: req.user.role });
   
   try {
-    // Similar cu recycling
+    const { 
+      start_date, 
+      end_date, 
+      year,
+      sector_id,
+      page = 1,
+      limit = 10,
+      sort_by = 'ticket_date',
+      sort_order = 'DESC'
+    } = req.query;
+
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // ✅ Calculează acces
+    const access = await getAccessibleSectors(userId, userRole);
+
+    console.log('🔐 Access control:', {
+      role: userRole,
+      accessType: access.accessType,
+      sectorsCount: access.sectorIds.length
+    });
+
+    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu ai acces la niciun sector'
+      });
+    }
+
+    // Build WHERE clause
+    let whereConditions = ['wtrj.deleted_at IS NULL'];
+    let queryParams = [];
+    let paramIndex = 1;
+
+    // Date filters
+    if (year) {
+      whereConditions.push(`EXTRACT(YEAR FROM wtrj.ticket_date) = $${paramIndex}`);
+      queryParams.push(parseInt(year));
+      paramIndex++;
+    } else {
+      if (start_date) {
+        whereConditions.push(`wtrj.ticket_date >= $${paramIndex}`);
+        queryParams.push(start_date);
+        paramIndex++;
+      }
+      if (end_date) {
+        whereConditions.push(`wtrj.ticket_date <= $${paramIndex}`);
+        queryParams.push(end_date);
+        paramIndex++;
+      }
+    }
+
+    // ✅ Sector filtering
+    if (sector_id) {
+      let sectorUuid = sector_id;
+      
+      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
+        const sectorQuery = await pool.query(
+          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
+          [parseInt(sector_id)]
+        );
+        if (sectorQuery.rows.length > 0) {
+          sectorUuid = sectorQuery.rows[0].id;
+        }
+      }
+
+      if (access.accessType !== 'PLATFORM_ALL') {
+        if (!access.sectorIds.includes(sectorUuid)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Nu ai acces la acest sector'
+          });
+        }
+      }
+
+      whereConditions.push(`wtrj.sector_id = $${paramIndex}`);
+      queryParams.push(sectorUuid);
+      paramIndex++;
+    } else {
+      if (access.accessType !== 'PLATFORM_ALL') {
+        whereConditions.push(`wtrj.sector_id = ANY($${paramIndex})`);
+        queryParams.push(access.sectorIds);
+        paramIndex++;
+      }
+    }
+
+    const whereClause = whereConditions.join(' AND ');
+
+    // Summary
+    const summaryQuery = `
+      SELECT 
+        COUNT(*) as total_tickets,
+        COALESCE(SUM(wtrj.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_rejected wtrj
+      WHERE ${whereClause}
+    `;
+    
+    const summaryResult = await pool.query(summaryQuery, queryParams);
+
     res.json({
       success: true,
       data: {
-        summary: { total_tickets: 0, total_tons: '0.00' },
+        summary: {
+          total_tickets: parseInt(summaryResult.rows[0].total_tickets),
+          total_tons: formatNumber(summaryResult.rows[0].total_tons)
+        },
         suppliers: [],
         operators: [],
         tickets: [],
-        pagination: { current_page: 1, per_page: 10, total_records: 0, total_pages: 0 }
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total_records: parseInt(summaryResult.rows[0].total_tickets),
+          total_pages: Math.ceil(parseInt(summaryResult.rows[0].total_tickets) / parseInt(limit))
+        },
+        access_info: {
+          accessible_sectors: access.sectorIds.length,
+          access_type: access.accessType,
+          can_export: true
+        }
       }
     });
 
   } catch (error) {
-    console.error('❌ Rejected Tickets error:', error);
+    console.error('❌ getRejectedTickets error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch rejected tickets',
-      error: error.message
+      message: 'Eroare la obținerea raportului deșeuri refuzate',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

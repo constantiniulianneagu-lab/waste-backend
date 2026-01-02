@@ -1,21 +1,14 @@
 /**
  * ============================================================================
- * REPORTS LANDFILL CONTROLLER - FINAL VERSION FOR SUPABASE
+ * REPORTS LANDFILL CONTROLLER - UPDATED WITH ACCESS CONTROL
  * ============================================================================
  * 
- * Corect pentru structura REALĂ din Supabase:
- * - sectors.sector_name (NU sectors.name!)
- * - waste_tickets_landfill.generator_type
- * - waste_tickets_landfill.gross_weight_kg / 1000
- * - waste_tickets_landfill.contract_type
- * - waste_tickets_landfill.operation_type
- * 
- * Created: 2025-11-26
- * Updated: 2025-11-26 - Final fix for sector_name
+ * Updated: 2025-01-02 - Integrated with centralized access control
  * ============================================================================
  */
 
 import db from '../config/database.js';
+import { getAccessibleSectors } from '../utils/accessControl.js';
 
 /**
  * ============================================================================
@@ -44,6 +37,27 @@ export const getLandfillReports = async (req, res) => {
     const userId = req.user.id;
     const userRole = req.user.role;
 
+    // ✅ NOUA LOGICĂ: Calculează acces prin accessControl
+    const access = await getAccessibleSectors(userId, userRole);
+
+    console.log('🔐 Access control:', {
+      userId,
+      role: userRole,
+      accessType: access.accessType,
+      sectorsCount: access.sectorIds.length,
+      institutionName: access.institutionName,
+      canEdit: access.canEdit,
+      isPMB: access.isPMB
+    });
+
+    // Verifică dacă user-ul are acces la cel puțin un sector
+    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu ai acces la niciun sector'
+      });
+    }
+
     // Date range setup
     const currentDate = new Date();
     const currentYear = year || currentDate.getFullYear();
@@ -52,65 +66,53 @@ export const getLandfillReports = async (req, res) => {
 
     console.log('📅 Date range:', { startDate, endDate });
 
-    // RBAC - Sector filtering
+    // ✅ Sector filtering cu noua logică
     let sectorFilter = '';
     let sectorParams = [];
     let sectorName = 'București';
 
-    if (userRole === 'PLATFORM_ADMIN') {
-      console.log('✅ PLATFORM_ADMIN - full access');
+    if (sector_id) {
+      // User cere un sector specific
+      let sectorUuid = sector_id;
       
-      if (sector_id) {
-        sectorFilter = 'AND wtl.sector_id = $3';
-        sectorParams = [sector_id];
-        
-        const sectorQuery = 'SELECT sector_name FROM sectors WHERE id = $1';
-        const sectorResult = await db.query(sectorQuery, [sector_id]);
-        if (sectorResult.rows.length > 0) {
-          sectorName = sectorResult.rows[0].sector_name;
-        }
-      }
-    } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
-      console.log('🔒 Restricted user, checking accessible sectors...');
-      
-      const userSectorsQuery = `
-        SELECT DISTINCT is_table.sector_id, s.sector_name
-        FROM user_institutions ui
-        JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
-        JOIN sectors s ON is_table.sector_id = s.id
-        WHERE ui.user_id = $1 AND ui.deleted_at IS NULL
-      `;
-      
-      const userSectorsResult = await db.query(userSectorsQuery, [userId]);
-      const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
-      
-      if (userSectorIds.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: No sectors assigned'
-        });
-      }
-
-      if (sector_id) {
-        // Convert sector_id from string to UUID for comparison
-        const requestedSectorId = sector_id;
-        
-        if (!userSectorIds.includes(requestedSectorId)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Access denied: Sector not accessible'
-          });
-        }
-        sectorFilter = 'AND wtl.sector_id = $3';
-        sectorParams = [requestedSectorId];
-        
-        const sectorInfo = userSectorsResult.rows.find(s => s.sector_id === requestedSectorId);
-        if (sectorInfo) {
-          sectorName = sectorInfo.sector_name;
+      // Convertește sector_number → UUID dacă e necesar
+      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
+        const sectorQuery = await db.query(
+          'SELECT id, sector_name FROM sectors WHERE sector_number = $1 AND is_active = true',
+          [parseInt(sector_id)]
+        );
+        if (sectorQuery.rows.length > 0) {
+          sectorUuid = sectorQuery.rows[0].id;
+          sectorName = sectorQuery.rows[0].sector_name;
         }
       } else {
+        // E deja UUID
+        const sectorQuery = await db.query(
+          'SELECT sector_name FROM sectors WHERE id = $1',
+          [sector_id]
+        );
+        if (sectorQuery.rows.length > 0) {
+          sectorName = sectorQuery.rows[0].sector_name;
+        }
+      }
+
+      // Verifică dacă user-ul are acces la acest sector
+      if (access.accessType !== 'PLATFORM_ALL') {
+        if (!access.sectorIds.includes(sectorUuid)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Nu ai acces la acest sector'
+          });
+        }
+      }
+
+      sectorFilter = 'AND wtl.sector_id = $3';
+      sectorParams = [sectorUuid];
+    } else {
+      // User nu cere sector specific → filtrează automat la sectoarele accesibile
+      if (access.accessType !== 'PLATFORM_ALL') {
         sectorFilter = 'AND wtl.sector_id = ANY($3)';
-        sectorParams = [userSectorIds];
+        sectorParams = [access.sectorIds];
       }
     }
 
@@ -213,7 +215,7 @@ export const getLandfillReports = async (req, res) => {
     const countResult = await db.query(countQuery, baseParams);
     const totalCount = parseInt(countResult.rows[0].total);
 
-    // Fetch tickets - CORRECTED FOR SUPABASE SCHEMA
+    // Fetch tickets
     const ticketsQuery = `
       SELECT 
         wtl.id,
@@ -288,6 +290,14 @@ export const getLandfillReports = async (req, res) => {
           page: parseInt(page),
           per_page: parseInt(per_page),
           total_pages: Math.ceil(totalCount / per_page)
+        },
+        // ✅ Info pentru debugging/UI
+        access_info: {
+          accessible_sectors: access.sectorIds.length,
+          access_type: access.accessType,
+          institution_name: access.institutionName,
+          is_pmb: access.isPMB,
+          can_export: true
         }
       }
     });
@@ -297,7 +307,7 @@ export const getLandfillReports = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch reports',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -363,8 +373,6 @@ export const getAuxiliaryData = async (req, res) => {
  * ============================================================================
  * EXPORT LANDFILL REPORTS (toate datele filtrate, fără paginare)
  * ============================================================================
- * Același query ca getLandfillReports dar FĂRĂ LIMIT/OFFSET
- * ============================================================================
  */
 
 export const exportLandfillReports = async (req, res) => {
@@ -377,10 +385,23 @@ export const exportLandfillReports = async (req, res) => {
     const userId = req.user.id;
     const userRole = req.user.role;
 
-    // ========================================================================
-    // STEP 1: DATE RANGE SETUP
-    // ========================================================================
-    
+    // ✅ NOUA LOGICĂ: Calculează acces prin accessControl
+    const access = await getAccessibleSectors(userId, userRole);
+
+    console.log('🔐 Access control:', {
+      role: userRole,
+      accessType: access.accessType,
+      sectorsCount: access.sectorIds.length
+    });
+
+    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu ai acces la niciun sector'
+      });
+    }
+
+    // Date range setup
     const currentDate = new Date();
     const currentYear = year || currentDate.getFullYear();
     const startDate = from || `${currentYear}-01-01`;
@@ -388,64 +409,44 @@ export const exportLandfillReports = async (req, res) => {
 
     console.log('📅 Date range:', { startDate, endDate });
 
-    // ========================================================================
-    // STEP 2: RBAC - SECTOR FILTERING (EXACT CA ÎN getLandfillReports)
-    // ========================================================================
-
+    // ✅ Sector filtering
     let sectorFilter = '';
     let sectorParams = [];
 
-    if (userRole === 'PLATFORM_ADMIN') {
-      console.log('✅ PLATFORM_ADMIN - full access');
+    if (sector_id) {
+      let sectorUuid = sector_id;
       
-      if (sector_id) {
-        sectorFilter = 'AND wtl.sector_id = $3';
-        sectorParams = [sector_id];
-      }
-    } else if (userRole === 'INSTITUTION_ADMIN' || userRole === 'OPERATOR_USER') {
-      console.log('🔒 Restricted user, checking accessible sectors...');
-      
-      const userSectorsQuery = `
-        SELECT DISTINCT is_table.sector_id, s.sector_name
-        FROM user_institutions ui
-        JOIN institution_sectors is_table ON ui.institution_id = is_table.institution_id
-        JOIN sectors s ON is_table.sector_id = s.id
-        WHERE ui.user_id = $1 AND ui.deleted_at IS NULL
-      `;
-      
-      const userSectorsResult = await db.query(userSectorsQuery, [userId]);
-      const userSectorIds = userSectorsResult.rows.map(row => row.sector_id);
-      
-      if (userSectorIds.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: No sectors assigned'
-        });
+      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
+        const sectorQuery = await db.query(
+          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
+          [parseInt(sector_id)]
+        );
+        if (sectorQuery.rows.length > 0) {
+          sectorUuid = sectorQuery.rows[0].id;
+        }
       }
 
-      if (sector_id) {
-        const requestedSectorId = sector_id;
-        
-        if (!userSectorIds.includes(requestedSectorId)) {
+      if (access.accessType !== 'PLATFORM_ALL') {
+        if (!access.sectorIds.includes(sectorUuid)) {
           return res.status(403).json({
             success: false,
-            message: 'Access denied: Sector not accessible'
+            message: 'Nu ai acces la acest sector'
           });
         }
-        sectorFilter = 'AND wtl.sector_id = $3';
-        sectorParams = [requestedSectorId];
-      } else {
+      }
+
+      sectorFilter = 'AND wtl.sector_id = $3';
+      sectorParams = [sectorUuid];
+    } else {
+      if (access.accessType !== 'PLATFORM_ALL') {
         sectorFilter = 'AND wtl.sector_id = ANY($3)';
-        sectorParams = [userSectorIds];
+        sectorParams = [access.sectorIds];
       }
     }
 
     const baseParams = [startDate, endDate, ...sectorParams];
 
-    // ========================================================================
-    // STEP 3: COUNT TOTAL
-    // ========================================================================
-
+    // Count total
     console.log('🔢 Counting total records...');
 
     const countQuery = `
@@ -462,10 +463,7 @@ export const exportLandfillReports = async (req, res) => {
 
     console.log(`📊 Total records: ${totalCount}`);
 
-    // ========================================================================
-    // STEP 4: FETCH ALL TICKETS (FĂRĂ LIMIT/OFFSET!)
-    // ========================================================================
-
+    // Fetch ALL tickets (fără LIMIT/OFFSET)
     console.log('📋 Fetching ALL tickets for export...');
 
     const ticketsQuery = `
@@ -516,17 +514,18 @@ export const exportLandfillReports = async (req, res) => {
       operation: row.operation_type || `Eliminare ${row.sector_name}`
     }));
 
-    // ========================================================================
-    // STEP 5: RESPONSE
-    // ========================================================================
-
     console.log(`✅ Export data fetched successfully: ${tickets.length} records`);
 
     res.json({
       success: true,
       data: {
         tickets: tickets,
-        total_count: totalCount
+        total_count: totalCount,
+        access_info: {
+          accessible_sectors: access.sectorIds.length,
+          access_type: access.accessType,
+          can_export: true
+        }
       }
     });
 
@@ -535,7 +534,7 @@ export const exportLandfillReports = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to export reports',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
