@@ -2,9 +2,15 @@
 import pool from '../config/database.js';
 
 // GET ALL INSTITUTIONS (with sectors)
+// GET ALL INSTITUTIONS (with sectors) + SCOPE FILTERING
 export const getAllInstitutions = async (req, res) => {
   try {
     const { limit = 1000, type, search } = req.query;
+
+    const access = req.userAccess; // setat de resolveUserAccess
+    if (!access) {
+      return res.status(500).json({ success: false, message: 'Missing req.userAccess' });
+    }
 
     let whereConditions = ['i.deleted_at IS NULL'];
     const params = [];
@@ -22,6 +28,81 @@ export const getAllInstitutions = async (req, res) => {
       whereConditions.push(`(i.name ILIKE $${paramCount} OR i.short_name ILIKE $${paramCount})`);
       params.push(`%${search}%`);
       paramCount++;
+    }
+
+    // ------------------------------------------------------------
+    // VISIBILITY SCOPE:
+    // - PLATFORM_ADMIN: vede tot
+    // - ADMIN/EDITOR (PMB): vede tot
+    // - ADMIN/EDITOR (S1..S6): vede doar:
+    //   a) instituțiile asociate în institution_sectors la sectorul lor
+    //   b) instituțiile care apar în tichete pe sectorul lor (supplier/recipient/operator)
+    //   c) propria instituție (ca fallback)
+    // ------------------------------------------------------------
+    if (access.accessLevel !== 'ALL') {
+      // $X = institutionId
+      const instParam = paramCount;
+      params.push(access.institutionId);
+      paramCount++;
+
+      // $Y = sectorIds uuid[]
+      const sectorParam = paramCount;
+      params.push(access.sectorIds);
+      paramCount++;
+
+      whereConditions.push(`
+        (
+          i.id = $${instParam}
+          OR EXISTS (
+            SELECT 1
+            FROM institution_sectors ins
+            WHERE ins.institution_id = i.id
+              AND ins.sector_id = ANY($${sectorParam}::uuid[])
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM waste_tickets_landfill w
+            WHERE w.deleted_at IS NULL
+              AND w.sector_id = ANY($${sectorParam}::uuid[])
+              AND w.supplier_id = i.id
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM waste_tickets_tmb w
+            WHERE w.deleted_at IS NULL
+              AND w.sector_id = ANY($${sectorParam}::uuid[])
+              AND (w.supplier_id = i.id OR w.operator_id = i.id)
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM waste_tickets_recycling w
+            WHERE w.deleted_at IS NULL
+              AND w.sector_id = ANY($${sectorParam}::uuid[])
+              AND (w.supplier_id = i.id OR w.recipient_id = i.id)
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM waste_tickets_recovery w
+            WHERE w.deleted_at IS NULL
+              AND w.sector_id = ANY($${sectorParam}::uuid[])
+              AND (w.supplier_id = i.id OR w.recipient_id = i.id)
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM waste_tickets_disposal w
+            WHERE w.deleted_at IS NULL
+              AND w.sector_id = ANY($${sectorParam}::uuid[])
+              AND (w.supplier_id = i.id OR w.recipient_id = i.id)
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM waste_tickets_rejected w
+            WHERE w.deleted_at IS NULL
+              AND w.sector_id = ANY($${sectorParam}::uuid[])
+              AND (w.supplier_id = i.id OR w.operator_id = i.id)
+          )
+        )
+      `);
     }
 
     const whereClause = whereConditions.join(' AND ');
@@ -85,7 +166,6 @@ export const getAllInstitutions = async (req, res) => {
         total: result.rows.length
       }
     });
-
   } catch (error) {
     console.error('Get institutions error:', error);
     res.status(500).json({
@@ -95,10 +175,87 @@ export const getAllInstitutions = async (req, res) => {
   }
 };
 
-// GET SINGLE INSTITUTION
+
+// GET SINGLE INSTITUTION + SCOPE CHECK
 export const getInstitutionById = async (req, res) => {
   try {
     const { id } = req.params;
+
+    const access = req.userAccess;
+    if (!access) {
+      return res.status(500).json({ success: false, message: 'Missing req.userAccess' });
+    }
+
+    // Dacă user-ul nu are ALL, verificăm dacă instituția e în aria lui
+    if (access.accessLevel !== 'ALL') {
+      const canSeeQ = await pool.query(
+        `
+        SELECT 1
+        FROM institutions i
+        WHERE i.id = $1 AND i.deleted_at IS NULL
+          AND (
+            i.id = $2
+            OR EXISTS (
+              SELECT 1
+              FROM institution_sectors ins
+              WHERE ins.institution_id = i.id
+                AND ins.sector_id = ANY($3::uuid[])
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM waste_tickets_landfill w
+              WHERE w.deleted_at IS NULL
+                AND w.sector_id = ANY($3::uuid[])
+                AND w.supplier_id = i.id
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM waste_tickets_tmb w
+              WHERE w.deleted_at IS NULL
+                AND w.sector_id = ANY($3::uuid[])
+                AND (w.supplier_id = i.id OR w.operator_id = i.id)
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM waste_tickets_recycling w
+              WHERE w.deleted_at IS NULL
+                AND w.sector_id = ANY($3::uuid[])
+                AND (w.supplier_id = i.id OR w.recipient_id = i.id)
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM waste_tickets_recovery w
+              WHERE w.deleted_at IS NULL
+                AND w.sector_id = ANY($3::uuid[])
+                AND (w.supplier_id = i.id OR w.recipient_id = i.id)
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM waste_tickets_disposal w
+              WHERE w.deleted_at IS NULL
+                AND w.sector_id = ANY($3::uuid[])
+                AND (w.supplier_id = i.id OR w.recipient_id = i.id)
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM waste_tickets_rejected w
+              WHERE w.deleted_at IS NULL
+                AND w.sector_id = ANY($3::uuid[])
+                AND (w.supplier_id = i.id OR w.operator_id = i.id)
+            )
+          )
+        LIMIT 1
+        `,
+        [id, access.institutionId, access.sectorIds]
+      );
+
+      if (canSeeQ.rows.length === 0) {
+        return res.status(403).json({
+          success: false,
+          message: 'Nu aveți acces la această instituție'
+        });
+      }
+    }
 
     const result = await pool.query(
       `SELECT id, name, short_name, type, sector, contact_email, contact_phone,
@@ -128,6 +285,7 @@ export const getInstitutionById = async (req, res) => {
     });
   }
 };
+
 
 // CREATE INSTITUTION - păstrăm așa cum e (nu schimbăm)
 export const createInstitution = async (req, res) => {

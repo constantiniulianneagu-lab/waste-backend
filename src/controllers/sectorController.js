@@ -5,10 +5,24 @@ import pool from '../config/database.js';
 // SECTOR MANAGEMENT
 // ============================================================================
 
-// GET ALL SECTORS (cu instituții asociate)
+// GET ALL SECTORS (cu instituții asociate) + SCOPE FILTERING
 export const getAllSectors = async (req, res) => {
   try {
     const { includeInstitutions = 'true' } = req.query;
+
+    const access = req.userAccess;
+    if (!access) {
+      return res.status(500).json({ success: false, message: 'Missing req.userAccess' });
+    }
+
+    const params = [];
+    let whereExtra = '';
+
+    // Dacă nu e ALL, filtrăm doar la sectorIds
+    if (access.accessLevel !== 'ALL') {
+      params.push(access.sectorIds);
+      whereExtra = ` AND s.id = ANY($1::uuid[]) `;
+    }
 
     let query = `
       SELECT 
@@ -24,7 +38,6 @@ export const getAllSectors = async (req, res) => {
         s.updated_at
     `;
 
-    // Adaugă instituții asociate dacă e cerut
     if (includeInstitutions === 'true') {
       query += `,
         (
@@ -45,14 +58,15 @@ export const getAllSectors = async (req, res) => {
 
     query += `
       FROM sectors s
-      WHERE s.is_active = true 
+      WHERE s.is_active = true
         AND (s.deleted_at IS NULL OR s.deleted_at > NOW())
+        ${whereExtra}
       ORDER BY s.sector_number ASC
     `;
 
-    const result = await pool.query(query);
+    const result = await pool.query(query, params);
 
-    // Statistici
+    // Stats (și ele filtrate)
     const statsQuery = `
       SELECT 
         s.sector_number,
@@ -66,11 +80,12 @@ export const getAllSectors = async (req, res) => {
       LEFT JOIN institutions i ON ins.institution_id = i.id AND i.deleted_at IS NULL
       WHERE s.is_active = true 
         AND (s.deleted_at IS NULL OR s.deleted_at > NOW())
+        ${access.accessLevel !== 'ALL' ? ' AND s.id = ANY($1::uuid[]) ' : ''}
       GROUP BY s.id, s.sector_number
       ORDER BY s.sector_number
     `;
 
-    const statsResult = await pool.query(statsQuery);
+    const statsResult = await pool.query(statsQuery, params);
 
     res.json({
       success: true,
@@ -86,10 +101,23 @@ export const getAllSectors = async (req, res) => {
   }
 };
 
-// GET SECTOR BY ID
+
+// GET SECTOR BY ID + SCOPE CHECK
 export const getSectorById = async (req, res) => {
   try {
     const { id } = req.params;
+
+    const access = req.userAccess;
+    if (!access) {
+      return res.status(500).json({ success: false, message: 'Missing req.userAccess' });
+    }
+
+    if (access.accessLevel !== 'ALL' && !access.sectorIds.includes(id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Nu aveți acces la acest sector'
+      });
+    }
 
     const query = `
       SELECT 
@@ -145,6 +173,7 @@ export const getSectorById = async (req, res) => {
     });
   }
 };
+
 
 // UPDATE SECTOR (nume, descriere, date generale)
 export const updateSector = async (req, res) => {
