@@ -1,62 +1,38 @@
-// src/routes/tickets/tmb.js
+// ============================================================================
+// src/routes/tickets/tmb.js  (COMPLET)
+// ============================================================================
+// Base: /api/tickets/tmb
+// ============================================================================
+
 import express from 'express';
-import { 
+
+import {
   getAllTmbTickets,
   getTmbTicketById,
   createTmbTicket,
   updateTmbTicket,
   deleteTmbTicket,
-  getTmbStats
+  getTmbStats,
 } from '../../controllers/wasteTicketsTmbController.js';
-import { authenticateToken, authorizeRoles } from '../../middleware/auth.js';
+
+import { authenticateToken, authorizeAdminOnly } from '../../middleware/auth.js';
+import { resolveUserAccess } from '../../middleware/resolveUserAccess.js';
+import { enforceSectorAccess } from '../../middleware/enforceSectorAccess.js';
 
 const router = express.Router();
 
-// Toate route-urile necesită autentificare
 router.use(authenticateToken);
+router.use(resolveUserAccess);
+router.use(enforceSectorAccess);
 
-// ============================================================================
-// GET ROUTES
-// ============================================================================
-
-// GET stats - toți utilizatorii autentificați pot vedea stats
+// READ
 router.get('/stats', getTmbStats);
-
-// GET all tickets - toți utilizatorii autentificați
 router.get('/', getAllTmbTickets);
-
-// GET single ticket by ID - toți utilizatorii autentificați
 router.get('/:id', getTmbTicketById);
 
-// ============================================================================
-// POST ROUTES
-// ============================================================================
-
-// CREATE ticket - doar PLATFORM_ADMIN și OPERATOR_USER
-// CRITICAL: Backend validează automat waste_code = '20 03 01' DOAR!
-router.post('/', 
-  authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), 
-  createTmbTicket
-);
-
-// ============================================================================
-// PUT ROUTES
-// ============================================================================
-
-// UPDATE ticket - doar PLATFORM_ADMIN și OPERATOR_USER
-router.put('/:id', 
-  authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), 
-  updateTmbTicket
-);
-
-// ============================================================================
-// DELETE ROUTES
-// ============================================================================
-
-// DELETE ticket (soft delete) - doar PLATFORM_ADMIN
-router.delete('/:id', 
-  authorizeRoles('PLATFORM_ADMIN'), 
-  deleteTmbTicket
-);
+// WRITE
+router.post('/', authorizeAdminOnly, createTmbTicket);
+router.put('/:id', authorizeAdminOnly, updateTmbTicket);
+router.delete('/:id', authorizeAdminOnly, deleteTmbTicket);
 
 export default router;

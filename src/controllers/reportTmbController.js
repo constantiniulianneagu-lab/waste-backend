@@ -1,829 +1,215 @@
+// src/controllers/reportTmbController.js
 // ============================================================================
-// RAPORTARE TMB CONTROLLER
-// ============================================================================
-// Endpoint-uri pentru toate cele 5 tab-uri:
-// 1. Deșeuri trimise la TMB (waste_tickets_tmb)
-// 2. Deșeuri trimise la reciclare (waste_tickets_recycling)
-// 3. Deșeuri trimise la valorificare (waste_tickets_recovery)
-// 4. Deșeuri trimise la depozitare (waste_tickets_disposal)
-// 5. Deșeuri refuzate (waste_tickets_rejected)
+// REPORT: TMB INPUT TICKETS (RBAC via req.userAccess, UUID sector scoping)
+// Route: GET /api/reports/tmb/tmb
 // ============================================================================
 
 import pool from '../config/database.js';
-import { getAccessibleSectors } from '../utils/accessControl.js';
 
-const formatNumber = (num) => {
-  return num ? parseFloat(num).toFixed(2) : '0.00';
+const clampInt = (v, min, max, fallback) => {
+  const n = parseInt(String(v), 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+};
+const isNonEmpty = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+const isoDate = (d) => new Date(d).toISOString().split('T')[0];
+
+const assertValidDate = (dateStr, fieldName) => {
+  if (!dateStr || typeof dateStr !== 'string') throw new Error(`Invalid ${fieldName}`);
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) throw new Error(`Invalid ${fieldName}: ${dateStr}`);
+  return dateStr;
 };
 
-// ============================================================================
-// GET TMB TICKETS (Tab 1 - Intrări în TMB)
-// ============================================================================
+const buildSectorScope = (req, alias = 't') => {
+  const access = req.userAccess;
+  if (!access) throw new Error('Missing req.userAccess (resolveUserAccess not applied)');
+
+  const isAll = access.accessLevel === 'ALL';
+  const sectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+  const requestedSectorUuid = req.requestedSectorUuid || null;
+
+  let sectorWhere = '';
+  const sectorParams = [];
+
+  if (requestedSectorUuid) {
+    sectorWhere = `AND ${alias}.sector_id = ${{}}`;
+    sectorParams.push(requestedSectorUuid);
+  } else if (!isAll) {
+    sectorWhere = `AND ${alias}.sector_id = ANY(${{}})`;
+    sectorParams.push(sectorIds);
+  }
+
+  return { isAll, sectorIds, requestedSectorUuid, sectorWhere, sectorParams };
+};
+
+const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
+  let idx = startIndex;
+  return sqlWithPlaceholders.replace(/\$\{\{\}\}/g, () => `$${idx++}`);
+};
+
+const buildFilters = (req, alias = 't') => {
+  const { year, from, to, supplier_id, operator_id, waste_code_id, generator_type, search } = req.query;
+
+  const now = new Date();
+  const y = isNonEmpty(year) ? clampInt(year, 2000, 2100, now.getFullYear()) : now.getFullYear();
+  const startDate = assertValidDate(from || `${y}-01-01`, 'from');
+  const endDate = assertValidDate(to || isoDate(now), 'to');
+
+  if (new Date(startDate) > new Date(endDate)) {
+    const err = new Error('`from` must be <= `to`');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const where = [
+    `${alias}.deleted_at IS NULL`,
+    `${alias}.ticket_date >= $1`,
+    `${alias}.ticket_date <= $2`,
+  ];
+  const params = [startDate, endDate];
+  let p = 3;
+
+  const scope = buildSectorScope(req, alias);
+  if (scope.sectorWhere) {
+    where.push(applyParamIndex(scope.sectorWhere, p));
+    params.push(...scope.sectorParams);
+    p += scope.sectorParams.length;
+  }
+
+  if (isNonEmpty(supplier_id)) {
+    where.push(`${alias}.supplier_id = $${p++}`);
+    params.push(parseInt(String(supplier_id), 10));
+  }
+  if (isNonEmpty(operator_id)) {
+    where.push(`${alias}.operator_id = $${p++}`);
+    params.push(parseInt(String(operator_id), 10));
+  }
+  if (isNonEmpty(waste_code_id)) {
+    where.push(`${alias}.waste_code_id = $${p++}`);
+    params.push(String(waste_code_id));
+  }
+  if (isNonEmpty(generator_type)) {
+    where.push(`${alias}.generator_type = $${p++}`);
+    params.push(String(generator_type));
+  }
+  if (isNonEmpty(search)) {
+    where.push(`(${alias}.ticket_number ILIKE $${p} OR ${alias}.vehicle_number ILIKE $${p})`);
+    params.push(`%${String(search).trim()}%`);
+    p++;
+  }
+
+  return { whereSql: where.join(' AND '), params, nextIndex: p, startDate, endDate, year: y };
+};
+
 export const getTmbTickets = async (req, res) => {
-  console.log('\n📊 ==================== TMB TICKETS REPORT ====================');
-  console.log('📥 Query params:', req.query);
-  console.log('👤 User:', { id: req.user.id, role: req.user.role });
-  
   try {
-    const { 
-      start_date, 
-      end_date, 
-      year,
-      sector_id,
+    const {
       page = 1,
-      limit = 10,
+      limit = 50,
       sort_by = 'ticket_date',
-      sort_order = 'DESC'
+      sort_dir = 'desc',
     } = req.query;
 
-    const userId = req.user.id;
-    const userRole = req.user.role;
+    const pageNum = clampInt(page, 1, 1000000, 1);
+    const limitNum = clampInt(limit, 1, 500, 50);
+    const offset = (pageNum - 1) * limitNum;
 
-    // ✅ NOUA LOGICĂ: Calculează acces prin accessControl
-    const access = await getAccessibleSectors(userId, userRole);
+    const f = buildFilters(req, 't');
 
-    console.log('🔐 Access control:', {
-      userId,
-      role: userRole,
-      accessType: access.accessType,
-      sectorsCount: access.sectorIds.length,
-      institutionName: access.institutionName,
-      canEdit: access.canEdit,
-      isPMB: access.isPMB
-    });
+    const sortMap = {
+      ticket_date: 't.ticket_date',
+      ticket_number: 't.ticket_number',
+      sector_number: 's.sector_number',
+      supplier_name: 'sup.name',
+      operator_name: 'op.name',
+      net_weight_tons: 't.net_weight_tons',
+    };
+    const sortCol = sortMap[sort_by] || 't.ticket_date';
+    const dir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
-    // Verifică dacă user-ul are acces la cel puțin un sector
-    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
-      return res.status(403).json({
-        success: false,
-        message: 'Nu ai acces la niciun sector'
-      });
-    }
-
-    // Build WHERE clause
-    let whereConditions = ['wtt.deleted_at IS NULL'];
-    let queryParams = [];
-    let paramIndex = 1;
-
-    // Date filters
-    if (year) {
-      whereConditions.push(`EXTRACT(YEAR FROM wtt.ticket_date) = $${paramIndex}`);
-      queryParams.push(parseInt(year));
-      paramIndex++;
-    } else {
-      if (start_date) {
-        whereConditions.push(`wtt.ticket_date >= $${paramIndex}`);
-        queryParams.push(start_date);
-        paramIndex++;
-      }
-      if (end_date) {
-        whereConditions.push(`wtt.ticket_date <= $${paramIndex}`);
-        queryParams.push(end_date);
-        paramIndex++;
-      }
-    }
-
-    // ✅ Sector filtering cu noua logică
-    if (sector_id) {
-      // User cere un sector specific
-      let sectorUuid = sector_id;
-      
-      // Convertește sector_number → UUID dacă e necesar
-      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
-        const sectorQuery = await pool.query(
-          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
-          [parseInt(sector_id)]
-        );
-        if (sectorQuery.rows.length > 0) {
-          sectorUuid = sectorQuery.rows[0].id;
-        }
-      }
-
-      // Verifică dacă user-ul are acces la acest sector
-      if (access.accessType !== 'PLATFORM_ALL') {
-        if (!access.sectorIds.includes(sectorUuid)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Nu ai acces la acest sector'
-          });
-        }
-      }
-
-      whereConditions.push(`wtt.sector_id = $${paramIndex}`);
-      queryParams.push(sectorUuid);
-      paramIndex++;
-    } else {
-      // User nu cere sector specific → filtrează automat la sectoarele accesibile
-      if (access.accessType !== 'PLATFORM_ALL') {
-        whereConditions.push(`wtt.sector_id = ANY($${paramIndex})`);
-        queryParams.push(access.sectorIds);
-        paramIndex++;
-      }
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    console.log('🔍 WHERE clause:', whereClause);
-    console.log('📊 Query params:', queryParams);
-
-    // 1. GET SUMMARY STATS
-    const summaryQuery = `
-      SELECT 
-        COUNT(*) as total_tickets,
-        COALESCE(SUM(wtt.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_tmb wtt
-      WHERE ${whereClause}
+    const countSql = `
+      SELECT COUNT(*)::INTEGER AS total
+      FROM waste_tickets_tmb t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions sup ON t.supplier_id = sup.id
+      JOIN institutions op ON t.operator_id = op.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
     `;
-    
-    const summaryResult = await pool.query(summaryQuery, queryParams);
-    const summary = summaryResult.rows[0];
+    const countRes = await pool.query(countSql, f.params);
+    const total = countRes.rows[0]?.total || 0;
 
-    console.log('📈 Summary:', summary);
+    const listParams = [...f.params];
+    const pLimit = f.nextIndex;
+    const pOffset = f.nextIndex + 1;
+    listParams.push(limitNum, offset);
 
-    // 2. GET TOP SUPPLIERS (Furnizori - colectori)
-    const suppliersQuery = `
-      SELECT 
-        i.id,
-        i.name,
-        s.sector_name,
-        wc.code,
-        wc.description,
-        COALESCE(SUM(wtt.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_tmb wtt
-      JOIN institutions i ON wtt.supplier_id = i.id
-      JOIN sectors s ON wtt.sector_id = s.id
-      JOIN waste_codes wc ON wtt.waste_code_id = wc.id
-      WHERE ${whereClause}
-      GROUP BY i.id, i.name, s.sector_name, wc.code, wc.description
-      ORDER BY total_tons DESC
-      LIMIT 10
-    `;
-    
-    const suppliersResult = await pool.query(suppliersQuery, queryParams);
-
-    // 3. GET TOP OPERATORS (Prestatori - operatori TMB)
-    const operatorsQuery = `
-      SELECT 
-        i.id,
-        i.name,
-        COALESCE(SUM(wtt.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_tmb wtt
-      JOIN institutions i ON wtt.operator_id = i.id
-      WHERE ${whereClause}
-      GROUP BY i.id, i.name
-      ORDER BY total_tons DESC
-      LIMIT 10
-    `;
-    
-    const operatorsResult = await pool.query(operatorsQuery, queryParams);
-
-    // 4. GET PAGINATED TICKETS
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    
-    const ticketsQuery = `
-      SELECT 
-        wtt.id,
-        wtt.ticket_number,
-        wtt.ticket_date,
-        wtt.ticket_time,
-        wtt.net_weight_tons,
-        wtt.net_weight_kg,
-        wtt.vehicle_number,
-        wtt.generator_type,
-        supplier.name as supplier_name,
-        operator.name as operator_name,
-        s.sector_name,
+    const listSql = `
+      SELECT
+        t.id,
+        t.ticket_number,
+        t.ticket_date,
+        t.ticket_time,
+        s.id as sector_id,
         s.sector_number,
+        s.sector_name,
+        sup.id as supplier_id,
+        sup.name as supplier_name,
+        op.id as operator_id,
+        op.name as operator_name,
+        wc.id as waste_code_id,
         wc.code as waste_code,
-        wc.description as waste_description
-      FROM waste_tickets_tmb wtt
-      JOIN institutions supplier ON wtt.supplier_id = supplier.id
-      JOIN institutions operator ON wtt.operator_id = operator.id
-      JOIN sectors s ON wtt.sector_id = s.id
-      JOIN waste_codes wc ON wtt.waste_code_id = wc.id
-      WHERE ${whereClause}
-      ORDER BY wtt.${sort_by} ${sort_order}
-      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        wc.description as waste_description,
+        t.vehicle_number,
+        t.generator_type,
+        t.net_weight_kg,
+        t.net_weight_tons,
+        t.created_at
+      FROM waste_tickets_tmb t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions sup ON t.supplier_id = sup.id
+      JOIN institutions op ON t.operator_id = op.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
+      ORDER BY ${sortCol} ${dir}, t.created_at ${dir}
+      LIMIT $${pLimit} OFFSET $${pOffset}
     `;
-    
-    queryParams.push(parseInt(limit), offset);
-    const ticketsResult = await pool.query(ticketsQuery, queryParams);
+    const listRes = await pool.query(listSql, listParams);
 
-    console.log(`✅ Found ${ticketsResult.rows.length} tickets for current page`);
+    const summarySql = `
+      SELECT
+        COUNT(*)::INTEGER as total_tickets,
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons,
+        COALESCE(AVG(t.net_weight_tons), 0) as avg_tons_per_ticket
+      FROM waste_tickets_tmb t
+      WHERE ${f.whereSql}
+    `;
+    const summaryRes = await pool.query(summarySql, f.params);
 
-    res.json({
+    return res.json({
       success: true,
       data: {
-        summary: {
-          total_tickets: parseInt(summary.total_tickets),
-          total_tons: formatNumber(summary.total_tons)
-        },
-        suppliers: suppliersResult.rows,
-        operators: operatorsResult.rows,
-        tickets: ticketsResult.rows,
+        items: listRes.rows,
         pagination: {
-          current_page: parseInt(page),
-          per_page: parseInt(limit),
-          total_records: parseInt(summary.total_tickets),
-          total_pages: Math.ceil(parseInt(summary.total_tickets) / parseInt(limit))
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
         },
-        // ✅ Info pentru debugging/UI
-        access_info: {
-          accessible_sectors: access.sectorIds.length,
-          access_type: access.accessType,
-          institution_name: access.institutionName,
-          is_pmb: access.isPMB,
-          can_export: true  // Toți pot exporta
-        }
-      }
+        summary: {
+          total_tickets: summaryRes.rows[0]?.total_tickets || 0,
+          total_tons: Number(summaryRes.rows[0]?.total_tons || 0),
+          avg_tons_per_ticket: Number(summaryRes.rows[0]?.avg_tons_per_ticket || 0),
+          date_range: { from: f.startDate, to: f.endDate },
+        },
+      },
     });
-
-  } catch (error) {
-    console.error('❌ getTmbTickets error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea raportului TMB',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+  } catch (err) {
+    console.error('getTmbTickets error:', err);
+    const code = err.statusCode || 500;
+    return res.status(code).json({ success: false, message: 'Failed to fetch TMB report', error: err.message });
   }
 };
 
-// ============================================================================
-// GET RECYCLING TICKETS (Tab 2 - Ieșiri reciclare)
-// ============================================================================
-export const getRecyclingTickets = async (req, res) => {
-  console.log('\n♻️ ==================== RECYCLING TICKETS REPORT ====================');
-  console.log('📥 Query params:', req.query);
-  console.log('👤 User:', { id: req.user.id, role: req.user.role });
-  
-  try {
-    const { 
-      start_date, 
-      end_date, 
-      year,
-      sector_id,
-      page = 1,
-      limit = 10,
-      sort_by = 'ticket_date',
-      sort_order = 'DESC'
-    } = req.query;
-
-    const userId = req.user.id;
-    const userRole = req.user.role;
-
-    // ✅ Calculează acces
-    const access = await getAccessibleSectors(userId, userRole);
-
-    console.log('🔐 Access control:', {
-      role: userRole,
-      accessType: access.accessType,
-      sectorsCount: access.sectorIds.length
-    });
-
-    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
-      return res.status(403).json({
-        success: false,
-        message: 'Nu ai acces la niciun sector'
-      });
-    }
-
-    // Build WHERE clause
-    let whereConditions = ['wtr.deleted_at IS NULL'];
-    let queryParams = [];
-    let paramIndex = 1;
-
-    // Date filters
-    if (year) {
-      whereConditions.push(`EXTRACT(YEAR FROM wtr.ticket_date) = $${paramIndex}`);
-      queryParams.push(parseInt(year));
-      paramIndex++;
-    } else {
-      if (start_date) {
-        whereConditions.push(`wtr.ticket_date >= $${paramIndex}`);
-        queryParams.push(start_date);
-        paramIndex++;
-      }
-      if (end_date) {
-        whereConditions.push(`wtr.ticket_date <= $${paramIndex}`);
-        queryParams.push(end_date);
-        paramIndex++;
-      }
-    }
-
-    // ✅ Sector filtering
-    if (sector_id) {
-      let sectorUuid = sector_id;
-      
-      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
-        const sectorQuery = await pool.query(
-          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
-          [parseInt(sector_id)]
-        );
-        if (sectorQuery.rows.length > 0) {
-          sectorUuid = sectorQuery.rows[0].id;
-        }
-      }
-
-      if (access.accessType !== 'PLATFORM_ALL') {
-        if (!access.sectorIds.includes(sectorUuid)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Nu ai acces la acest sector'
-          });
-        }
-      }
-
-      whereConditions.push(`wtr.sector_id = $${paramIndex}`);
-      queryParams.push(sectorUuid);
-      paramIndex++;
-    } else {
-      if (access.accessType !== 'PLATFORM_ALL') {
-        whereConditions.push(`wtr.sector_id = ANY($${paramIndex})`);
-        queryParams.push(access.sectorIds);
-        paramIndex++;
-      }
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    // Summary
-    const summaryQuery = `
-      SELECT 
-        COUNT(*) as total_tickets,
-        COALESCE(SUM(wtr.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_recycling wtr
-      WHERE ${whereClause}
-    `;
-    
-    const summaryResult = await pool.query(summaryQuery, queryParams);
-
-    res.json({
-      success: true,
-      data: {
-        summary: {
-          total_tickets: parseInt(summaryResult.rows[0].total_tickets),
-          total_tons: formatNumber(summaryResult.rows[0].total_tons)
-        },
-        suppliers: [],
-        recipients: [],
-        tickets: [],
-        pagination: {
-          current_page: parseInt(page),
-          per_page: parseInt(limit),
-          total_records: parseInt(summaryResult.rows[0].total_tickets),
-          total_pages: Math.ceil(parseInt(summaryResult.rows[0].total_tickets) / parseInt(limit))
-        },
-        access_info: {
-          accessible_sectors: access.sectorIds.length,
-          access_type: access.accessType,
-          can_export: true
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ getRecyclingTickets error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea raportului reciclare',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// ============================================================================
-// GET RECOVERY TICKETS (Tab 3 - Ieșiri valorificare)
-// ============================================================================
-export const getRecoveryTickets = async (req, res) => {
-  console.log('\n⚡ ==================== RECOVERY TICKETS REPORT ====================');
-  console.log('📥 Query params:', req.query);
-  console.log('👤 User:', { id: req.user.id, role: req.user.role });
-  
-  try {
-    const { 
-      start_date, 
-      end_date, 
-      year,
-      sector_id,
-      page = 1,
-      limit = 10,
-      sort_by = 'ticket_date',
-      sort_order = 'DESC'
-    } = req.query;
-
-    const userId = req.user.id;
-    const userRole = req.user.role;
-
-    // ✅ Calculează acces
-    const access = await getAccessibleSectors(userId, userRole);
-
-    console.log('🔐 Access control:', {
-      role: userRole,
-      accessType: access.accessType,
-      sectorsCount: access.sectorIds.length
-    });
-
-    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
-      return res.status(403).json({
-        success: false,
-        message: 'Nu ai acces la niciun sector'
-      });
-    }
-
-    // Build WHERE clause
-    let whereConditions = ['wtv.deleted_at IS NULL'];
-    let queryParams = [];
-    let paramIndex = 1;
-
-    // Date filters
-    if (year) {
-      whereConditions.push(`EXTRACT(YEAR FROM wtv.ticket_date) = $${paramIndex}`);
-      queryParams.push(parseInt(year));
-      paramIndex++;
-    } else {
-      if (start_date) {
-        whereConditions.push(`wtv.ticket_date >= $${paramIndex}`);
-        queryParams.push(start_date);
-        paramIndex++;
-      }
-      if (end_date) {
-        whereConditions.push(`wtv.ticket_date <= $${paramIndex}`);
-        queryParams.push(end_date);
-        paramIndex++;
-      }
-    }
-
-    // ✅ Sector filtering
-    if (sector_id) {
-      let sectorUuid = sector_id;
-      
-      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
-        const sectorQuery = await pool.query(
-          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
-          [parseInt(sector_id)]
-        );
-        if (sectorQuery.rows.length > 0) {
-          sectorUuid = sectorQuery.rows[0].id;
-        }
-      }
-
-      if (access.accessType !== 'PLATFORM_ALL') {
-        if (!access.sectorIds.includes(sectorUuid)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Nu ai acces la acest sector'
-          });
-        }
-      }
-
-      whereConditions.push(`wtv.sector_id = $${paramIndex}`);
-      queryParams.push(sectorUuid);
-      paramIndex++;
-    } else {
-      if (access.accessType !== 'PLATFORM_ALL') {
-        whereConditions.push(`wtv.sector_id = ANY($${paramIndex})`);
-        queryParams.push(access.sectorIds);
-        paramIndex++;
-      }
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    // Summary
-    const summaryQuery = `
-      SELECT 
-        COUNT(*) as total_tickets,
-        COALESCE(SUM(wtv.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_recovery wtv
-      WHERE ${whereClause}
-    `;
-    
-    const summaryResult = await pool.query(summaryQuery, queryParams);
-
-    res.json({
-      success: true,
-      data: {
-        summary: {
-          total_tickets: parseInt(summaryResult.rows[0].total_tickets),
-          total_tons: formatNumber(summaryResult.rows[0].total_tons)
-        },
-        suppliers: [],
-        recipients: [],
-        tickets: [],
-        pagination: {
-          current_page: parseInt(page),
-          per_page: parseInt(limit),
-          total_records: parseInt(summaryResult.rows[0].total_tickets),
-          total_pages: Math.ceil(parseInt(summaryResult.rows[0].total_tickets) / parseInt(limit))
-        },
-        access_info: {
-          accessible_sectors: access.sectorIds.length,
-          access_type: access.accessType,
-          can_export: true
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ getRecoveryTickets error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea raportului valorificare',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// ============================================================================
-// GET DISPOSAL TICKETS (Tab 4 - Ieșiri depozitare)
-// ============================================================================
-export const getDisposalTickets = async (req, res) => {
-  console.log('\n🗑️ ==================== DISPOSAL TICKETS REPORT ====================');
-  console.log('📥 Query params:', req.query);
-  console.log('👤 User:', { id: req.user.id, role: req.user.role });
-  
-  try {
-    const { 
-      start_date, 
-      end_date, 
-      year,
-      sector_id,
-      page = 1,
-      limit = 10,
-      sort_by = 'ticket_date',
-      sort_order = 'DESC'
-    } = req.query;
-
-    const userId = req.user.id;
-    const userRole = req.user.role;
-
-    // ✅ Calculează acces
-    const access = await getAccessibleSectors(userId, userRole);
-
-    console.log('🔐 Access control:', {
-      role: userRole,
-      accessType: access.accessType,
-      sectorsCount: access.sectorIds.length
-    });
-
-    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
-      return res.status(403).json({
-        success: false,
-        message: 'Nu ai acces la niciun sector'
-      });
-    }
-
-    // Build WHERE clause
-    let whereConditions = ['wtd.deleted_at IS NULL'];
-    let queryParams = [];
-    let paramIndex = 1;
-
-    // Date filters
-    if (year) {
-      whereConditions.push(`EXTRACT(YEAR FROM wtd.ticket_date) = $${paramIndex}`);
-      queryParams.push(parseInt(year));
-      paramIndex++;
-    } else {
-      if (start_date) {
-        whereConditions.push(`wtd.ticket_date >= $${paramIndex}`);
-        queryParams.push(start_date);
-        paramIndex++;
-      }
-      if (end_date) {
-        whereConditions.push(`wtd.ticket_date <= $${paramIndex}`);
-        queryParams.push(end_date);
-        paramIndex++;
-      }
-    }
-
-    // ✅ Sector filtering
-    if (sector_id) {
-      let sectorUuid = sector_id;
-      
-      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
-        const sectorQuery = await pool.query(
-          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
-          [parseInt(sector_id)]
-        );
-        if (sectorQuery.rows.length > 0) {
-          sectorUuid = sectorQuery.rows[0].id;
-        }
-      }
-
-      if (access.accessType !== 'PLATFORM_ALL') {
-        if (!access.sectorIds.includes(sectorUuid)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Nu ai acces la acest sector'
-          });
-        }
-      }
-
-      whereConditions.push(`wtd.sector_id = $${paramIndex}`);
-      queryParams.push(sectorUuid);
-      paramIndex++;
-    } else {
-      if (access.accessType !== 'PLATFORM_ALL') {
-        whereConditions.push(`wtd.sector_id = ANY($${paramIndex})`);
-        queryParams.push(access.sectorIds);
-        paramIndex++;
-      }
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    // Summary
-    const summaryQuery = `
-      SELECT 
-        COUNT(*) as total_tickets,
-        COALESCE(SUM(wtd.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_disposal wtd
-      WHERE ${whereClause}
-    `;
-    
-    const summaryResult = await pool.query(summaryQuery, queryParams);
-
-    res.json({
-      success: true,
-      data: {
-        summary: {
-          total_tickets: parseInt(summaryResult.rows[0].total_tickets),
-          total_tons: formatNumber(summaryResult.rows[0].total_tons)
-        },
-        suppliers: [],
-        recipients: [],
-        tickets: [],
-        pagination: {
-          current_page: parseInt(page),
-          per_page: parseInt(limit),
-          total_records: parseInt(summaryResult.rows[0].total_tickets),
-          total_pages: Math.ceil(parseInt(summaryResult.rows[0].total_tickets) / parseInt(limit))
-        },
-        access_info: {
-          accessible_sectors: access.sectorIds.length,
-          access_type: access.accessType,
-          can_export: true
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ getDisposalTickets error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea raportului depozitare',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// ============================================================================
-// GET REJECTED TICKETS (Tab 5 - Deșeuri refuzate)
-// ============================================================================
-export const getRejectedTickets = async (req, res) => {
-  console.log('\n❌ ==================== REJECTED TICKETS REPORT ====================');
-  console.log('📥 Query params:', req.query);
-  console.log('👤 User:', { id: req.user.id, role: req.user.role });
-  
-  try {
-    const { 
-      start_date, 
-      end_date, 
-      year,
-      sector_id,
-      page = 1,
-      limit = 10,
-      sort_by = 'ticket_date',
-      sort_order = 'DESC'
-    } = req.query;
-
-    const userId = req.user.id;
-    const userRole = req.user.role;
-
-    // ✅ Calculează acces
-    const access = await getAccessibleSectors(userId, userRole);
-
-    console.log('🔐 Access control:', {
-      role: userRole,
-      accessType: access.accessType,
-      sectorsCount: access.sectorIds.length
-    });
-
-    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
-      return res.status(403).json({
-        success: false,
-        message: 'Nu ai acces la niciun sector'
-      });
-    }
-
-    // Build WHERE clause
-    let whereConditions = ['wtrj.deleted_at IS NULL'];
-    let queryParams = [];
-    let paramIndex = 1;
-
-    // Date filters
-    if (year) {
-      whereConditions.push(`EXTRACT(YEAR FROM wtrj.ticket_date) = $${paramIndex}`);
-      queryParams.push(parseInt(year));
-      paramIndex++;
-    } else {
-      if (start_date) {
-        whereConditions.push(`wtrj.ticket_date >= $${paramIndex}`);
-        queryParams.push(start_date);
-        paramIndex++;
-      }
-      if (end_date) {
-        whereConditions.push(`wtrj.ticket_date <= $${paramIndex}`);
-        queryParams.push(end_date);
-        paramIndex++;
-      }
-    }
-
-    // ✅ Sector filtering
-    if (sector_id) {
-      let sectorUuid = sector_id;
-      
-      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
-        const sectorQuery = await pool.query(
-          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
-          [parseInt(sector_id)]
-        );
-        if (sectorQuery.rows.length > 0) {
-          sectorUuid = sectorQuery.rows[0].id;
-        }
-      }
-
-      if (access.accessType !== 'PLATFORM_ALL') {
-        if (!access.sectorIds.includes(sectorUuid)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Nu ai acces la acest sector'
-          });
-        }
-      }
-
-      whereConditions.push(`wtrj.sector_id = $${paramIndex}`);
-      queryParams.push(sectorUuid);
-      paramIndex++;
-    } else {
-      if (access.accessType !== 'PLATFORM_ALL') {
-        whereConditions.push(`wtrj.sector_id = ANY($${paramIndex})`);
-        queryParams.push(access.sectorIds);
-        paramIndex++;
-      }
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    // Summary
-    const summaryQuery = `
-      SELECT 
-        COUNT(*) as total_tickets,
-        COALESCE(SUM(wtrj.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_rejected wtrj
-      WHERE ${whereClause}
-    `;
-    
-    const summaryResult = await pool.query(summaryQuery, queryParams);
-
-    res.json({
-      success: true,
-      data: {
-        summary: {
-          total_tickets: parseInt(summaryResult.rows[0].total_tickets),
-          total_tons: formatNumber(summaryResult.rows[0].total_tons)
-        },
-        suppliers: [],
-        operators: [],
-        tickets: [],
-        pagination: {
-          current_page: parseInt(page),
-          per_page: parseInt(limit),
-          total_records: parseInt(summaryResult.rows[0].total_tickets),
-          total_pages: Math.ceil(parseInt(summaryResult.rows[0].total_tickets) / parseInt(limit))
-        },
-        access_info: {
-          accessible_sectors: access.sectorIds.length,
-          access_type: access.accessType,
-          can_export: true
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ getRejectedTickets error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea raportului deșeuri refuzate',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-export default {
-  getTmbTickets,
-  getRecyclingTickets,
-  getRecoveryTickets,
-  getDisposalTickets,
-  getRejectedTickets
-};
+export default { getTmbTickets };

@@ -1,24 +1,38 @@
-// src/routes/tickets/rejected.js
+// ============================================================================
+// src/routes/tickets/rejected.js  (COMPLET)
+// ============================================================================
+// Base: /api/tickets/rejected
+// ============================================================================
+
 import express from 'express';
-import { 
+
+import {
   getAllRejectedTickets,
   getRejectedTicketById,
   createRejectedTicket,
   updateRejectedTicket,
   deleteRejectedTicket,
-  getRejectedStats
+  getRejectedStats,
 } from '../../controllers/wasteTicketsRejectedController.js';
-import { authenticateToken, authorizeRoles } from '../../middleware/auth.js';
+
+import { authenticateToken, authorizeAdminOnly } from '../../middleware/auth.js';
+import { resolveUserAccess } from '../../middleware/resolveUserAccess.js';
+import { enforceSectorAccess } from '../../middleware/enforceSectorAccess.js';
 
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(resolveUserAccess);
+router.use(enforceSectorAccess);
 
+// READ
 router.get('/stats', getRejectedStats);
 router.get('/', getAllRejectedTickets);
 router.get('/:id', getRejectedTicketById);
-router.post('/', authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), createRejectedTicket);
-router.put('/:id', authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), updateRejectedTicket);
-router.delete('/:id', authorizeRoles('PLATFORM_ADMIN'), deleteRejectedTicket);
+
+// WRITE
+router.post('/', authorizeAdminOnly, createRejectedTicket);
+router.put('/:id', authorizeAdminOnly, updateRejectedTicket);
+router.delete('/:id', authorizeAdminOnly, deleteRejectedTicket);
 
 export default router;

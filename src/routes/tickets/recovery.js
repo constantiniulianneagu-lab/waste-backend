@@ -1,24 +1,38 @@
-// src/routes/tickets/recovery.js
+// ============================================================================
+// src/routes/tickets/recovery.js  (COMPLET)
+// ============================================================================
+// Base: /api/tickets/recovery
+// ============================================================================
+
 import express from 'express';
-import { 
+
+import {
   getAllRecoveryTickets,
   getRecoveryTicketById,
   createRecoveryTicket,
   updateRecoveryTicket,
   deleteRecoveryTicket,
-  getRecoveryStats
+  getRecoveryStats,
 } from '../../controllers/wasteTicketsRecoveryController.js';
-import { authenticateToken, authorizeRoles } from '../../middleware/auth.js';
+
+import { authenticateToken, authorizeAdminOnly } from '../../middleware/auth.js';
+import { resolveUserAccess } from '../../middleware/resolveUserAccess.js';
+import { enforceSectorAccess } from '../../middleware/enforceSectorAccess.js';
 
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(resolveUserAccess);
+router.use(enforceSectorAccess);
 
+// READ
 router.get('/stats', getRecoveryStats);
 router.get('/', getAllRecoveryTickets);
 router.get('/:id', getRecoveryTicketById);
-router.post('/', authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), createRecoveryTicket);
-router.put('/:id', authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), updateRecoveryTicket);
-router.delete('/:id', authorizeRoles('PLATFORM_ADMIN'), deleteRecoveryTicket);
+
+// WRITE
+router.post('/', authorizeAdminOnly, createRecoveryTicket);
+router.put('/:id', authorizeAdminOnly, updateRecoveryTicket);
+router.delete('/:id', authorizeAdminOnly, deleteRecoveryTicket);
 
 export default router;

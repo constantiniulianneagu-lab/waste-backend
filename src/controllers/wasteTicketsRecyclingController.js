@@ -1,540 +1,618 @@
 // src/controllers/wasteTicketsRecyclingController.js
+// ============================================================================
+// RECYCLING TICKETS CONTROLLER (RBAC via req.userAccess, UUID sector scoping)
+// ============================================================================
+// Middleware expectations (from routes):
+// - authenticateToken
+// - resolveUserAccess => sets req.userAccess { accessLevel, sectorIds, ... }
+// - enforceSectorAccess => validates requested sector & sets req.requestedSectorUuid
+// - authorizeAdminOnly on POST/PUT/DELETE (routes handle CRUD restriction)
+//
+// IMPORTANT:
+// - waste_tickets_recycling.sector_id is UUID
+// - NO role checks here.
+// ============================================================================
+
 import pool from '../config/database.js';
 
-// ============================================================================
-// GET ALL RECYCLING TICKETS (with pagination & filters)
-// ============================================================================
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+const clampInt = (v, min, max, fallback) => {
+  const n = parseInt(String(v), 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+};
+
+const isNonEmpty = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+
+const isoDate = (d) => new Date(d).toISOString().split('T')[0];
+
+const assertValidDate = (dateStr, fieldName) => {
+  if (!dateStr || typeof dateStr !== 'string') throw new Error(`Invalid ${fieldName}`);
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) throw new Error(`Invalid ${fieldName}: ${dateStr}`);
+  return dateStr;
+};
+
+const buildSectorScope = (req, alias = 't') => {
+  const access = req.userAccess;
+  if (!access) throw new Error('Missing req.userAccess (resolveUserAccess not applied)');
+
+  const isAll = access.accessLevel === 'ALL';
+  const sectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+  const requestedSectorUuid = req.requestedSectorUuid || null;
+
+  let sectorWhere = '';
+  const sectorParams = [];
+
+  if (requestedSectorUuid) {
+    sectorWhere = `AND ${alias}.sector_id = ${{}}`;
+    sectorParams.push(requestedSectorUuid);
+  } else if (!isAll) {
+    sectorWhere = `AND ${alias}.sector_id = ANY(${{}})`;
+    sectorParams.push(sectorIds);
+  }
+
+  return { sectorWhere, sectorParams, requestedSectorUuid };
+};
+
+const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
+  let idx = startIndex;
+  return sqlWithPlaceholders.replace(/\$\{\{\}\}/g, () => `$${idx++}`);
+};
+
+const buildListFilters = (req, alias = 't') => {
+  const {
+    year,
+    from,
+    to,
+    supplier_id,
+    recipient_id,
+    waste_code_id,
+    vehicle_number,
+    ticket_number,
+    search,
+  } = req.query;
+
+  const now = new Date();
+  const y = isNonEmpty(year) ? clampInt(year, 2000, 2100, now.getFullYear()) : now.getFullYear();
+  const startDate = assertValidDate(from || `${y}-01-01`, 'from');
+  const endDate = assertValidDate(to || isoDate(now), 'to');
+
+  if (new Date(startDate) > new Date(endDate)) {
+    const err = new Error('`from` must be <= `to`');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const where = [
+    `${alias}.deleted_at IS NULL`,
+    `${alias}.ticket_date >= $1`,
+    `${alias}.ticket_date <= $2`,
+  ];
+
+  const params = [startDate, endDate];
+  let p = 3;
+
+  // Sector scope
+  const scope = buildSectorScope(req, alias);
+  if (scope.sectorWhere) {
+    where.push(applyParamIndex(scope.sectorWhere, p));
+    params.push(...scope.sectorParams);
+    p += scope.sectorParams.length;
+  }
+
+  // Optional filters
+  if (isNonEmpty(supplier_id)) {
+    where.push(`${alias}.supplier_id = $${p++}`);
+    params.push(parseInt(String(supplier_id), 10));
+  }
+
+  if (isNonEmpty(recipient_id)) {
+    where.push(`${alias}.recipient_id = $${p++}`);
+    params.push(parseInt(String(recipient_id), 10));
+  }
+
+  if (isNonEmpty(waste_code_id)) {
+    where.push(`${alias}.waste_code_id = $${p++}`);
+    params.push(String(waste_code_id));
+  }
+
+  if (isNonEmpty(vehicle_number)) {
+    where.push(`${alias}.vehicle_number ILIKE $${p++}`);
+    params.push(`%${String(vehicle_number).trim()}%`);
+  }
+
+  if (isNonEmpty(ticket_number)) {
+    where.push(`${alias}.ticket_number ILIKE $${p++}`);
+    params.push(`%${String(ticket_number).trim()}%`);
+  }
+
+  if (isNonEmpty(search)) {
+    where.push(`(${alias}.ticket_number ILIKE $${p} OR ${alias}.vehicle_number ILIKE $${p})`);
+    params.push(`%${String(search).trim()}%`);
+    p++;
+  }
+
+  return { whereSql: where.join(' AND '), params, nextIndex: p, startDate, endDate, year: y, requestedSectorUuid: scope.requestedSectorUuid };
+};
+
+// ----------------------------------------------------------------------------
+// READ: GET /api/tickets/recycling
+// ----------------------------------------------------------------------------
 export const getAllRecyclingTickets = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 20, 
-      supplierId,
-      recipientId,
-      wasteCodeId,
-      sectorId,
-      startDate,
-      endDate,
-      search 
-    } = req.query;
+    const { page = 1, limit = 50, sort_by = 'ticket_date', sort_dir = 'desc' } = req.query;
 
-    const offset = (page - 1) * limit;
+    const pageNum = clampInt(page, 1, 1000000, 1);
+    const limitNum = clampInt(limit, 1, 500, 50);
+    const offset = (pageNum - 1) * limitNum;
 
-    let query = `
-      SELECT 
-        wtr.id,
-        wtr.ticket_number,
-        wtr.ticket_date,
-        wtr.ticket_time,
-        wtr.supplier_id,
-        is.name as supplier_name,
-        is.type as supplier_type,
-        wtr.recipient_id,
-        ir.name as recipient_name,
-        ir.type as recipient_type,
-        wtr.waste_code_id,
+    const f = buildListFilters(req, 't');
+
+    const sortMap = {
+      ticket_date: 't.ticket_date',
+      ticket_number: 't.ticket_number',
+      sector_number: 's.sector_number',
+      supplier_name: 'sup.name',
+      recipient_name: 'rec.name',
+      delivered_quantity_tons: 't.delivered_quantity_tons',
+      accepted_quantity_tons: 't.accepted_quantity_tons',
+      vehicle_number: 't.vehicle_number',
+      created_at: 't.created_at',
+    };
+    const sortCol = sortMap[sort_by] || 't.ticket_date';
+    const dir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+    const countSql = `
+      SELECT COUNT(*)::INTEGER AS total
+      FROM waste_tickets_recycling t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions sup ON t.supplier_id = sup.id
+      JOIN institutions rec ON t.recipient_id = rec.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
+    `;
+    const countRes = await pool.query(countSql, f.params);
+    const total = countRes.rows[0]?.total || 0;
+
+    const listParams = [...f.params];
+    const pLimit = f.nextIndex;
+    const pOffset = f.nextIndex + 1;
+    listParams.push(limitNum, offset);
+
+    const listSql = `
+      SELECT
+        t.id,
+        t.ticket_number,
+        t.ticket_date,
+        t.ticket_time,
+        s.id as sector_id,
+        s.sector_number,
+        s.sector_name,
+        sup.id as supplier_id,
+        sup.name as supplier_name,
+        rec.id as recipient_id,
+        rec.name as recipient_name,
+        wc.id as waste_code_id,
         wc.code as waste_code,
         wc.description as waste_description,
-        wc.category as waste_category,
-        wtr.sector_id,
-        s.sector_name,
-        s.sector_number,
-        wtr.vehicle_number,
-        wtr.delivered_quantity_kg,
-        wtr.accepted_quantity_kg,
-        wtr.delivered_quantity_tons,
-        wtr.accepted_quantity_tons,
-        wtr.difference_tons,
-        CASE 
-          WHEN wtr.delivered_quantity_tons > 0 
-          THEN (wtr.accepted_quantity_tons / wtr.delivered_quantity_tons * 100)
-          ELSE 0 
-        END as acceptance_percentage,
-        wtr.notes,
-        wtr.created_by,
-        u.email as created_by_email,
-        wtr.created_at,
-        wtr.updated_at
-      FROM waste_tickets_recycling wtr
-      JOIN institutions is ON wtr.supplier_id = is.id
-      JOIN institutions ir ON wtr.recipient_id = ir.id
-      JOIN waste_codes wc ON wtr.waste_code_id = wc.id
-      JOIN sectors s ON wtr.sector_id = s.id
-      LEFT JOIN users u ON wtr.created_by = u.id
-      WHERE wtr.deleted_at IS NULL
+        t.vehicle_number,
+        t.delivered_quantity_kg,
+        t.accepted_quantity_kg,
+        t.delivered_quantity_tons,
+        t.accepted_quantity_tons,
+        t.difference_tons,
+        t.stock_month,
+        t.created_at,
+        t.updated_at
+      FROM waste_tickets_recycling t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions sup ON t.supplier_id = sup.id
+      JOIN institutions rec ON t.recipient_id = rec.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
+      ORDER BY ${sortCol} ${dir}, t.created_at ${dir}
+      LIMIT $${pLimit} OFFSET $${pOffset}
     `;
+    const listRes = await pool.query(listSql, listParams);
 
-    const params = [];
-    let paramCount = 1;
-
-    if (supplierId) {
-      query += ` AND wtr.supplier_id = $${paramCount}`;
-      params.push(supplierId);
-      paramCount++;
-    }
-
-    if (recipientId) {
-      query += ` AND wtr.recipient_id = $${paramCount}`;
-      params.push(recipientId);
-      paramCount++;
-    }
-
-    if (wasteCodeId) {
-      query += ` AND wtr.waste_code_id = $${paramCount}`;
-      params.push(wasteCodeId);
-      paramCount++;
-    }
-
-    if (sectorId) {
-      query += ` AND wtr.sector_id = $${paramCount}`;
-      params.push(sectorId);
-      paramCount++;
-    }
-
-    if (startDate) {
-      query += ` AND wtr.ticket_date >= $${paramCount}`;
-      params.push(startDate);
-      paramCount++;
-    }
-
-    if (endDate) {
-      query += ` AND wtr.ticket_date <= $${paramCount}`;
-      params.push(endDate);
-      paramCount++;
-    }
-
-    if (search) {
-      query += ` AND (wtr.ticket_number ILIKE $${paramCount} OR wtr.vehicle_number ILIKE $${paramCount})`;
-      params.push(`%${search}%`);
-      paramCount++;
-    }
-
-    const countQuery = query.replace(/SELECT .+ FROM/s, 'SELECT COUNT(*) FROM');
-    const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].count);
-
-    query += ` ORDER BY wtr.ticket_date DESC, wtr.ticket_time DESC 
-               LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
-    params.push(limit, offset);
-
-    const result = await pool.query(query, params);
-
-    res.json({
+    return res.json({
       success: true,
       data: {
-        tickets: result.rows,
+        items: listRes.rows,
         pagination: {
           total,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(total / limit)
-        }
-      }
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
+        filters_applied: {
+          from: f.startDate,
+          to: f.endDate,
+          year: f.year,
+          sector_uuid: f.requestedSectorUuid || null,
+        },
+      },
     });
-  } catch (error) {
-    console.error('Get recycling tickets error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea tichetelor de reciclare'
-    });
+  } catch (err) {
+    console.error('getAllRecyclingTickets error:', err);
+    const code = err.statusCode || 500;
+    return res.status(code).json({ success: false, message: 'Failed to fetch recycling tickets', error: err.message });
   }
 };
 
-// ============================================================================
-// GET SINGLE RECYCLING TICKET BY ID
-// ============================================================================
+// ----------------------------------------------------------------------------
+// READ: GET /api/tickets/recycling/:id
+// ----------------------------------------------------------------------------
 export const getRecyclingTicketById = async (req, res) => {
   try {
     const { id } = req.params;
+    const ticketId = parseInt(String(id), 10);
 
-    const result = await pool.query(
-      `SELECT 
-        wtr.id,
-        wtr.ticket_number,
-        wtr.ticket_date,
-        wtr.ticket_time,
-        wtr.supplier_id,
-        is.name as supplier_name,
-        is.type as supplier_type,
-        wtr.recipient_id,
-        ir.name as recipient_name,
-        ir.type as recipient_type,
-        wtr.waste_code_id,
-        wc.code as waste_code,
-        wc.description as waste_description,
-        wtr.sector_id,
-        s.sector_name,
-        s.sector_number,
-        wtr.vehicle_number,
-        wtr.delivered_quantity_kg,
-        wtr.accepted_quantity_kg,
-        wtr.delivered_quantity_tons,
-        wtr.accepted_quantity_tons,
-        wtr.difference_tons,
-        CASE 
-          WHEN wtr.delivered_quantity_tons > 0 
-          THEN (wtr.accepted_quantity_tons / wtr.delivered_quantity_tons * 100)
-          ELSE 0 
-        END as acceptance_percentage,
-        wtr.notes,
-        wtr.created_by,
-        u.email as created_by_email,
-        wtr.created_at,
-        wtr.updated_at
-      FROM waste_tickets_recycling wtr
-      JOIN institutions is ON wtr.supplier_id = is.id
-      JOIN institutions ir ON wtr.recipient_id = ir.id
-      JOIN waste_codes wc ON wtr.waste_code_id = wc.id
-      JOIN sectors s ON wtr.sector_id = s.id
-      LEFT JOIN users u ON wtr.created_by = u.id
-      WHERE wtr.id = $1 AND wtr.deleted_at IS NULL`,
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tichet de reciclare negăsit'
-      });
+    if (Number.isNaN(ticketId)) {
+      return res.status(400).json({ success: false, message: 'Invalid ticket id' });
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Get recycling ticket error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea tichetului de reciclare'
-    });
+    // RBAC scope for single-item
+    const scope = buildSectorScope(req, 't');
+
+    let sql = `
+      SELECT
+        t.id,
+        t.ticket_number,
+        t.ticket_date,
+        t.ticket_time,
+        s.id as sector_id,
+        s.sector_number,
+        s.sector_name,
+        sup.id as supplier_id,
+        sup.name as supplier_name,
+        rec.id as recipient_id,
+        rec.name as recipient_name,
+        wc.id as waste_code_id,
+        wc.code as waste_code,
+        wc.description as waste_description,
+        t.vehicle_number,
+        t.delivered_quantity_kg,
+        t.accepted_quantity_kg,
+        t.delivered_quantity_tons,
+        t.accepted_quantity_tons,
+        t.difference_tons,
+        t.stock_month,
+        t.created_at,
+        t.updated_at
+      FROM waste_tickets_recycling t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions sup ON t.supplier_id = sup.id
+      JOIN institutions rec ON t.recipient_id = rec.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE t.deleted_at IS NULL
+        AND t.id = $1
+    `;
+
+    const params = [ticketId];
+    let p = 2;
+
+    if (scope.sectorWhere) {
+      sql += ` ${applyParamIndex(scope.sectorWhere, p)}`;
+      params.push(...scope.sectorParams);
+      p += scope.sectorParams.length;
+    }
+
+    const result = await pool.query(sql, params);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+
+    return res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('getRecyclingTicketById error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch ticket', error: err.message });
   }
 };
 
-// ============================================================================
-// CREATE RECYCLING TICKET
-// ============================================================================
+// ----------------------------------------------------------------------------
+// STATS: GET /api/tickets/recycling/stats
+// ----------------------------------------------------------------------------
+export const getRecyclingStats = async (req, res) => {
+  try {
+    const f = buildListFilters(req, 't');
+
+    const summarySql = `
+      SELECT
+        COUNT(*)::INTEGER as total_tickets,
+        COALESCE(SUM(t.delivered_quantity_tons), 0) as delivered_tons,
+        COALESCE(SUM(t.accepted_quantity_tons), 0) as accepted_tons,
+        COALESCE(SUM(t.difference_tons), 0) as difference_tons
+      FROM waste_tickets_recycling t
+      WHERE ${f.whereSql}
+    `;
+    const summaryRes = await pool.query(summarySql, f.params);
+    const s = summaryRes.rows[0] || {};
+    const delivered = Number(s.delivered_tons || 0);
+    const accepted = Number(s.accepted_tons || 0);
+    const rate = delivered > 0 ? (accepted / delivered) * 100 : 0;
+
+    const bySectorSql = `
+      SELECT
+        s.sector_number,
+        s.sector_name,
+        COUNT(*)::INTEGER as ticket_count,
+        COALESCE(SUM(t.delivered_quantity_tons), 0) as delivered_tons,
+        COALESCE(SUM(t.accepted_quantity_tons), 0) as accepted_tons
+      FROM waste_tickets_recycling t
+      JOIN sectors s ON t.sector_id = s.id
+      WHERE ${f.whereSql}
+      GROUP BY s.sector_number, s.sector_name
+      ORDER BY s.sector_number
+    `;
+    const bySectorRes = await pool.query(bySectorSql, f.params);
+
+    const byWasteSql = `
+      SELECT
+        wc.code as waste_code,
+        wc.description as waste_description,
+        COUNT(*)::INTEGER as ticket_count,
+        COALESCE(SUM(t.accepted_quantity_tons), 0) as accepted_tons
+      FROM waste_tickets_recycling t
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
+      GROUP BY wc.code, wc.description
+      ORDER BY accepted_tons DESC
+      LIMIT 10
+    `;
+    const byWasteRes = await pool.query(byWasteSql, f.params);
+
+    return res.json({
+      success: true,
+      data: {
+        summary: {
+          total_tickets: s.total_tickets || 0,
+          delivered_tons: delivered,
+          accepted_tons: accepted,
+          acceptance_rate_percent: Number(rate.toFixed(2)),
+          difference_tons: Number(s.difference_tons || 0),
+          date_range: { from: f.startDate, to: f.endDate },
+        },
+        by_sector: bySectorRes.rows.map((r) => ({
+          sector_number: r.sector_number,
+          sector_name: r.sector_name,
+          ticket_count: r.ticket_count,
+          delivered_tons: Number(r.delivered_tons || 0),
+          accepted_tons: Number(r.accepted_tons || 0),
+        })),
+        top_waste_codes: byWasteRes.rows.map((r) => ({
+          waste_code: r.waste_code,
+          waste_description: r.waste_description,
+          ticket_count: r.ticket_count,
+          accepted_tons: Number(r.accepted_tons || 0),
+        })),
+      },
+    });
+  } catch (err) {
+    console.error('getRecyclingStats error:', err);
+    const code = err.statusCode || 500;
+    return res.status(code).json({ success: false, message: 'Failed to fetch recycling stats', error: err.message });
+  }
+};
+
+// ----------------------------------------------------------------------------
+// CREATE: POST /api/tickets/recycling (blocked in routes by authorizeAdminOnly)
+// ----------------------------------------------------------------------------
 export const createRecyclingTicket = async (req, res) => {
   try {
     const {
-      ticketNumber,
-      ticketDate,
-      ticketTime,
-      supplierId,
-      recipientId,
-      wasteCodeId,
-      sectorId,
-      vehicleNumber,
-      deliveredQuantityKg,
-      acceptedQuantityKg,
-      notes
+      ticket_number,
+      ticket_date,
+      ticket_time,
+      supplier_id,
+      recipient_id,
+      waste_code_id,
+      sector_id, // UUID expected
+      vehicle_number,
+      delivered_quantity_kg,
+      accepted_quantity_kg,
+      stock_month, // optional
+      notes, // optional (if you later add)
     } = req.body;
 
-    // Required fields
-    if (!ticketNumber || !ticketDate || !supplierId || !recipientId || 
-        !wasteCodeId || !sectorId || !vehicleNumber || 
-        !deliveredQuantityKg || acceptedQuantityKg === undefined) {
-      return res.status(400).json({
-        success: false,
-        message: 'Toate câmpurile obligatorii trebuie completate'
-      });
+    if (!isNonEmpty(ticket_date)) {
+      return res.status(400).json({ success: false, message: 'ticket_date este obligatoriu' });
+    }
+    if (!isNonEmpty(supplier_id) || !isNonEmpty(recipient_id) || !isNonEmpty(waste_code_id) || !isNonEmpty(sector_id)) {
+      return res.status(400).json({ success: false, message: 'supplier_id, recipient_id, waste_code_id, sector_id sunt obligatorii' });
+    }
+    if (!isNonEmpty(delivered_quantity_kg) || Number(delivered_quantity_kg) < 0) {
+      return res.status(400).json({ success: false, message: 'delivered_quantity_kg invalid' });
+    }
+    if (!isNonEmpty(accepted_quantity_kg) || Number(accepted_quantity_kg) < 0) {
+      return res.status(400).json({ success: false, message: 'accepted_quantity_kg invalid' });
     }
 
-    const delivered = parseFloat(deliveredQuantityKg);
-    const accepted = parseFloat(acceptedQuantityKg);
+    const createdBy = req.user?.id;
 
-    if (delivered <= 0 || accepted < 0 || accepted > delivered) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cantități invalide'
-      });
-    }
+    const insertSql = `
+      INSERT INTO waste_tickets_recycling (
+        ticket_number,
+        ticket_date,
+        ticket_time,
+        supplier_id,
+        recipient_id,
+        waste_code_id,
+        sector_id,
+        vehicle_number,
+        delivered_quantity_kg,
+        accepted_quantity_kg,
+        delivered_quantity_tons,
+        accepted_quantity_tons,
+        difference_tons,
+        stock_month,
+        notes,
+        created_by,
+        created_at,
+        updated_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+        ($9/1000.0),($10/1000.0),(($9-$10)/1000.0),
+        $11,$12,$13, NOW(), NOW()
+      )
+      RETURNING id
+    `;
 
-    // Check duplicate ticket number
-    const existingTicket = await pool.query(
-      'SELECT id FROM waste_tickets_recycling WHERE ticket_number = $1 AND deleted_at IS NULL',
-      [ticketNumber]
-    );
+    const params = [
+      ticket_number ? String(ticket_number).trim() : null,
+      String(ticket_date),
+      ticket_time ? String(ticket_time) : null,
+      parseInt(String(supplier_id), 10),
+      parseInt(String(recipient_id), 10),
+      String(waste_code_id),
+      String(sector_id),
+      vehicle_number ? String(vehicle_number).trim() : null,
+      Number(delivered_quantity_kg),
+      Number(accepted_quantity_kg),
+      stock_month ? String(stock_month) : null,
+      notes ? String(notes) : null,
+      createdBy,
+    ];
 
-    if (existingTicket.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Numărul de tichet există deja'
-      });
-    }
-
-    // Validate supplier = TMB_OPERATOR
-    const supplierResult = await pool.query(
-      'SELECT type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
-      [supplierId]
-    );
-
-    if (supplierResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Furnizorul nu există'
-      });
-    }
-
-    if (supplierResult.rows[0].type !== 'TMB_OPERATOR') {
-      return res.status(400).json({
-        success: false,
-        message: 'Furnizorul trebuie să fie de tip TMB_OPERATOR'
-      });
-    }
-
-    // Validate recipient = RECYCLING_CLIENT
-    const recipientResult = await pool.query(
-      'SELECT type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
-      [recipientId]
-    );
-
-    if (recipientResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Recipientul nu există'
-      });
-    }
-
-    if (recipientResult.rows[0].type !== 'RECYCLING_CLIENT') {
-      return res.status(400).json({
-        success: false,
-        message: 'Recipientul trebuie să fie de tip RECYCLING_CLIENT'
-      });
-    }
-
-    // Validate sector exists
-    const sectorResult = await pool.query(
-      'SELECT id FROM sectors WHERE id = $1 AND is_active = true',
-      [sectorId]
-    );
-
-    if (sectorResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Sectorul specificat nu există sau nu este activ'
-      });
-    }
-
-    // Insert ticket
-    const result = await pool.query(
-      `INSERT INTO waste_tickets_recycling (
-        ticket_number, ticket_date, ticket_time, supplier_id, recipient_id,
-        waste_code_id, sector_id, vehicle_number, delivered_quantity_kg, 
-        accepted_quantity_kg, notes, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING *`,
-      [
-        ticketNumber, ticketDate, ticketTime || '00:00:00', supplierId, recipientId,
-        wasteCodeId, sectorId, vehicleNumber, delivered, accepted, 
-        notes || null, req.user.userId
-      ]
-    );
-
-    res.status(201).json({
-      success: true,
-      message: 'Tichet de reciclare creat cu succes',
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Create recycling ticket error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la crearea tichetului de reciclare'
-    });
+    const result = await pool.query(insertSql, params);
+    return res.status(201).json({ success: true, message: 'Ticket created', data: { id: result.rows[0].id } });
+  } catch (err) {
+    console.error('createRecyclingTicket error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to create ticket', error: err.message });
   }
 };
 
-// ============================================================================
-// UPDATE RECYCLING TICKET
-// ============================================================================
+// ----------------------------------------------------------------------------
+// UPDATE: PUT /api/tickets/recycling/:id (blocked in routes by authorizeAdminOnly)
+// ----------------------------------------------------------------------------
 export const updateRecyclingTicket = async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = [];
-    const params = [];
-    let paramCount = 1;
+    const ticketId = parseInt(String(id), 10);
+    if (Number.isNaN(ticketId)) {
+      return res.status(400).json({ success: false, message: 'Invalid ticket id' });
+    }
 
-    const fields = [
-      'ticketNumber', 'ticketDate', 'ticketTime', 'supplierId', 'recipientId',
-      'wasteCodeId', 'sectorId', 'vehicleNumber', 'deliveredQuantityKg', 
-      'acceptedQuantityKg', 'notes'
+    const updatable = [
+      'ticket_number',
+      'ticket_date',
+      'ticket_time',
+      'supplier_id',
+      'recipient_id',
+      'waste_code_id',
+      'sector_id',
+      'vehicle_number',
+      'delivered_quantity_kg',
+      'accepted_quantity_kg',
+      'stock_month',
+      'notes',
     ];
 
-    const columnMap = {
-      ticketNumber: 'ticket_number',
-      ticketDate: 'ticket_date',
-      ticketTime: 'ticket_time',
-      supplierId: 'supplier_id',
-      recipientId: 'recipient_id',
-      wasteCodeId: 'waste_code_id',
-      sectorId: 'sector_id',
-      vehicleNumber: 'vehicle_number',
-      deliveredQuantityKg: 'delivered_quantity_kg',
-      acceptedQuantityKg: 'accepted_quantity_kg',
-      notes: 'notes'
-    };
+    const setParts = [];
+    const params = [];
+    let p = 1;
 
-    // Validate sector if provided
-    if (req.body.sectorId) {
-      const sectorResult = await pool.query(
-        'SELECT id FROM sectors WHERE id = $1 AND is_active = true',
-        [req.body.sectorId]
+    const deliveredProvided = req.body.delivered_quantity_kg !== undefined;
+    const acceptedProvided = req.body.accepted_quantity_kg !== undefined;
+
+    for (const key of updatable) {
+      if (req.body[key] !== undefined) {
+        setParts.push(`${key} = $${p++}`);
+        params.push(req.body[key]);
+      }
+    }
+
+    if (setParts.length === 0) {
+      return res.status(400).json({ success: false, message: 'No fields to update' });
+    }
+
+    // If any quantity changes -> recompute tons & diff based on final values
+    if (deliveredProvided || acceptedProvided) {
+      const existingRes = await pool.query(
+        `SELECT delivered_quantity_kg, accepted_quantity_kg
+         FROM waste_tickets_recycling
+         WHERE id = $1 AND deleted_at IS NULL`,
+        [ticketId]
       );
-
-      if (sectorResult.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Sectorul specificat nu există sau nu este activ'
-        });
+      if (existingRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Ticket not found' });
       }
+
+      const currentDelivered = Number(existingRes.rows[0].delivered_quantity_kg);
+      const currentAccepted = Number(existingRes.rows[0].accepted_quantity_kg);
+
+      const newDelivered = deliveredProvided ? Number(req.body.delivered_quantity_kg) : currentDelivered;
+      const newAccepted = acceptedProvided ? Number(req.body.accepted_quantity_kg) : currentAccepted;
+
+      if (!Number.isFinite(newDelivered) || newDelivered < 0 || !Number.isFinite(newAccepted) || newAccepted < 0) {
+        return res.status(400).json({ success: false, message: 'Quantity invalid' });
+      }
+
+      setParts.push(`delivered_quantity_tons = (${newDelivered}/1000.0)`);
+      setParts.push(`accepted_quantity_tons = (${newAccepted}/1000.0)`);
+      setParts.push(`difference_tons = ((${newDelivered}-${newAccepted})/1000.0)`);
     }
 
-    fields.forEach(field => {
-      if (req.body[field] !== undefined) {
-        updates.push(`${columnMap[field]} = $${paramCount}`);
-        params.push(req.body[field]);
-        paramCount++;
-      }
-    });
+    setParts.push(`updated_at = NOW()`);
 
-    if (updates.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nicio modificare specificată'
-      });
-    }
+    params.push(ticketId);
+    const updateSql = `
+      UPDATE waste_tickets_recycling
+      SET ${setParts.join(', ')}
+      WHERE id = $${p} AND deleted_at IS NULL
+      RETURNING id
+    `;
 
-    updates.push(`updated_at = NOW()`);
-    params.push(id);
-
-    const result = await pool.query(
-      `UPDATE waste_tickets_recycling 
-       SET ${updates.join(', ')}
-       WHERE id = $${paramCount} AND deleted_at IS NULL
-       RETURNING *`,
-      params
-    );
-
+    const result = await pool.query(updateSql, params);
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tichet negăsit'
-      });
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
 
-    res.json({
-      success: true,
-      message: 'Tichet actualizat cu succes',
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Update recycling ticket error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la actualizare'
-    });
+    return res.json({ success: true, message: 'Ticket updated', data: { id: result.rows[0].id } });
+  } catch (err) {
+    console.error('updateRecyclingTicket error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to update ticket', error: err.message });
   }
 };
 
-// ============================================================================
-// DELETE RECYCLING TICKET (SOFT DELETE)
-// ============================================================================
+// ----------------------------------------------------------------------------
+// DELETE (soft): DELETE /api/tickets/recycling/:id (blocked in routes by authorizeAdminOnly)
+// ----------------------------------------------------------------------------
 export const deleteRecyclingTicket = async (req, res) => {
   try {
     const { id } = req.params;
+    const ticketId = parseInt(String(id), 10);
+    if (Number.isNaN(ticketId)) {
+      return res.status(400).json({ success: false, message: 'Invalid ticket id' });
+    }
 
     const result = await pool.query(
-      'UPDATE waste_tickets_recycling SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id',
-      [id]
+      `UPDATE waste_tickets_recycling
+       SET deleted_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING id`,
+      [ticketId]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tichet negăsit'
-      });
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
 
-    res.json({
-      success: true,
-      message: 'Tichet șters cu succes'
-    });
-  } catch (error) {
-    console.error('Delete recycling ticket error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la ștergere'
-    });
+    return res.json({ success: true, message: 'Ticket deleted', data: { id: result.rows[0].id } });
+  } catch (err) {
+    console.error('deleteRecyclingTicket error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to delete ticket', error: err.message });
   }
 };
 
-// ============================================================================
-// GET RECYCLING STATISTICS
-// ============================================================================
-export const getRecyclingStats = async (req, res) => {
-  try {
-    const { startDate, endDate, recipientId, sectorId } = req.query;
-
-    let query = `
-      SELECT 
-        COUNT(*) as total_tickets,
-        SUM(delivered_quantity_tons) as total_delivered_tons,
-        SUM(accepted_quantity_tons) as total_accepted_tons,
-        SUM(difference_tons) as total_difference_tons
-      FROM waste_tickets_recycling
-      WHERE deleted_at IS NULL
-    `;
-
-    const params = [];
-    let paramCount = 1;
-
-    if (startDate) {
-      query += ` AND ticket_date >= $${paramCount}`;
-      params.push(startDate);
-      paramCount++;
-    }
-
-    if (endDate) {
-      query += ` AND ticket_date <= $${paramCount}`;
-      params.push(endDate);
-      paramCount++;
-    }
-
-    if (recipientId) {
-      query += ` AND recipient_id = $${paramCount}`;
-      params.push(recipientId);
-      paramCount++;
-    }
-
-    if (sectorId) {
-      query += ` AND sector_id = $${paramCount}`;
-      params.push(sectorId);
-    }
-
-    const result = await pool.query(query, params);
-
-    const totalDelivered = parseFloat(result.rows[0].total_delivered_tons) || 0;
-    const totalAccepted = parseFloat(result.rows[0].total_accepted_tons) || 0;
-    const acceptanceRate = totalDelivered > 0 
-      ? ((totalAccepted / totalDelivered) * 100).toFixed(2)
-      : 0;
-
-    res.json({
-      success: true,
-      data: {
-        total_tickets: parseInt(result.rows[0].total_tickets) || 0,
-        total_delivered_tons: totalDelivered,
-        total_accepted_tons: totalAccepted,
-        total_difference_tons: parseFloat(result.rows[0].total_difference_tons) || 0,
-        acceptance_rate: parseFloat(acceptanceRate)
-      }
-    });
-  } catch (error) {
-    console.error('Get recycling stats error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea statisticilor'
-    });
-  }
+export default {
+  getAllRecyclingTickets,
+  getRecyclingTicketById,
+  createRecyclingTicket,
+  updateRecyclingTicket,
+  deleteRecyclingTicket,
+  getRecyclingStats,
 };

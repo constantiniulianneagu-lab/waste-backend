@@ -1,540 +1,475 @@
-/**
- * ============================================================================
- * REPORTS LANDFILL CONTROLLER - UPDATED WITH ACCESS CONTROL
- * ============================================================================
- * 
- * Updated: 2025-01-02 - Integrated with centralized access control
- * ============================================================================
- */
+// src/controllers/reportsLandfillController.js
+// ============================================================================
+// LANDFILL REPORTS CONTROLLER (RBAC via req.userAccess, UUID sector scoping)
+// ============================================================================
+// REQUIREMENTS (already enforced by routes):
+// - authenticateToken
+// - resolveUserAccess (sets req.userAccess)
+// - authorizeRoles excludes REGULATOR_VIEWER from /reports
+// - enforceSectorAccess (optional) blocks invalid sector requests and sets req.requestedSectorUuid
+//
+// IMPORTANT:
+// - waste_tickets_landfill.sector_id is UUID
+// - No role logic or manual sector computation in this controller.
+// ============================================================================
 
-import db from '../config/database.js';
-import { getAccessibleSectors } from '../utils/accessControl.js';
+import pool from '../config/database.js';
 
-/**
- * ============================================================================
- * HELPER FUNCTIONS
- * ============================================================================
- */
-
-const formatNumber = (num) => {
-  if (!num) return '0.00';
-  return parseFloat(num).toFixed(2);
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+const clampInt = (v, min, max, fallback) => {
+  const n = parseInt(String(v), 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
 };
 
-/**
- * ============================================================================
- * GET LANDFILL REPORTS
- * ============================================================================
- */
+const isNonEmpty = (v) => v !== undefined && v !== null && String(v).trim() !== '';
 
-export const getLandfillReports = async (req, res) => {
-  console.log('\n📊 ==================== LANDFILL REPORTS REQUEST ====================');
-  console.log('📥 Query params:', req.query);
-  console.log('👤 User:', { id: req.user?.id, role: req.user?.role });
+const isoDate = (d) => new Date(d).toISOString().split('T')[0];
 
-  try {
-    const { year, from, to, sector_id, page = 1, per_page = 20 } = req.query;
-    const userId = req.user.id;
-    const userRole = req.user.role;
+const assertValidDate = (dateStr, fieldName) => {
+  if (!dateStr || typeof dateStr !== 'string') throw new Error(`Invalid ${fieldName}`);
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) throw new Error(`Invalid ${fieldName}: ${dateStr}`);
+  return dateStr;
+};
 
-    // ✅ NOUA LOGICĂ: Calculează acces prin accessControl
-    const access = await getAccessibleSectors(userId, userRole);
+const buildSectorScope = (req, tableAlias = 't') => {
+  const access = req.userAccess;
+  if (!access) throw new Error('Missing req.userAccess (resolveUserAccess not applied)');
 
-    console.log('🔐 Access control:', {
-      userId,
-      role: userRole,
-      accessType: access.accessType,
-      sectorsCount: access.sectorIds.length,
-      institutionName: access.institutionName,
-      canEdit: access.canEdit,
-      isPMB: access.isPMB
-    });
+  const isAll = access.accessLevel === 'ALL';
+  const sectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
 
-    // Verifică dacă user-ul are acces la cel puțin un sector
-    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
-      return res.status(403).json({
-        success: false,
-        message: 'Nu ai acces la niciun sector'
-      });
-    }
+  // enforceSectorAccess sets this if the user requested a specific sector (UUID)
+  const requestedSectorUuid = req.requestedSectorUuid || null;
 
-    // Date range setup
-    const currentDate = new Date();
-    const currentYear = year || currentDate.getFullYear();
-    const startDate = from || `${currentYear}-01-01`;
-    const endDate = to || currentDate.toISOString().split('T')[0];
+  let sectorWhere = '';
+  const sectorParams = [];
 
-    console.log('📅 Date range:', { startDate, endDate });
-
-    // ✅ Sector filtering cu noua logică
-    let sectorFilter = '';
-    let sectorParams = [];
-    let sectorName = 'București';
-
-    if (sector_id) {
-      // User cere un sector specific
-      let sectorUuid = sector_id;
-      
-      // Convertește sector_number → UUID dacă e necesar
-      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
-        const sectorQuery = await db.query(
-          'SELECT id, sector_name FROM sectors WHERE sector_number = $1 AND is_active = true',
-          [parseInt(sector_id)]
-        );
-        if (sectorQuery.rows.length > 0) {
-          sectorUuid = sectorQuery.rows[0].id;
-          sectorName = sectorQuery.rows[0].sector_name;
-        }
-      } else {
-        // E deja UUID
-        const sectorQuery = await db.query(
-          'SELECT sector_name FROM sectors WHERE id = $1',
-          [sector_id]
-        );
-        if (sectorQuery.rows.length > 0) {
-          sectorName = sectorQuery.rows[0].sector_name;
-        }
-      }
-
-      // Verifică dacă user-ul are acces la acest sector
-      if (access.accessType !== 'PLATFORM_ALL') {
-        if (!access.sectorIds.includes(sectorUuid)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Nu ai acces la acest sector'
-          });
-        }
-      }
-
-      sectorFilter = 'AND wtl.sector_id = $3';
-      sectorParams = [sectorUuid];
-    } else {
-      // User nu cere sector specific → filtrează automat la sectoarele accesibile
-      if (access.accessType !== 'PLATFORM_ALL') {
-        sectorFilter = 'AND wtl.sector_id = ANY($3)';
-        sectorParams = [access.sectorIds];
-      }
-    }
-
-    const baseParams = [startDate, endDate, ...sectorParams];
-
-    console.log('📊 Fetching summary data...');
-
-    // Total quantity
-    const totalQuery = `
-      SELECT COALESCE(SUM(wtl.net_weight_tons), 0) as total_quantity
-      FROM waste_tickets_landfill wtl
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorFilter}
-    `;
-    
-    const totalResult = await db.query(totalQuery, baseParams);
-    const totalQuantity = parseFloat(totalResult.rows[0].total_quantity);
-
-    // Suppliers breakdown
-    const suppliersQuery = `
-      SELECT 
-        i.name as supplier_name,
-        wc.code as waste_code,
-        wc.description as waste_description,
-        COALESCE(SUM(wtl.net_weight_tons), 0) as quantity
-      FROM waste_tickets_landfill wtl
-      JOIN institutions i ON wtl.supplier_id = i.id
-      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorFilter}
-      GROUP BY i.name, wc.code, wc.description
-      ORDER BY i.name, quantity DESC
-    `;
-    
-    const suppliersResult = await db.query(suppliersQuery, baseParams);
-    
-    const suppliersMap = {};
-    suppliersResult.rows.forEach(row => {
-      if (!suppliersMap[row.supplier_name]) {
-        suppliersMap[row.supplier_name] = {
-          name: row.supplier_name,
-          total: 0,
-          codes: []
-        };
-      }
-      suppliersMap[row.supplier_name].total += parseFloat(row.quantity);
-      suppliersMap[row.supplier_name].codes.push({
-        code: row.waste_code,
-        description: row.waste_description,
-        quantity: formatNumber(row.quantity)
-      });
-    });
-
-    const suppliers = Object.values(suppliersMap).map(s => ({
-      ...s,
-      total: formatNumber(s.total)
-    }));
-
-    // Waste codes breakdown
-    const wasteCodesQuery = `
-      SELECT 
-        wc.code,
-        wc.description,
-        COALESCE(SUM(wtl.net_weight_tons), 0) as quantity
-      FROM waste_tickets_landfill wtl
-      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorFilter}
-      GROUP BY wc.code, wc.description
-      ORDER BY quantity DESC
-    `;
-    
-    const wasteCodesResult = await db.query(wasteCodesQuery, baseParams);
-    const wasteCodes = wasteCodesResult.rows.map(row => ({
-      code: row.code,
-      description: row.description,
-      quantity: formatNumber(row.quantity)
-    }));
-
-    console.log('📋 Fetching tickets with pagination...');
-
-    const offset = (page - 1) * per_page;
-
-    // Count total tickets
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM waste_tickets_landfill wtl
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorFilter}
-    `;
-    
-    const countResult = await db.query(countQuery, baseParams);
-    const totalCount = parseInt(countResult.rows[0].total);
-
-    // Fetch tickets
-    const ticketsQuery = `
-      SELECT 
-        wtl.id,
-        wtl.ticket_number,
-        wtl.ticket_date,
-        wtl.ticket_time,
-        i.name as supplier_name,
-        wc.code as waste_code,
-        wc.description as waste_description,
-        s.sector_name,
-        wtl.generator_type as generator,
-        wtl.vehicle_number,
-        wtl.gross_weight_kg / 1000.0 as gross_weight_tons,
-        wtl.tare_weight_kg / 1000.0 as tare_weight_tons,
-        wtl.net_weight_tons,
-        wtl.contract_type as contract,
-        wtl.operation_type
-      FROM waste_tickets_landfill wtl
-      JOIN institutions i ON wtl.supplier_id = i.id
-      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
-      JOIN sectors s ON wtl.sector_id = s.id
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorFilter}
-      ORDER BY wtl.ticket_date DESC, wtl.ticket_time DESC
-      LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}
-    `;
-    
-    const ticketsResult = await db.query(
-      ticketsQuery, 
-      [...baseParams, per_page, offset]
-    );
-
-    const tickets = ticketsResult.rows.map(row => ({
-      id: row.id,
-      ticket_number: row.ticket_number,
-      ticket_date: row.ticket_date,
-      ticket_time: row.ticket_time,
-      supplier_name: row.supplier_name,
-      waste_code: row.waste_code,
-      waste_description: row.waste_description,
-      sector_name: row.sector_name,
-      generator: row.generator,
-      vehicle_number: row.vehicle_number,
-      gross_weight_tons: formatNumber(row.gross_weight_tons),
-      tare_weight_tons: formatNumber(row.tare_weight_tons),
-      net_weight_tons: formatNumber(row.net_weight_tons),
-      contract: row.contract,
-      operation: row.operation_type || `Eliminare ${row.sector_name}`
-    }));
-
-    console.log('✅ Reports data fetched successfully');
-
-    res.json({
-      success: true,
-      data: {
-        summary: {
-          total_quantity: formatNumber(totalQuantity),
-          period: {
-            year: currentYear,
-            date_from: startDate,
-            date_to: endDate,
-            sector: sectorName
-          },
-          suppliers: suppliers,
-          waste_codes: wasteCodes
-        },
-        tickets: tickets,
-        pagination: {
-          total_count: totalCount,
-          page: parseInt(page),
-          per_page: parseInt(per_page),
-          total_pages: Math.ceil(totalCount / per_page)
-        },
-        // ✅ Info pentru debugging/UI
-        access_info: {
-          accessible_sectors: access.sectorIds.length,
-          access_type: access.accessType,
-          institution_name: access.institutionName,
-          is_pmb: access.isPMB,
-          can_export: true
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Reports error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch reports',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+  if (requestedSectorUuid) {
+    sectorWhere = `AND ${tableAlias}.sector_id = ${{}}`; // placeholder replaced later
+    sectorParams.push(requestedSectorUuid);
+  } else if (!isAll) {
+    // restricted user: only own sectors
+    sectorWhere = `AND ${tableAlias}.sector_id = ANY(${{}})`;
+    sectorParams.push(sectorIds);
   }
+
+  return {
+    isAll,
+    allowedSectorIds: sectorIds,
+    requestedSectorUuid,
+    sectorWhere,
+    sectorParams,
+  };
 };
 
-/**
- * ============================================================================
- * GET AUXILIARY DATA
- * ============================================================================
- */
+const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
+  // Replace each occurrence of ${{}} in order with $<index>
+  let idx = startIndex;
+  return sqlWithPlaceholders.replace(/\$\{\{\}\}/g, () => `$${idx++}`);
+};
 
+// Build WHERE + params safely
+const buildFilters = (req, baseAlias = 't') => {
+  const {
+    year,
+    from,
+    to,
+    supplier_id,
+    waste_code_id,
+    generator_type,
+    operation_type,
+    contract_type,
+    search,
+  } = req.query;
+
+  const now = new Date();
+  const currentYear = year ? clampInt(year, 2000, 2100, now.getFullYear()) : now.getFullYear();
+
+  const startDate = assertValidDate(from || `${currentYear}-01-01`, 'from');
+  const endDate = assertValidDate(to || isoDate(now), 'to');
+
+  if (new Date(startDate) > new Date(endDate)) {
+    const err = new Error('`from` must be <= `to`');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const where = [
+    `${baseAlias}.deleted_at IS NULL`,
+    `${baseAlias}.ticket_date >= $1`,
+    `${baseAlias}.ticket_date <= $2`,
+  ];
+
+  const params = [startDate, endDate];
+  let p = 3;
+
+  // sector scope (UUID)
+  const scope = buildSectorScope(req, baseAlias);
+  if (scope.sectorWhere) {
+    where.push(applyParamIndex(scope.sectorWhere, p));
+    params.push(...scope.sectorParams);
+    p += scope.sectorParams.length;
+  }
+
+  // other filters
+  if (isNonEmpty(supplier_id)) {
+    where.push(`${baseAlias}.supplier_id = $${p++}`);
+    params.push(parseInt(String(supplier_id), 10));
+  }
+
+  if (isNonEmpty(waste_code_id)) {
+    where.push(`${baseAlias}.waste_code_id = $${p++}`);
+    params.push(String(waste_code_id));
+  }
+
+  if (isNonEmpty(generator_type)) {
+    where.push(`${baseAlias}.generator_type = $${p++}`);
+    params.push(String(generator_type));
+  }
+
+  if (isNonEmpty(operation_type)) {
+    where.push(`${baseAlias}.operation_type = $${p++}`);
+    params.push(String(operation_type));
+  }
+
+  if (isNonEmpty(contract_type)) {
+    where.push(`${baseAlias}.contract_type = $${p++}`);
+    params.push(String(contract_type));
+  }
+
+  if (isNonEmpty(search)) {
+    // Search in ticket_number or vehicle_number
+    where.push(`(${baseAlias}.ticket_number ILIKE $${p} OR ${baseAlias}.vehicle_number ILIKE $${p})`);
+    params.push(`%${String(search).trim()}%`);
+    p++;
+  }
+
+  return {
+    startDate,
+    endDate,
+    currentYear,
+    whereSql: where.join(' AND '),
+    params,
+    nextIndex: p,
+    scope,
+  };
+};
+
+// CSV export helper
+const toCsv = (rows) => {
+  if (!rows || !rows.length) return '';
+  const headers = Object.keys(rows[0]);
+  const escape = (v) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    lines.push(headers.map((h) => escape(r[h])).join(','));
+  }
+  return lines.join('\n');
+};
+
+// ----------------------------------------------------------------------------
+// 1) Auxiliary data (filters)
+// GET /api/reports/landfill/auxiliary
+// ----------------------------------------------------------------------------
 export const getAuxiliaryData = async (req, res) => {
   try {
-    console.log('📦 Fetching auxiliary data for reports...');
+    // Sectors must respect RBAC
+    const scope = buildSectorScope(req, 's');
 
-    // Waste codes - NU are deleted_at!
-    const wasteCodesQuery = `
-      SELECT id, code, description
-      FROM waste_codes
-      WHERE is_active = true
-      ORDER BY code
+    let sectorsSql = `
+      SELECT s.id, s.sector_number, s.sector_name
+      FROM sectors s
+      WHERE s.deleted_at IS NULL AND s.is_active = true
     `;
-    const wasteCodesResult = await db.query(wasteCodesQuery);
+    const sectorsParams = [];
+    let p = 1;
 
-    // Operators (suppliers) - ARE deleted_at
-    const operatorsQuery = `
-      SELECT id, name
-      FROM institutions
-      WHERE type = 'WASTE_OPERATOR'
-        AND deleted_at IS NULL
-      ORDER BY name
-    `;
-    const operatorsResult = await db.query(operatorsQuery);
+    if (scope.requestedSectorUuid) {
+      sectorsSql += ` AND s.id = $${p++}`;
+      sectorsParams.push(scope.requestedSectorUuid);
+    } else if (scope.isAll === false) {
+      sectorsSql += ` AND s.id = ANY($${p++})`;
+      sectorsParams.push(scope.allowedSectorIds);
+    }
 
-    // Sectors - NU are deleted_at!
-    const sectorsQuery = `
-      SELECT id, sector_name as name, sector_number
-      FROM sectors
-      WHERE is_active = true
-      ORDER BY sector_number
-    `;
-    const sectorsResult = await db.query(sectorsQuery);
+    sectorsSql += ` ORDER BY s.sector_number`;
 
-    res.json({
+    const [sectorsRes, suppliersRes, wasteCodesRes, yearsRes] = await Promise.all([
+      pool.query(sectorsSql, sectorsParams),
+
+      // Suppliers used in landfill tickets (no need RBAC here; RBAC applied at report query time)
+      pool.query(
+        `
+        SELECT DISTINCT i.id, i.name
+        FROM waste_tickets_landfill t
+        JOIN institutions i ON t.supplier_id = i.id
+        WHERE t.deleted_at IS NULL
+        ORDER BY i.name
+        `
+      ),
+
+      pool.query(
+        `
+        SELECT id, code, description, category
+        FROM waste_codes
+        WHERE is_active = true
+        ORDER BY code
+        `
+      ),
+
+      // Available years must respect RBAC scope
+      (async () => {
+        let yearsSql = `
+          SELECT DISTINCT EXTRACT(YEAR FROM t.ticket_date)::INTEGER AS year
+          FROM waste_tickets_landfill t
+          WHERE t.deleted_at IS NULL
+        `;
+        const yearsParams = [];
+        let yp = 1;
+
+        if (req.requestedSectorUuid) {
+          yearsSql += ` AND t.sector_id = $${yp++}`;
+          yearsParams.push(req.requestedSectorUuid);
+        } else if (req.userAccess?.accessLevel !== 'ALL') {
+          yearsSql += ` AND t.sector_id = ANY($${yp++})`;
+          yearsParams.push(req.userAccess?.sectorIds || []);
+        }
+
+        yearsSql += ` ORDER BY year DESC`;
+        return pool.query(yearsSql, yearsParams);
+      })(),
+    ]);
+
+    return res.json({
       success: true,
       data: {
-        waste_codes: wasteCodesResult.rows,
-        operators: operatorsResult.rows,
-        sectors: sectorsResult.rows
-      }
+        sectors: sectorsRes.rows,
+        suppliers: suppliersRes.rows,
+        waste_codes: wasteCodesRes.rows,
+        available_years: yearsRes.rows.map((r) => r.year),
+      },
     });
+  } catch (err) {
+    console.error('getAuxiliaryData error:', err);
+    const code = err.statusCode || 500;
+    return res.status(code).json({ success: false, message: 'Failed to fetch auxiliary data', error: err.message });
+  }
+};
 
-  } catch (error) {
-    console.error('❌ Auxiliary data error:', error);
-    res.status(500).json({
+// ----------------------------------------------------------------------------
+// 2) Main landfill report
+// GET /api/reports/landfill
+// ----------------------------------------------------------------------------
+export const getLandfillReports = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 50,
+      sort_by = 'ticket_date',
+      sort_dir = 'desc',
+    } = req.query;
+
+    const pageNum = clampInt(page, 1, 1000000, 1);
+    const limitNum = clampInt(limit, 1, 500, 50);
+    const offset = (pageNum - 1) * limitNum;
+
+    const filters = buildFilters(req, 't');
+
+    // Whitelist sorting
+    const sortMap = {
+      ticket_date: 't.ticket_date',
+      ticket_number: 't.ticket_number',
+      sector_number: 's.sector_number',
+      supplier_name: 'i.name',
+      net_weight_tons: 't.net_weight_tons',
+    };
+    const sortCol = sortMap[sort_by] || 't.ticket_date';
+    const dir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+    // COUNT
+    const countSql = `
+      SELECT COUNT(*)::INTEGER AS total
+      FROM waste_tickets_landfill t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions i ON t.supplier_id = i.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${filters.whereSql}
+    `;
+    const countRes = await pool.query(countSql, filters.params);
+    const total = countRes.rows[0]?.total || 0;
+
+    // LIST
+    // add LIMIT/OFFSET params
+    const listParams = [...filters.params];
+    const pLimit = filters.nextIndex;
+    const pOffset = filters.nextIndex + 1;
+    listParams.push(limitNum, offset);
+
+    const listSql = `
+      SELECT
+        t.id,
+        t.ticket_number,
+        t.ticket_date,
+        t.ticket_time,
+        s.id as sector_id,
+        s.sector_number,
+        s.sector_name,
+        i.id as supplier_id,
+        i.name as supplier_name,
+        wc.id as waste_code_id,
+        wc.code as waste_code,
+        wc.description as waste_description,
+        t.vehicle_number,
+        t.gross_weight_kg,
+        t.tare_weight_kg,
+        t.net_weight_kg,
+        t.net_weight_tons,
+        t.generator_type,
+        t.operation_type,
+        t.contract_type,
+        t.created_at
+      FROM waste_tickets_landfill t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions i ON t.supplier_id = i.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${filters.whereSql}
+      ORDER BY ${sortCol} ${dir}, t.created_at ${dir}
+      LIMIT $${pLimit} OFFSET $${pOffset}
+    `;
+    const listRes = await pool.query(listSql, listParams);
+
+    // SUMMARY (within filters)
+    const summarySql = `
+      SELECT
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons,
+        COUNT(*)::INTEGER as total_tickets,
+        COALESCE(AVG(t.net_weight_tons), 0) as avg_tons_per_ticket
+      FROM waste_tickets_landfill t
+      WHERE ${filters.whereSql}
+    `;
+    const summaryRes = await pool.query(summarySql, filters.params);
+
+    // BY SECTOR (within filters)
+    const bySectorSql = `
+      SELECT
+        s.sector_number,
+        s.sector_name,
+        COUNT(*)::INTEGER as ticket_count,
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_landfill t
+      JOIN sectors s ON t.sector_id = s.id
+      WHERE ${filters.whereSql}
+      GROUP BY s.sector_number, s.sector_name
+      ORDER BY s.sector_number
+    `;
+    const bySectorRes = await pool.query(bySectorSql, filters.params);
+
+    return res.json({
+      success: true,
+      data: {
+        items: listRes.rows,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
+        summary: {
+          total_tons: Number(summaryRes.rows[0]?.total_tons || 0),
+          total_tickets: summaryRes.rows[0]?.total_tickets || 0,
+          avg_tons_per_ticket: Number(summaryRes.rows[0]?.avg_tons_per_ticket || 0),
+          date_range: { from: filters.startDate, to: filters.endDate },
+        },
+        by_sector: bySectorRes.rows.map((r) => ({
+          sector_number: r.sector_number,
+          sector_name: r.sector_name,
+          ticket_count: r.ticket_count,
+          total_tons: Number(r.total_tons || 0),
+        })),
+      },
+      filters_applied: {
+        year: filters.currentYear,
+        from: filters.startDate,
+        to: filters.endDate,
+        sector_uuid: req.requestedSectorUuid || null,
+      },
+    });
+  } catch (err) {
+    console.error('getLandfillReports error:', err);
+    const code = err.statusCode || 500;
+    return res.status(code).json({
       success: false,
-      message: 'Failed to fetch auxiliary data',
-      error: error.message
+      message: 'Failed to fetch landfill reports',
+      error: err.message,
     });
   }
 };
 
-/**
- * ============================================================================
- * EXPORT LANDFILL REPORTS (toate datele filtrate, fără paginare)
- * ============================================================================
- */
-
+// ----------------------------------------------------------------------------
+// 3) Export landfill report (CSV)
+// GET /api/reports/landfill/export
+// ----------------------------------------------------------------------------
 export const exportLandfillReports = async (req, res) => {
-  console.log('\n📤 ==================== EXPORT LANDFILL REPORTS ====================');
-  console.log('📥 Query params:', req.query);
-  console.log('👤 User:', { id: req.user?.id, role: req.user?.role });
-
   try {
-    const { year, from, to, sector_id } = req.query;
-    const userId = req.user.id;
-    const userRole = req.user.role;
+    const filters = buildFilters(req, 't');
 
-    // ✅ NOUA LOGICĂ: Calculează acces prin accessControl
-    const access = await getAccessibleSectors(userId, userRole);
-
-    console.log('🔐 Access control:', {
-      role: userRole,
-      accessType: access.accessType,
-      sectorsCount: access.sectorIds.length
-    });
-
-    if (access.sectorIds.length === 0 && access.accessType !== 'PLATFORM_ALL') {
-      return res.status(403).json({
-        success: false,
-        message: 'Nu ai acces la niciun sector'
-      });
-    }
-
-    // Date range setup
-    const currentDate = new Date();
-    const currentYear = year || currentDate.getFullYear();
-    const startDate = from || `${currentYear}-01-01`;
-    const endDate = to || currentDate.toISOString().split('T')[0];
-
-    console.log('📅 Date range:', { startDate, endDate });
-
-    // ✅ Sector filtering
-    let sectorFilter = '';
-    let sectorParams = [];
-
-    if (sector_id) {
-      let sectorUuid = sector_id;
-      
-      if (!isNaN(sector_id) && parseInt(sector_id) >= 1 && parseInt(sector_id) <= 6) {
-        const sectorQuery = await db.query(
-          'SELECT id FROM sectors WHERE sector_number = $1 AND is_active = true',
-          [parseInt(sector_id)]
-        );
-        if (sectorQuery.rows.length > 0) {
-          sectorUuid = sectorQuery.rows[0].id;
-        }
-      }
-
-      if (access.accessType !== 'PLATFORM_ALL') {
-        if (!access.sectorIds.includes(sectorUuid)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Nu ai acces la acest sector'
-          });
-        }
-      }
-
-      sectorFilter = 'AND wtl.sector_id = $3';
-      sectorParams = [sectorUuid];
-    } else {
-      if (access.accessType !== 'PLATFORM_ALL') {
-        sectorFilter = 'AND wtl.sector_id = ANY($3)';
-        sectorParams = [access.sectorIds];
-      }
-    }
-
-    const baseParams = [startDate, endDate, ...sectorParams];
-
-    // Count total
-    console.log('🔢 Counting total records...');
-
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM waste_tickets_landfill wtl
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorFilter}
-    `;
-    
-    const countResult = await db.query(countQuery, baseParams);
-    const totalCount = parseInt(countResult.rows[0].total);
-
-    console.log(`📊 Total records: ${totalCount}`);
-
-    // Fetch ALL tickets (fără LIMIT/OFFSET)
-    console.log('📋 Fetching ALL tickets for export...');
-
-    const ticketsQuery = `
-      SELECT 
-        wtl.id,
-        wtl.ticket_number,
-        wtl.ticket_date,
-        wtl.ticket_time,
+    const exportSql = `
+      SELECT
+        t.ticket_number,
+        t.ticket_date,
+        t.ticket_time,
+        s.sector_number,
+        s.sector_name,
         i.name as supplier_name,
         wc.code as waste_code,
         wc.description as waste_description,
-        s.sector_name,
-        wtl.generator_type as generator,
-        wtl.vehicle_number,
-        wtl.gross_weight_kg / 1000.0 as gross_weight_tons,
-        wtl.tare_weight_kg / 1000.0 as tare_weight_tons,
-        wtl.net_weight_tons,
-        wtl.contract_type as contract,
-        wtl.operation_type
-      FROM waste_tickets_landfill wtl
-      JOIN institutions i ON wtl.supplier_id = i.id
-      JOIN waste_codes wc ON wtl.waste_code_id = wc.id
-      JOIN sectors s ON wtl.sector_id = s.id
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorFilter}
-      ORDER BY wtl.ticket_date DESC, wtl.ticket_time DESC
+        t.vehicle_number,
+        t.gross_weight_kg,
+        t.tare_weight_kg,
+        t.net_weight_kg,
+        t.net_weight_tons,
+        t.generator_type,
+        t.operation_type,
+        t.contract_type,
+        t.created_at
+      FROM waste_tickets_landfill t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions i ON t.supplier_id = i.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${filters.whereSql}
+      ORDER BY t.ticket_date DESC, t.created_at DESC
     `;
-    
-    const ticketsResult = await db.query(ticketsQuery, baseParams);
 
-    const tickets = ticketsResult.rows.map(row => ({
-      id: row.id,
-      ticket_number: row.ticket_number,
-      ticket_date: row.ticket_date,
-      ticket_time: row.ticket_time,
-      supplier_name: row.supplier_name,
-      waste_code: row.waste_code,
-      waste_description: row.waste_description,
-      sector_name: row.sector_name,
-      generator: row.generator,
-      vehicle_number: row.vehicle_number,
-      gross_weight_tons: formatNumber(row.gross_weight_tons),
-      tare_weight_tons: formatNumber(row.tare_weight_tons),
-      net_weight_tons: formatNumber(row.net_weight_tons),
-      contract: row.contract,
-      operation: row.operation_type || `Eliminare ${row.sector_name}`
-    }));
+    const exportRes = await pool.query(exportSql, filters.params);
+    const csv = toCsv(exportRes.rows);
 
-    console.log(`✅ Export data fetched successfully: ${tickets.length} records`);
+    const fileName = `raport_depozitare_${filters.startDate}_${filters.endDate}.csv`;
 
-    res.json({
-      success: true,
-      data: {
-        tickets: tickets,
-        total_count: totalCount,
-        access_info: {
-          accessible_sectors: access.sectorIds.length,
-          access_type: access.accessType,
-          can_export: true
-        }
-      }
-    });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
 
-  } catch (error) {
-    console.error('❌ Export error:', error);
-    res.status(500).json({
+    return res.status(200).send(csv);
+  } catch (err) {
+    console.error('exportLandfillReports error:', err);
+    const code = err.statusCode || 500;
+    return res.status(code).json({
       success: false,
-      message: 'Failed to export reports',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Failed to export landfill reports',
+      error: err.message,
     });
   }
+};
+
+export default {
+  getLandfillReports,
+  getAuxiliaryData,
+  exportLandfillReports,
 };

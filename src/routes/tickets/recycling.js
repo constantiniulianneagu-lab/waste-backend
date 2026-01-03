@@ -1,62 +1,38 @@
-// src/routes/tickets/recycling.js
+// ============================================================================
+// src/routes/tickets/recycling.js  (COMPLET)
+// ============================================================================
+// Base: /api/tickets/recycling
+// ============================================================================
+
 import express from 'express';
-import { 
+
+import {
   getAllRecyclingTickets,
   getRecyclingTicketById,
   createRecyclingTicket,
   updateRecyclingTicket,
   deleteRecyclingTicket,
-  getRecyclingStats
+  getRecyclingStats,
 } from '../../controllers/wasteTicketsRecyclingController.js';
-import { authenticateToken, authorizeRoles } from '../../middleware/auth.js';
+
+import { authenticateToken, authorizeAdminOnly } from '../../middleware/auth.js';
+import { resolveUserAccess } from '../../middleware/resolveUserAccess.js';
+import { enforceSectorAccess } from '../../middleware/enforceSectorAccess.js';
 
 const router = express.Router();
 
-// Toate route-urile necesită autentificare
 router.use(authenticateToken);
+router.use(resolveUserAccess);
+router.use(enforceSectorAccess);
 
-// ============================================================================
-// GET ROUTES
-// ============================================================================
-
-// GET stats - toți utilizatorii autentificați pot vedea stats
+// READ
 router.get('/stats', getRecyclingStats);
-
-// GET all tickets - toți utilizatorii autentificați
 router.get('/', getAllRecyclingTickets);
-
-// GET single ticket by ID - toți utilizatorii autentificați
 router.get('/:id', getRecyclingTicketById);
 
-// ============================================================================
-// POST ROUTES
-// ============================================================================
-
-// CREATE ticket - doar PLATFORM_ADMIN și TMB operators
-// Supplier MUST be TMB_OPERATOR, Recipient MUST be RECYCLING_CLIENT
-router.post('/', 
-  authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), 
-  createRecyclingTicket
-);
-
-// ============================================================================
-// PUT ROUTES
-// ============================================================================
-
-// UPDATE ticket - doar PLATFORM_ADMIN și operators
-router.put('/:id', 
-  authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), 
-  updateRecyclingTicket
-);
-
-// ============================================================================
-// DELETE ROUTES
-// ============================================================================
-
-// DELETE ticket (soft delete) - doar PLATFORM_ADMIN
-router.delete('/:id', 
-  authorizeRoles('PLATFORM_ADMIN'), 
-  deleteRecyclingTicket
-);
+// WRITE
+router.post('/', authorizeAdminOnly, createRecyclingTicket);
+router.put('/:id', authorizeAdminOnly, updateRecyclingTicket);
+router.delete('/:id', authorizeAdminOnly, deleteRecyclingTicket);
 
 export default router;

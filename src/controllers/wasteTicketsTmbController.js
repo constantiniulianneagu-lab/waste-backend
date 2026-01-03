@@ -1,820 +1,575 @@
 // src/controllers/wasteTicketsTmbController.js
+// ============================================================================
+// TMB TICKETS CONTROLLER (RBAC via req.userAccess, UUID sector scoping)
+// ============================================================================
+// Middleware expectations (from routes):
+// - authenticateToken
+// - resolveUserAccess => sets req.userAccess { accessLevel, sectorIds, ... }
+// - enforceSectorAccess => validates requested sector & sets req.requestedSectorUuid
+// - authorizeAdminOnly on POST/PUT/DELETE (routes handle CRUD restriction)
+//
+// IMPORTANT:
+// - waste_tickets_tmb.sector_id is UUID
+// - NO role checks here.
+// ============================================================================
+
 import pool from '../config/database.js';
 
-// ============================================================================
-// GET ALL TMB TICKETS (with pagination & filters)
-// ============================================================================
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+const clampInt = (v, min, max, fallback) => {
+  const n = parseInt(String(v), 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+};
+
+const isNonEmpty = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+
+const isoDate = (d) => new Date(d).toISOString().split('T')[0];
+
+const assertValidDate = (dateStr, fieldName) => {
+  if (!dateStr || typeof dateStr !== 'string') throw new Error(`Invalid ${fieldName}`);
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) throw new Error(`Invalid ${fieldName}: ${dateStr}`);
+  return dateStr;
+};
+
+const buildSectorScope = (req, alias = 't') => {
+  const access = req.userAccess;
+  if (!access) throw new Error('Missing req.userAccess (resolveUserAccess not applied)');
+
+  const isAll = access.accessLevel === 'ALL';
+  const sectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+  const requestedSectorUuid = req.requestedSectorUuid || null;
+
+  let sectorWhere = '';
+  const sectorParams = [];
+
+  if (requestedSectorUuid) {
+    sectorWhere = `AND ${alias}.sector_id = ${{}}`;
+    sectorParams.push(requestedSectorUuid);
+  } else if (!isAll) {
+    sectorWhere = `AND ${alias}.sector_id = ANY(${{}})`;
+    sectorParams.push(sectorIds);
+  }
+
+  return { sectorWhere, sectorParams, requestedSectorUuid };
+};
+
+const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
+  let idx = startIndex;
+  return sqlWithPlaceholders.replace(/\$\{\{\}\}/g, () => `$${idx++}`);
+};
+
+const buildListFilters = (req, alias = 't') => {
+  const {
+    year,
+    from,
+    to,
+    supplier_id,
+    operator_id,
+    waste_code_id,
+    generator_type,
+    vehicle_number,
+    ticket_number,
+    search,
+  } = req.query;
+
+  const now = new Date();
+  const y = isNonEmpty(year) ? clampInt(year, 2000, 2100, now.getFullYear()) : now.getFullYear();
+  const startDate = assertValidDate(from || `${y}-01-01`, 'from');
+  const endDate = assertValidDate(to || isoDate(now), 'to');
+
+  if (new Date(startDate) > new Date(endDate)) {
+    const err = new Error('`from` must be <= `to`');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const where = [
+    `${alias}.deleted_at IS NULL`,
+    `${alias}.ticket_date >= $1`,
+    `${alias}.ticket_date <= $2`,
+  ];
+
+  const params = [startDate, endDate];
+  let p = 3;
+
+  // Sector scope
+  const scope = buildSectorScope(req, alias);
+  if (scope.sectorWhere) {
+    where.push(applyParamIndex(scope.sectorWhere, p));
+    params.push(...scope.sectorParams);
+    p += scope.sectorParams.length;
+  }
+
+  // Optional filters
+  if (isNonEmpty(supplier_id)) {
+    where.push(`${alias}.supplier_id = $${p++}`);
+    params.push(parseInt(String(supplier_id), 10));
+  }
+
+  if (isNonEmpty(operator_id)) {
+    where.push(`${alias}.operator_id = $${p++}`);
+    params.push(parseInt(String(operator_id), 10));
+  }
+
+  if (isNonEmpty(waste_code_id)) {
+    where.push(`${alias}.waste_code_id = $${p++}`);
+    params.push(String(waste_code_id));
+  }
+
+  if (isNonEmpty(generator_type)) {
+    where.push(`${alias}.generator_type = $${p++}`);
+    params.push(String(generator_type));
+  }
+
+  if (isNonEmpty(vehicle_number)) {
+    where.push(`${alias}.vehicle_number ILIKE $${p++}`);
+    params.push(`%${String(vehicle_number).trim()}%`);
+  }
+
+  if (isNonEmpty(ticket_number)) {
+    where.push(`${alias}.ticket_number ILIKE $${p++}`);
+    params.push(`%${String(ticket_number).trim()}%`);
+  }
+
+  if (isNonEmpty(search)) {
+    where.push(`(${alias}.ticket_number ILIKE $${p} OR ${alias}.vehicle_number ILIKE $${p})`);
+    params.push(`%${String(search).trim()}%`);
+    p++;
+  }
+
+  return { whereSql: where.join(' AND '), params, nextIndex: p, startDate, endDate, year: y, requestedSectorUuid: scope.requestedSectorUuid };
+};
+
+// ----------------------------------------------------------------------------
+// READ: GET /api/tickets/tmb
+// ----------------------------------------------------------------------------
 export const getAllTmbTickets = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 20, 
-      sectorId,
-      supplierId,
-      tmbAssociationId,
-      startDate,
-      endDate,
-      search 
-    } = req.query;
+    const { page = 1, limit = 50, sort_by = 'ticket_date', sort_dir = 'desc' } = req.query;
 
-    const offset = (page - 1) * limit;
+    const pageNum = clampInt(page, 1, 1000000, 1);
+    const limitNum = clampInt(limit, 1, 500, 50);
+    const offset = (pageNum - 1) * limitNum;
 
-    let query = `
-      SELECT 
-        wtt.id,
-        wtt.ticket_number,
-        wtt.ticket_date,
-        wtt.ticket_time,
-        wtt.supplier_id,
-        i.name as supplier_name,
-        i.type as supplier_type,
-        wtt.tmb_association_id,
-        ta.association_name,
-        wtt.waste_code_id,
+    const f = buildListFilters(req, 't');
+
+    const sortMap = {
+      ticket_date: 't.ticket_date',
+      ticket_number: 't.ticket_number',
+      sector_number: 's.sector_number',
+      supplier_name: 'sup.name',
+      operator_name: 'op.name',
+      net_weight_tons: 't.net_weight_tons',
+      vehicle_number: 't.vehicle_number',
+      created_at: 't.created_at',
+    };
+    const sortCol = sortMap[sort_by] || 't.ticket_date';
+    const dir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+    const countSql = `
+      SELECT COUNT(*)::INTEGER AS total
+      FROM waste_tickets_tmb t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions sup ON t.supplier_id = sup.id
+      JOIN institutions op ON t.operator_id = op.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
+    `;
+    const countRes = await pool.query(countSql, f.params);
+    const total = countRes.rows[0]?.total || 0;
+
+    const listParams = [...f.params];
+    const pLimit = f.nextIndex;
+    const pOffset = f.nextIndex + 1;
+    listParams.push(limitNum, offset);
+
+    const listSql = `
+      SELECT
+        t.id,
+        t.ticket_number,
+        t.ticket_date,
+        t.ticket_time,
+        s.id as sector_id,
+        s.sector_number,
+        s.sector_name,
+        sup.id as supplier_id,
+        sup.name as supplier_name,
+        op.id as operator_id,
+        op.name as operator_name,
+        wc.id as waste_code_id,
         wc.code as waste_code,
         wc.description as waste_description,
-        wtt.sector_id,
-        s.sector_name,
-        wtt.vehicle_number,
-        wtt.delivered_quantity_kg,
-        wtt.accepted_quantity_kg,
-        wtt.delivered_quantity_tons,
-        wtt.accepted_quantity_tons,
-        wtt.rejection_reason,
-        wtt.generator_type,
-        wtt.contract_type,
-        wtt.created_by,
-        u.email as created_by_email,
-        wtt.created_at,
-        wtt.updated_at
-      FROM waste_tickets_tmb wtt
-      JOIN institutions i ON wtt.supplier_id = i.id
-      JOIN tmb_associations ta ON wtt.tmb_association_id = ta.id
-      JOIN waste_codes wc ON wtt.waste_code_id = wc.id
-      JOIN sectors s ON wtt.sector_id = s.id
-      LEFT JOIN users u ON wtt.created_by = u.id
-      WHERE wtt.deleted_at IS NULL
+        t.vehicle_number,
+        t.generator_type,
+        t.net_weight_kg,
+        t.net_weight_tons,
+        t.created_at,
+        t.updated_at
+      FROM waste_tickets_tmb t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions sup ON t.supplier_id = sup.id
+      JOIN institutions op ON t.operator_id = op.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
+      ORDER BY ${sortCol} ${dir}, t.created_at ${dir}
+      LIMIT $${pLimit} OFFSET $${pOffset}
     `;
+    const listRes = await pool.query(listSql, listParams);
 
-    const params = [];
-    let paramCount = 1;
-
-    // Filter by sector
-    if (sectorId) {
-      query += ` AND wtt.sector_id = $${paramCount}`;
-      params.push(sectorId);
-      paramCount++;
-    }
-
-    // Filter by supplier
-    if (supplierId) {
-      query += ` AND wtt.supplier_id = $${paramCount}`;
-      params.push(supplierId);
-      paramCount++;
-    }
-
-    // Filter by TMB association
-    if (tmbAssociationId) {
-      query += ` AND wtt.tmb_association_id = $${paramCount}`;
-      params.push(tmbAssociationId);
-      paramCount++;
-    }
-
-    // Filter by date range
-    if (startDate) {
-      query += ` AND wtt.ticket_date >= $${paramCount}`;
-      params.push(startDate);
-      paramCount++;
-    }
-
-    if (endDate) {
-      query += ` AND wtt.ticket_date <= $${paramCount}`;
-      params.push(endDate);
-      paramCount++;
-    }
-
-    // Search by ticket number or vehicle number
-    if (search) {
-      query += ` AND (wtt.ticket_number ILIKE $${paramCount} OR wtt.vehicle_number ILIKE $${paramCount})`;
-      params.push(`%${search}%`);
-      paramCount++;
-    }
-
-    // Get total count
-    const countQuery = query.replace(
-      /SELECT .+ FROM/s, 
-      'SELECT COUNT(*) FROM'
-    );
-    const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].count);
-
-    // Add sorting and pagination
-    query += ` ORDER BY wtt.ticket_date DESC, wtt.ticket_time DESC 
-               LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
-    params.push(limit, offset);
-
-    const result = await pool.query(query, params);
-
-    res.json({
+    return res.json({
       success: true,
       data: {
-        tickets: result.rows,
+        items: listRes.rows,
         pagination: {
           total,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(total / limit)
-        }
-      }
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
+        filters_applied: {
+          from: f.startDate,
+          to: f.endDate,
+          year: f.year,
+          sector_uuid: f.requestedSectorUuid || null,
+        },
+      },
     });
-  } catch (error) {
-    console.error('Get TMB tickets error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea tichetelor TMB'
-    });
+  } catch (err) {
+    console.error('getAllTmbTickets error:', err);
+    const code = err.statusCode || 500;
+    return res.status(code).json({ success: false, message: 'Failed to fetch TMB tickets', error: err.message });
   }
 };
 
-// ============================================================================
-// GET SINGLE TMB TICKET BY ID
-// ============================================================================
+// ----------------------------------------------------------------------------
+// READ: GET /api/tickets/tmb/:id
+// ----------------------------------------------------------------------------
 export const getTmbTicketById = async (req, res) => {
   try {
     const { id } = req.params;
+    const ticketId = parseInt(String(id), 10);
 
-    const result = await pool.query(
-      `SELECT 
-        wtt.id,
-        wtt.ticket_number,
-        wtt.ticket_date,
-        wtt.ticket_time,
-        wtt.supplier_id,
-        i.name as supplier_name,
-        i.type as supplier_type,
-        wtt.tmb_association_id,
-        ta.association_name,
-        ta.primary_operator_id,
-        ta.secondary_operator_id,
-        io1.name as primary_operator_name,
-        io2.name as secondary_operator_name,
-        wtt.waste_code_id,
-        wc.code as waste_code,
-        wc.description as waste_description,
-        wc.category as waste_category,
-        wtt.sector_id,
-        s.sector_name,
-        s.sector_number,
-        wtt.vehicle_number,
-        wtt.delivered_quantity_kg,
-        wtt.accepted_quantity_kg,
-        wtt.delivered_quantity_tons,
-        wtt.accepted_quantity_tons,
-        wtt.rejection_reason,
-        wtt.generator_type,
-        wtt.contract_type,
-        wtt.created_by,
-        u.email as created_by_email,
-        u.first_name as created_by_first_name,
-        u.last_name as created_by_last_name,
-        wtt.created_at,
-        wtt.updated_at
-      FROM waste_tickets_tmb wtt
-      JOIN institutions i ON wtt.supplier_id = i.id
-      JOIN tmb_associations ta ON wtt.tmb_association_id = ta.id
-      LEFT JOIN institutions io1 ON ta.primary_operator_id = io1.id
-      LEFT JOIN institutions io2 ON ta.secondary_operator_id = io2.id
-      JOIN waste_codes wc ON wtt.waste_code_id = wc.id
-      JOIN sectors s ON wtt.sector_id = s.id
-      LEFT JOIN users u ON wtt.created_by = u.id
-      WHERE wtt.id = $1 AND wtt.deleted_at IS NULL`,
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tichet TMB negăsit'
-      });
+    if (Number.isNaN(ticketId)) {
+      return res.status(400).json({ success: false, message: 'Invalid ticket id' });
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Get TMB ticket error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea tichetului TMB'
-    });
+    // Apply RBAC scope to single-item fetch too
+    const scope = buildSectorScope(req, 't');
+
+    let sql = `
+      SELECT
+        t.id,
+        t.ticket_number,
+        t.ticket_date,
+        t.ticket_time,
+        s.id as sector_id,
+        s.sector_number,
+        s.sector_name,
+        sup.id as supplier_id,
+        sup.name as supplier_name,
+        op.id as operator_id,
+        op.name as operator_name,
+        wc.id as waste_code_id,
+        wc.code as waste_code,
+        wc.description as waste_description,
+        t.vehicle_number,
+        t.generator_type,
+        t.net_weight_kg,
+        t.net_weight_tons,
+        t.created_at,
+        t.updated_at
+      FROM waste_tickets_tmb t
+      JOIN sectors s ON t.sector_id = s.id
+      JOIN institutions sup ON t.supplier_id = sup.id
+      JOIN institutions op ON t.operator_id = op.id
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE t.deleted_at IS NULL
+        AND t.id = $1
+    `;
+
+    const params = [ticketId];
+    let p = 2;
+
+    if (scope.sectorWhere) {
+      sql += ` ${applyParamIndex(scope.sectorWhere, p)}`;
+      params.push(...scope.sectorParams);
+      p += scope.sectorParams.length;
+    }
+
+    const result = await pool.query(sql, params);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+
+    return res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('getTmbTicketById error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch ticket', error: err.message });
   }
 };
 
-// ============================================================================
-// CREATE TMB TICKET
-// ============================================================================
+// ----------------------------------------------------------------------------
+// STATS: GET /api/tickets/tmb/stats
+// ----------------------------------------------------------------------------
+export const getTmbStats = async (req, res) => {
+  try {
+    const f = buildListFilters(req, 't');
+
+    const summarySql = `
+      SELECT
+        COUNT(*)::INTEGER as total_tickets,
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons,
+        COALESCE(AVG(t.net_weight_tons), 0) as avg_tons_per_ticket
+      FROM waste_tickets_tmb t
+      WHERE ${f.whereSql}
+    `;
+    const summaryRes = await pool.query(summarySql, f.params);
+
+    const bySectorSql = `
+      SELECT
+        s.sector_number,
+        s.sector_name,
+        COUNT(*)::INTEGER as ticket_count,
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_tmb t
+      JOIN sectors s ON t.sector_id = s.id
+      WHERE ${f.whereSql}
+      GROUP BY s.sector_number, s.sector_name
+      ORDER BY s.sector_number
+    `;
+    const bySectorRes = await pool.query(bySectorSql, f.params);
+
+    const byOperatorSql = `
+      SELECT
+        op.id as operator_id,
+        op.name as operator_name,
+        COUNT(*)::INTEGER as ticket_count,
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_tmb t
+      JOIN institutions op ON t.operator_id = op.id
+      WHERE ${f.whereSql}
+      GROUP BY op.id, op.name
+      ORDER BY total_tons DESC
+      LIMIT 10
+    `;
+    const byOperatorRes = await pool.query(byOperatorSql, f.params);
+
+    return res.json({
+      success: true,
+      data: {
+        summary: {
+          total_tickets: summaryRes.rows[0]?.total_tickets || 0,
+          total_tons: Number(summaryRes.rows[0]?.total_tons || 0),
+          avg_tons_per_ticket: Number(summaryRes.rows[0]?.avg_tons_per_ticket || 0),
+          date_range: { from: f.startDate, to: f.endDate },
+        },
+        by_sector: bySectorRes.rows.map((r) => ({
+          sector_number: r.sector_number,
+          sector_name: r.sector_name,
+          ticket_count: r.ticket_count,
+          total_tons: Number(r.total_tons || 0),
+        })),
+        top_operators: byOperatorRes.rows.map((r) => ({
+          operator_id: r.operator_id,
+          operator_name: r.operator_name,
+          ticket_count: r.ticket_count,
+          total_tons: Number(r.total_tons || 0),
+        })),
+      },
+    });
+  } catch (err) {
+    console.error('getTmbStats error:', err);
+    const code = err.statusCode || 500;
+    return res.status(code).json({ success: false, message: 'Failed to fetch TMB stats', error: err.message });
+  }
+};
+
+// ----------------------------------------------------------------------------
+// CREATE: POST /api/tickets/tmb   (blocked in routes by authorizeAdminOnly)
+// ----------------------------------------------------------------------------
 export const createTmbTicket = async (req, res) => {
   try {
     const {
-      ticketNumber,
-      ticketDate,
-      ticketTime,
-      supplierId,
-      tmbAssociationId,
-      wasteCodeId,
-      sectorId,
-      vehicleNumber,
-      deliveredQuantityKg,
-      acceptedQuantityKg,
-      rejectionReason,
-      generatorType,
-      contractType
+      ticket_number,
+      ticket_date,
+      ticket_time,
+      supplier_id,
+      operator_id,
+      waste_code_id,
+      sector_id, // UUID expected
+      vehicle_number,
+      generator_type,
+      net_weight_kg,
     } = req.body;
 
-    // ========== VALIDATION ==========
-
-    // Required fields
-    if (!ticketNumber || !ticketDate || !ticketTime || !supplierId || 
-        !tmbAssociationId || !wasteCodeId || !sectorId || 
-        !vehicleNumber || !deliveredQuantityKg || acceptedQuantityKg === undefined ||
-        !generatorType || !contractType) {
-      return res.status(400).json({
-        success: false,
-        message: 'Toate câmpurile obligatorii trebuie completate'
-      });
+    if (!isNonEmpty(ticket_number) || !isNonEmpty(ticket_date)) {
+      return res.status(400).json({ success: false, message: 'ticket_number și ticket_date sunt obligatorii' });
+    }
+    if (!isNonEmpty(supplier_id) || !isNonEmpty(operator_id) || !isNonEmpty(waste_code_id) || !isNonEmpty(sector_id)) {
+      return res.status(400).json({ success: false, message: 'supplier_id, operator_id, waste_code_id, sector_id sunt obligatorii' });
+    }
+    if (!isNonEmpty(vehicle_number)) {
+      return res.status(400).json({ success: false, message: 'vehicle_number este obligatoriu' });
+    }
+    if (!isNonEmpty(net_weight_kg) || Number(net_weight_kg) < 0) {
+      return res.status(400).json({ success: false, message: 'net_weight_kg invalid' });
     }
 
-    // Validate quantities
-    const delivered = parseFloat(deliveredQuantityKg);
-    const accepted = parseFloat(acceptedQuantityKg);
+    const createdBy = req.user?.id;
 
-    if (isNaN(delivered) || delivered <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cantitatea livrată trebuie să fie mai mare decât 0'
-      });
-    }
-
-    if (isNaN(accepted) || accepted < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cantitatea acceptată nu poate fi negativă'
-      });
-    }
-
-    if (accepted > delivered) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cantitatea acceptată nu poate fi mai mare decât cantitatea livrată'
-      });
-    }
-
-    // Validate contract type
-    if (!['Taxa', 'Tarif'].includes(contractType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tip contract invalid. Valori acceptate: Taxa, Tarif'
-      });
-    }
-
-    // Check if ticket number already exists
-    const existingTicket = await pool.query(
-      'SELECT id FROM waste_tickets_tmb WHERE ticket_number = $1 AND deleted_at IS NULL',
-      [ticketNumber]
-    );
-
-    if (existingTicket.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Numărul de tichet există deja în sistem'
-      });
-    }
-
-    // ========== VALIDATE SUPPLIER = WASTE_COLLECTOR ==========
-    const supplierResult = await pool.query(
-      'SELECT id, type, name FROM institutions WHERE id = $1 AND deleted_at IS NULL',
-      [supplierId]
-    );
-
-    if (supplierResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Furnizorul specificat nu există'
-      });
-    }
-
-    const supplier = supplierResult.rows[0];
-
-    if (supplier.type !== 'WASTE_COLLECTOR') {
-      return res.status(400).json({
-        success: false,
-        message: `Furnizorul trebuie să fie de tip WASTE_COLLECTOR. Tip actual: ${supplier.type}`
-      });
-    }
-
-    // ========== CRITICAL: VALIDATE WASTE CODE = '20 03 01' ONLY ==========
-    const wasteCodeResult = await pool.query(
-      'SELECT id, code, description FROM waste_codes WHERE id = $1 AND is_active = true',
-      [wasteCodeId]
-    );
-
-    if (wasteCodeResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Codul de deșeu specificat nu există sau nu este activ'
-      });
-    }
-
-    const wasteCode = wasteCodeResult.rows[0];
-
-    // CRITICAL VALIDATION: TMB accepts ONLY code 20 03 01
-    if (wasteCode.code !== '20 03 01') {
-      return res.status(400).json({
-        success: false,
-        message: `TMB acceptă DOAR codul de deșeu 20 03 01 (deșeuri municipale amestecate). Cod specificat: ${wasteCode.code}`
-      });
-    }
-
-    // ========== VALIDATE TMB ASSOCIATION MATCHES SECTOR ==========
-    const tmbAssociationResult = await pool.query(
-      `SELECT ta.id, ta.sector_id, ta.association_name, ta.is_active,
-              s.sector_name
-       FROM tmb_associations ta
-       JOIN sectors s ON ta.sector_id = s.id
-       WHERE ta.id = $1`,
-      [tmbAssociationId]
-    );
-
-    if (tmbAssociationResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Asocierea TMB specificată nu există'
-      });
-    }
-
-    const tmbAssociation = tmbAssociationResult.rows[0];
-
-    if (!tmbAssociation.is_active) {
-      return res.status(400).json({
-        success: false,
-        message: 'Asocierea TMB specificată nu este activă'
-      });
-    }
-
-    // CRITICAL: Verify TMB association sector matches ticket sector
-    if (tmbAssociation.sector_id !== sectorId) {
-      return res.status(400).json({
-        success: false,
-        message: `Asocierea TMB (${tmbAssociation.association_name}) nu corespunde sectorului specificat. Asocierea este pentru sectorul: ${tmbAssociation.sector_name}`
-      });
-    }
-
-    // Validate sector exists
-    const sectorResult = await pool.query(
-      'SELECT id FROM sectors WHERE id = $1 AND is_active = true',
-      [sectorId]
-    );
-
-    if (sectorResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Sectorul specificat nu există sau nu este activ'
-      });
-    }
-
-    // ========== INSERT TICKET ==========
-    const result = await pool.query(
-      `INSERT INTO waste_tickets_tmb (
+    const insertSql = `
+      INSERT INTO waste_tickets_tmb (
         ticket_number,
         ticket_date,
         ticket_time,
         supplier_id,
-        tmb_association_id,
+        operator_id,
         waste_code_id,
         sector_id,
         vehicle_number,
-        delivered_quantity_kg,
-        accepted_quantity_kg,
-        rejection_reason,
         generator_type,
-        contract_type,
-        created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-      RETURNING 
-        id,
-        ticket_number,
-        ticket_date,
-        ticket_time,
-        supplier_id,
-        tmb_association_id,
-        waste_code_id,
-        sector_id,
-        vehicle_number,
-        delivered_quantity_kg,
-        accepted_quantity_kg,
-        delivered_quantity_tons,
-        accepted_quantity_tons,
-        rejection_reason,
-        generator_type,
-        contract_type,
+        net_weight_kg,
+        net_weight_tons,
         created_by,
-        created_at`,
-      [
-        ticketNumber,
-        ticketDate,
-        ticketTime,
-        supplierId,
-        tmbAssociationId,
-        wasteCodeId,
-        sectorId,
-        vehicleNumber,
-        delivered,
-        accepted,
-        rejectionReason || null,
-        generatorType,
-        contractType,
-        req.user.userId // from auth middleware
-      ]
-    );
+        created_at,
+        updated_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,($10/1000.0),$11, NOW(), NOW()
+      )
+      RETURNING id
+    `;
 
-    res.status(201).json({
-      success: true,
-      message: 'Tichet TMB creat cu succes',
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Create TMB ticket error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la crearea tichetului TMB'
-    });
+    const params = [
+      String(ticket_number).trim(),
+      String(ticket_date),
+      ticket_time ? String(ticket_time) : null,
+      parseInt(String(supplier_id), 10),
+      parseInt(String(operator_id), 10),
+      String(waste_code_id),
+      String(sector_id),
+      String(vehicle_number).trim(),
+      generator_type ? String(generator_type) : null,
+      Number(net_weight_kg),
+      createdBy,
+    ];
+
+    const result = await pool.query(insertSql, params);
+    return res.status(201).json({ success: true, message: 'Ticket created', data: { id: result.rows[0].id } });
+  } catch (err) {
+    console.error('createTmbTicket error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to create ticket', error: err.message });
   }
 };
 
-// ============================================================================
-// UPDATE TMB TICKET
-// ============================================================================
+// ----------------------------------------------------------------------------
+// UPDATE: PUT /api/tickets/tmb/:id  (blocked in routes by authorizeAdminOnly)
+// ----------------------------------------------------------------------------
 export const updateTmbTicket = async (req, res) => {
   try {
     const { id } = req.params;
-    const {
-      ticketNumber,
-      ticketDate,
-      ticketTime,
-      supplierId,
-      tmbAssociationId,
-      wasteCodeId,
-      sectorId,
-      vehicleNumber,
-      deliveredQuantityKg,
-      acceptedQuantityKg,
-      rejectionReason,
-      generatorType,
-      contractType
-    } = req.body;
-
-    // Check if ticket exists
-    const existingTicket = await pool.query(
-      'SELECT id FROM waste_tickets_tmb WHERE id = $1 AND deleted_at IS NULL',
-      [id]
-    );
-
-    if (existingTicket.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tichet TMB negăsit'
-      });
+    const ticketId = parseInt(String(id), 10);
+    if (Number.isNaN(ticketId)) {
+      return res.status(400).json({ success: false, message: 'Invalid ticket id' });
     }
 
-    // Validate ticket number uniqueness (if changed)
-    if (ticketNumber) {
-      const duplicateCheck = await pool.query(
-        'SELECT id FROM waste_tickets_tmb WHERE ticket_number = $1 AND id != $2 AND deleted_at IS NULL',
-        [ticketNumber, id]
-      );
+    const updatable = [
+      'ticket_number',
+      'ticket_date',
+      'ticket_time',
+      'supplier_id',
+      'operator_id',
+      'waste_code_id',
+      'sector_id',
+      'vehicle_number',
+      'generator_type',
+      'net_weight_kg',
+    ];
 
-      if (duplicateCheck.rows.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Numărul de tichet există deja în sistem'
-        });
-      }
-    }
-
-    // Validate quantities if provided
-    if (deliveredQuantityKg !== undefined && acceptedQuantityKg !== undefined) {
-      const delivered = parseFloat(deliveredQuantityKg);
-      const accepted = parseFloat(acceptedQuantityKg);
-
-      if (accepted > delivered) {
-        return res.status(400).json({
-          success: false,
-          message: 'Cantitatea acceptată nu poate fi mai mare decât cantitatea livrată'
-        });
-      }
-    }
-
-    // Validate supplier = WASTE_COLLECTOR (if changed)
-    if (supplierId) {
-      const supplierResult = await pool.query(
-        'SELECT id, type FROM institutions WHERE id = $1 AND deleted_at IS NULL',
-        [supplierId]
-      );
-
-      if (supplierResult.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Furnizorul specificat nu există'
-        });
-      }
-
-      if (supplierResult.rows[0].type !== 'WASTE_COLLECTOR') {
-        return res.status(400).json({
-          success: false,
-          message: 'Furnizorul trebuie să fie de tip WASTE_COLLECTOR'
-        });
-      }
-    }
-
-    // CRITICAL: Validate waste code = 20 03 01 (if changed)
-    if (wasteCodeId) {
-      const wasteCodeResult = await pool.query(
-        'SELECT id, code FROM waste_codes WHERE id = $1 AND is_active = true',
-        [wasteCodeId]
-      );
-
-      if (wasteCodeResult.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Codul de deșeu specificat nu există sau nu este activ'
-        });
-      }
-
-      if (wasteCodeResult.rows[0].code !== '20 03 01') {
-        return res.status(400).json({
-          success: false,
-          message: `TMB acceptă DOAR codul de deșeu 20 03 01. Cod specificat: ${wasteCodeResult.rows[0].code}`
-        });
-      }
-    }
-
-    // Validate TMB association matches sector (if changed)
-    if (tmbAssociationId && sectorId) {
-      const tmbAssociationResult = await pool.query(
-        'SELECT sector_id FROM tmb_associations WHERE id = $1 AND is_active = true',
-        [tmbAssociationId]
-      );
-
-      if (tmbAssociationResult.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Asocierea TMB specificată nu există sau nu este activă'
-        });
-      }
-
-      if (tmbAssociationResult.rows[0].sector_id !== sectorId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Asocierea TMB nu corespunde sectorului specificat'
-        });
-      }
-    }
-
-    // Validate contract type (if changed)
-    if (contractType && !['Taxa', 'Tarif'].includes(contractType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tip contract invalid. Valori acceptate: Taxa, Tarif'
-      });
-    }
-
-    // Build dynamic update query
-    const updates = [];
+    const setParts = [];
     const params = [];
-    let paramCount = 1;
+    let p = 1;
 
-    if (ticketNumber) {
-      updates.push(`ticket_number = $${paramCount}`);
-      params.push(ticketNumber);
-      paramCount++;
-    }
-    if (ticketDate) {
-      updates.push(`ticket_date = $${paramCount}`);
-      params.push(ticketDate);
-      paramCount++;
-    }
-    if (ticketTime) {
-      updates.push(`ticket_time = $${paramCount}`);
-      params.push(ticketTime);
-      paramCount++;
-    }
-    if (supplierId) {
-      updates.push(`supplier_id = $${paramCount}`);
-      params.push(supplierId);
-      paramCount++;
-    }
-    if (tmbAssociationId) {
-      updates.push(`tmb_association_id = $${paramCount}`);
-      params.push(tmbAssociationId);
-      paramCount++;
-    }
-    if (wasteCodeId) {
-      updates.push(`waste_code_id = $${paramCount}`);
-      params.push(wasteCodeId);
-      paramCount++;
-    }
-    if (sectorId) {
-      updates.push(`sector_id = $${paramCount}`);
-      params.push(sectorId);
-      paramCount++;
-    }
-    if (vehicleNumber) {
-      updates.push(`vehicle_number = $${paramCount}`);
-      params.push(vehicleNumber);
-      paramCount++;
-    }
-    if (deliveredQuantityKg !== undefined) {
-      updates.push(`delivered_quantity_kg = $${paramCount}`);
-      params.push(parseFloat(deliveredQuantityKg));
-      paramCount++;
-    }
-    if (acceptedQuantityKg !== undefined) {
-      updates.push(`accepted_quantity_kg = $${paramCount}`);
-      params.push(parseFloat(acceptedQuantityKg));
-      paramCount++;
-    }
-    if (rejectionReason !== undefined) {
-      updates.push(`rejection_reason = $${paramCount}`);
-      params.push(rejectionReason);
-      paramCount++;
-    }
-    if (generatorType) {
-      updates.push(`generator_type = $${paramCount}`);
-      params.push(generatorType);
-      paramCount++;
-    }
-    if (contractType) {
-      updates.push(`contract_type = $${paramCount}`);
-      params.push(contractType);
-      paramCount++;
+    for (const key of updatable) {
+      if (req.body[key] !== undefined) {
+        setParts.push(`${key} = $${p++}`);
+        params.push(req.body[key]);
+      }
     }
 
-    if (updates.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nicio modificare specificată'
-      });
+    if (setParts.length === 0) {
+      return res.status(400).json({ success: false, message: 'No fields to update' });
     }
 
-    updates.push(`updated_at = NOW()`);
-    params.push(id);
+    // If net_weight_kg changes, recalc tons
+    if (req.body.net_weight_kg !== undefined) {
+      const kg = Number(req.body.net_weight_kg);
+      if (!Number.isFinite(kg) || kg < 0) {
+        return res.status(400).json({ success: false, message: 'net_weight_kg invalid' });
+      }
+      setParts.push(`net_weight_tons = ($${p - 1}/1000.0)`);
+    }
 
-    const query = `
-      UPDATE waste_tickets_tmb 
-      SET ${updates.join(', ')}
-      WHERE id = $${paramCount}
-      RETURNING 
-        id,
-        ticket_number,
-        ticket_date,
-        ticket_time,
-        supplier_id,
-        tmb_association_id,
-        waste_code_id,
-        sector_id,
-        vehicle_number,
-        delivered_quantity_kg,
-        accepted_quantity_kg,
-        delivered_quantity_tons,
-        accepted_quantity_tons,
-        rejection_reason,
-        generator_type,
-        contract_type,
-        updated_at
+    setParts.push(`updated_at = NOW()`);
+
+    params.push(ticketId);
+    const updateSql = `
+      UPDATE waste_tickets_tmb
+      SET ${setParts.join(', ')}
+      WHERE id = $${p} AND deleted_at IS NULL
+      RETURNING id
     `;
 
-    const result = await pool.query(query, params);
+    const result = await pool.query(updateSql, params);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
 
-    res.json({
-      success: true,
-      message: 'Tichet TMB actualizat cu succes',
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Update TMB ticket error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la actualizarea tichetului TMB'
-    });
+    return res.json({ success: true, message: 'Ticket updated', data: { id: result.rows[0].id } });
+  } catch (err) {
+    console.error('updateTmbTicket error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to update ticket', error: err.message });
   }
 };
 
-// ============================================================================
-// DELETE TMB TICKET (SOFT DELETE)
-// ============================================================================
+// ----------------------------------------------------------------------------
+// DELETE (soft): DELETE /api/tickets/tmb/:id (blocked in routes by authorizeAdminOnly)
+// ----------------------------------------------------------------------------
 export const deleteTmbTicket = async (req, res) => {
   try {
     const { id } = req.params;
-
-    // Check if ticket exists
-    const existingTicket = await pool.query(
-      'SELECT id FROM waste_tickets_tmb WHERE id = $1 AND deleted_at IS NULL',
-      [id]
-    );
-
-    if (existingTicket.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tichet TMB negăsit'
-      });
+    const ticketId = parseInt(String(id), 10);
+    if (Number.isNaN(ticketId)) {
+      return res.status(400).json({ success: false, message: 'Invalid ticket id' });
     }
 
-    // Soft delete (set deleted_at timestamp)
-    await pool.query(
-      'UPDATE waste_tickets_tmb SET deleted_at = NOW() WHERE id = $1',
-      [id]
+    const result = await pool.query(
+      `UPDATE waste_tickets_tmb
+       SET deleted_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING id`,
+      [ticketId]
     );
 
-    res.json({
-      success: true,
-      message: 'Tichet TMB șters cu succes'
-    });
-  } catch (error) {
-    console.error('Delete TMB ticket error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la ștergerea tichetului TMB'
-    });
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+
+    return res.json({ success: true, message: 'Ticket deleted', data: { id: result.rows[0].id } });
+  } catch (err) {
+    console.error('deleteTmbTicket error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to delete ticket', error: err.message });
   }
 };
 
-// ============================================================================
-// GET TMB STATISTICS
-// ============================================================================
-export const getTmbStats = async (req, res) => {
-  try {
-    const { startDate, endDate, sectorId } = req.query;
-
-    let query = `
-      SELECT 
-        COUNT(*) as total_tickets,
-        SUM(delivered_quantity_tons) as total_delivered_tons,
-        SUM(accepted_quantity_tons) as total_accepted_tons,
-        AVG(accepted_quantity_tons) as avg_accepted_per_ticket,
-        MIN(ticket_date) as first_ticket_date,
-        MAX(ticket_date) as last_ticket_date
-      FROM waste_tickets_tmb
-      WHERE deleted_at IS NULL
-    `;
-
-    const params = [];
-    let paramCount = 1;
-
-    if (startDate) {
-      query += ` AND ticket_date >= $${paramCount}`;
-      params.push(startDate);
-      paramCount++;
-    }
-
-    if (endDate) {
-      query += ` AND ticket_date <= $${paramCount}`;
-      params.push(endDate);
-      paramCount++;
-    }
-
-    if (sectorId) {
-      query += ` AND sector_id = $${paramCount}`;
-      params.push(sectorId);
-      paramCount++;
-    }
-
-    const result = await pool.query(query, params);
-
-    // Calculate acceptance rate
-    const totalDelivered = parseFloat(result.rows[0].total_delivered_tons) || 0;
-    const totalAccepted = parseFloat(result.rows[0].total_accepted_tons) || 0;
-    const acceptanceRate = totalDelivered > 0 
-      ? ((totalAccepted / totalDelivered) * 100).toFixed(2)
-      : 0;
-
-    res.json({
-      success: true,
-      data: {
-        total_tickets: parseInt(result.rows[0].total_tickets) || 0,
-        total_delivered_tons: totalDelivered,
-        total_accepted_tons: totalAccepted,
-        acceptance_rate: parseFloat(acceptanceRate),
-        avg_accepted_per_ticket: parseFloat(result.rows[0].avg_accepted_per_ticket) || 0,
-        first_ticket_date: result.rows[0].first_ticket_date,
-        last_ticket_date: result.rows[0].last_ticket_date
-      }
-    });
-  } catch (error) {
-    console.error('Get TMB stats error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea statisticilor TMB'
-    });
-  }
+export default {
+  getAllTmbTickets,
+  getTmbTicketById,
+  createTmbTicket,
+  updateTmbTicket,
+  deleteTmbTicket,
+  getTmbStats,
 };

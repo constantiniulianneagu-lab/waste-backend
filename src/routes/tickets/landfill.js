@@ -1,61 +1,42 @@
-// src/routes/tickets/landfill.js
+// ============================================================================
+// src/routes/tickets/landfill.js  (COMPLET)
+// ============================================================================
+// Base: /api/tickets/landfill
+// Policy:
+// - auth + resolveUserAccess always
+// - enforceSectorAccess if sector_id provided
+// - WRITE blocked to PLATFORM_ADMIN only (authorizeAdminOnly)
+// ============================================================================
+
 import express from 'express';
-import { 
+
+import {
   getAllLandfillTickets,
   getLandfillTicketById,
   createLandfillTicket,
   updateLandfillTicket,
   deleteLandfillTicket,
-  getLandfillStats
+  getLandfillStats,
 } from '../../controllers/wasteTicketsLandfillController.js';
-import { authenticateToken, authorizeRoles } from '../../middleware/auth.js';
+
+import { authenticateToken, authorizeAdminOnly } from '../../middleware/auth.js';
+import { resolveUserAccess } from '../../middleware/resolveUserAccess.js';
+import { enforceSectorAccess } from '../../middleware/enforceSectorAccess.js';
 
 const router = express.Router();
 
-// Toate route-urile necesită autentificare
 router.use(authenticateToken);
+router.use(resolveUserAccess);
+router.use(enforceSectorAccess);
 
-// ============================================================================
-// GET ROUTES
-// ============================================================================
-
-// GET stats - toți utilizatorii autentificați pot vedea stats
+// READ
 router.get('/stats', getLandfillStats);
-
-// GET all tickets - toți utilizatorii autentificați
 router.get('/', getAllLandfillTickets);
-
-// GET single ticket by ID - toți utilizatorii autentificați
 router.get('/:id', getLandfillTicketById);
 
-// ============================================================================
-// POST ROUTES
-// ============================================================================
-
-// CREATE ticket - doar PLATFORM_ADMIN și OPERATOR_USER
-router.post('/', 
-  authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), 
-  createLandfillTicket
-);
-
-// ============================================================================
-// PUT ROUTES
-// ============================================================================
-
-// UPDATE ticket - doar PLATFORM_ADMIN și OPERATOR_USER
-router.put('/:id', 
-  authorizeRoles('PLATFORM_ADMIN', 'INSTITUTION_ADMIN', 'INSTITUTION_EDITOR', 'OPERATOR_USER'), 
-  updateLandfillTicket
-);
-
-// ============================================================================
-// DELETE ROUTES
-// ============================================================================
-
-// DELETE ticket (soft delete) - doar PLATFORM_ADMIN
-router.delete('/:id', 
-  authorizeRoles('PLATFORM_ADMIN'), 
-  deleteLandfillTicket
-);
+// WRITE (blocked globally)
+router.post('/', authorizeAdminOnly, createLandfillTicket);
+router.put('/:id', authorizeAdminOnly, updateLandfillTicket);
+router.delete('/:id', authorizeAdminOnly, deleteLandfillTicket);
 
 export default router;
