@@ -1,20 +1,113 @@
 // src/controllers/userController.js
 import bcrypt from 'bcryptjs';
 import pool from '../config/database.js';
+import { ROLES } from '../constants/roles.js';
 
 // ============================================================================
-// USER MANAGEMENT (PLATFORM_ADMIN)
+// HELPERS (AUTHZ)
 // ============================================================================
 
-// GET ALL USERS (cu instituții, permisiuni, sectoare)
+const isPlatformAdmin = (req) => req.user?.role === ROLES.PLATFORM_ADMIN;
+const isInstitutionAdmin = (req) => req.user?.role === ROLES.ADMIN_INSTITUTION;
+
+const getRequesterInstitutionId = async (req) => {
+  // resolveUserAccess should set this, but we keep a safe fallback
+  if (req.userAccess?.institutionId) return req.userAccess.institutionId;
+
+  const q = await pool.query(
+    `SELECT institution_id FROM user_institutions WHERE user_id = $1 LIMIT 1`,
+    [req.user.id]
+  );
+  return q.rows[0]?.institution_id || null;
+};
+
+const getTargetUserInstitutionAndRole = async (targetUserId) => {
+  const q = await pool.query(
+    `
+    SELECT
+      u.id,
+      u.role,
+      ui.institution_id
+    FROM users u
+    LEFT JOIN user_institutions ui ON ui.user_id = u.id
+    WHERE u.id = $1 AND u.deleted_at IS NULL
+    LIMIT 1
+    `,
+    [targetUserId]
+  );
+
+  return q.rows[0] || null; // { id, role, institution_id }
+};
+
+const assertInstitutionAdminCanManageTarget = async (req, targetUserId) => {
+  // ADMIN_INSTITUTION can manage ONLY EDITOR_INSTITUTION in SAME institution
+  const requesterInstitutionId = await getRequesterInstitutionId(req);
+  if (!requesterInstitutionId) {
+    return {
+      ok: false,
+      status: 403,
+      message: 'ADMIN_INSTITUTION nu are instituție asociată (user_institutions lipsă).',
+    };
+  }
+
+  const target = await getTargetUserInstitutionAndRole(targetUserId);
+  if (!target) {
+    return { ok: false, status: 404, message: 'Utilizator negăsit.' };
+  }
+
+  if (Number(target.institution_id) !== Number(requesterInstitutionId)) {
+    return {
+      ok: false,
+      status: 403,
+      message: 'Nu ai voie să gestionezi utilizatori din altă instituție.',
+    };
+  }
+
+  if (target.role !== ROLES.EDITOR_INSTITUTION) {
+    return {
+      ok: false,
+      status: 403,
+      message: 'ADMIN_INSTITUTION poate gestiona doar utilizatori cu rol EDITOR_INSTITUTION.',
+    };
+  }
+
+  return { ok: true, requesterInstitutionId, target };
+};
+
+// ============================================================================
+// USER MANAGEMENT (PLATFORM_ADMIN + ADMIN_INSTITUTION)
+// ============================================================================
+
+// GET ALL USERS
 export const getAllUsers = async (req, res) => {
   try {
     const { page = 1, limit = 500, role, search, institutionId, status } = req.query;
-    const offset = (page - 1) * limit;
+    const offset = (Number(page) - 1) * Number(limit);
 
-    let whereConditions = ['u.deleted_at IS NULL'];
+    const whereConditions = ['u.deleted_at IS NULL'];
     const params = [];
     let paramCount = 1;
+
+    // If ADMIN_INSTITUTION -> force institution scope to their institution
+    if (isInstitutionAdmin(req)) {
+      const myInstitutionId = await getRequesterInstitutionId(req);
+      if (!myInstitutionId) {
+        return res.status(403).json({
+          success: false,
+          message: 'ADMIN_INSTITUTION nu are instituție asociată (user_institutions lipsă).',
+        });
+      }
+      whereConditions.push(`ui.institution_id = $${paramCount}`);
+      params.push(myInstitutionId);
+      paramCount++;
+    } else {
+      // PLATFORM_ADMIN can filter by institutionId (optional)
+      if (institutionId) {
+        whereConditions.push(`ui.institution_id = $${paramCount}`);
+        params.push(institutionId);
+        paramCount++;
+      }
+    }
 
     // Filter by role
     if (role) {
@@ -25,28 +118,19 @@ export const getAllUsers = async (req, res) => {
 
     // Search by name or email
     if (search) {
-      whereConditions.push(`(u.email ILIKE $${paramCount} OR u.first_name ILIKE $${paramCount} OR u.last_name ILIKE $${paramCount})`);
+      whereConditions.push(
+        `(u.email ILIKE $${paramCount} OR u.first_name ILIKE $${paramCount} OR u.last_name ILIKE $${paramCount})`
+      );
       params.push(`%${search}%`);
       paramCount++;
     }
 
-    // Filter by institution
-    if (institutionId) {
-      whereConditions.push(`ui.institution_id = $${paramCount}`);
-      params.push(institutionId);
-      paramCount++;
-    }
-
     // Filter by status
-    if (status === 'active') {
-      whereConditions.push('u.is_active = true');
-    } else if (status === 'inactive') {
-      whereConditions.push('u.is_active = false');
-    }
+    if (status === 'active') whereConditions.push('u.is_active = true');
+    if (status === 'inactive') whereConditions.push('u.is_active = false');
 
     const whereClause = whereConditions.join(' AND ');
 
-    // Main query with institution, permissions, sectors
     const query = `
       SELECT 
         u.id,
@@ -61,7 +145,6 @@ export const getAllUsers = async (req, res) => {
         u.created_at,
         u.updated_at,
         
-        -- Instituție
         jsonb_build_object(
           'id', i.id,
           'name', i.name,
@@ -69,7 +152,6 @@ export const getAllUsers = async (req, res) => {
           'type', i.type
         ) as institution,
         
-        -- Permisiuni
         jsonb_build_object(
           'can_edit_data', COALESCE(up.can_edit_data, false),
           'access_type', up.access_type,
@@ -77,7 +159,6 @@ export const getAllUsers = async (req, res) => {
           'operator_institution_id', up.operator_institution_id
         ) as permissions,
         
-        -- Sectoare (din institution_sectors)
         (
           SELECT json_agg(
             jsonb_build_object(
@@ -100,9 +181,8 @@ export const getAllUsers = async (req, res) => {
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
-    params.push(limit, offset);
+    params.push(Number(limit), Number(offset));
 
-    // Count query
     const countQuery = `
       SELECT COUNT(DISTINCT u.id) as count
       FROM users u
@@ -112,422 +192,406 @@ export const getAllUsers = async (req, res) => {
 
     const [result, countResult] = await Promise.all([
       pool.query(query, params),
-      pool.query(countQuery, params.slice(0, paramCount - 1))
+      pool.query(countQuery, params.slice(0, paramCount - 1)),
     ]);
 
-    const total = parseInt(countResult.rows[0].count) || 0;
+    const total = parseInt(countResult.rows[0].count, 10) || 0;
 
     res.json({
       success: true,
       data: {
         users: result.rows,
         pagination: {
+          page: Number(page),
+          limit: Number(limit),
           total,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(total / limit)
-        }
-      }
+          totalPages: Math.ceil(total / Number(limit)),
+        },
+      },
     });
   } catch (error) {
     console.error('Get users error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea utilizatorilor'
-    });
+    res.status(500).json({ success: false, message: 'Eroare la obținerea utilizatorilor' });
   }
 };
 
-// GET SINGLE USER
+// GET USER BY ID
 export const getUserById = async (req, res) => {
   try {
-    const { id } = req.params;
+    const userId = Number(req.params.id);
 
-    const result = await pool.query(
-      `SELECT id, email, first_name, last_name, role, is_active, 
-              created_at, updated_at
-       FROM users 
-       WHERE id = $1 AND deleted_at IS NULL`,
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Utilizator negăsit'
-      });
-    }
-
-    res.json({
-      success: true,
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea utilizatorului'
-    });
-  }
-};
-
-// ⚠️ FINAL FIX BACKEND - Înlocuiește funcția createUser în userController.js ⚠️
-
-// CREATE USER
-export const createUser = async (req, res) => {
-  const client = await pool.connect();
-  
-  try {
-    const { email, password, firstName, lastName, role, isActive = true, institutionIds = [], phone, position, department } = req.body;
-
-    console.log('🔧 CREATE USER - Backend');
-
-    // Validare
-    if (!email || !password || !firstName || !lastName || !role) {
-      return res.status(400).json({
-        success: false,
-        message: 'Toate câmpurile sunt obligatorii'
-      });
-    }
-
-    // Verifică dacă email-ul există
-    const existingUser = await client.query(
-      'SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL',
-      [email.toLowerCase()]
-    );
-
-    if (existingUser.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email-ul este deja utilizat'
-      });
-    }
-
-    // Hash password
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    await client.query('BEGIN');
-
-    // Inserează user
-    const result = await client.query(
-      `INSERT INTO users (email, password_hash, first_name, last_name, phone, position, department, role, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, email, first_name, last_name, role, is_active, created_at`,
-      [email.toLowerCase(), passwordHash, firstName, lastName, phone || null, position || null, department || null, role, isActive]
-    );
-
-    const userId = result.rows[0].id;
-    console.log('✅ User created:', userId);
-
-    // Asociază cu instituțiile
-    if (institutionIds && institutionIds.length > 0) {
-      for (const instId of institutionIds) {
-        // Check dacă instituția există
-        const instCheck = await client.query(
-          'SELECT id FROM institutions WHERE id = $1 AND deleted_at IS NULL',
-          [instId]
-        );
-        
-        if (instCheck.rows.length === 0) {
-          continue;
-        }
-        
-        // Insert simplu fără ON CONFLICT
-        await client.query(
-          'INSERT INTO user_institutions (user_id, institution_id) VALUES ($1, $2)',
-          [userId, instId]
-        );
-      }
-    }
-
-    await client.query('COMMIT');
-
-    // ✅ FIX: Get user with institutions (FĂRĂ ui.deleted_at)
-    const userWithInstitutions = await client.query(
-      `SELECT 
-        u.*,
-        json_agg(
-          jsonb_build_object(
-            'id', i.id,
-            'name', i.name,
-            'type', i.type
-          )
-        ) FILTER (WHERE i.id IS NOT NULL) as institutions
-      FROM users u
-      LEFT JOIN user_institutions ui ON u.id = ui.user_id
-      LEFT JOIN institutions i ON ui.institution_id = i.id AND i.deleted_at IS NULL
-      WHERE u.id = $1
-      GROUP BY u.id`,
-      [userId]
-    );
-
-    console.log('✅ CREATE SUCCESSFUL');
-
-    res.status(201).json({
-      success: true,
-      message: 'Utilizator creat cu succes',
-      data: userWithInstitutions.rows[0]
-    });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    
-    console.error('❌ CREATE ERROR');
-    console.error('Error:', error.message);
-    
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Eroare la crearea utilizatorului'
-    });
-  } finally {
-    client.release();
-  }
-};
-
-// ⚠️ FINAL FIX BACKEND - Înlocuiește funcția updateUser în userController.js ⚠️
-
-// UPDATE USER
-export const updateUser = async (req, res) => {
-  const client = await pool.connect();
-  
-  try {
-    const { id } = req.params;
-    const { email, firstName, lastName, role, isActive, password, institutionIds, phone, position, department } = req.body;
-
-    console.log('🔧 UPDATE USER - Backend');
-    console.log('User ID:', id);
-
-    // Verifică dacă user-ul există
-    const existingUser = await client.query(
-      'SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL',
-      [id]
-    );
-
-    if (existingUser.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Utilizator negăsit'
-      });
-    }
-
-    // Verifică dacă noul email e deja folosit de alt user
-    if (email) {
-      const emailCheck = await client.query(
-        'SELECT id FROM users WHERE email = $1 AND id != $2 AND deleted_at IS NULL',
-        [email.toLowerCase(), id]
-      );
-
-      if (emailCheck.rows.length > 0) {
-        return res.status(400).json({
+    // If ADMIN_INSTITUTION -> only within own institution
+    if (isInstitutionAdmin(req)) {
+      const myInstitutionId = await getRequesterInstitutionId(req);
+      if (!myInstitutionId) {
+        return res.status(403).json({
           success: false,
-          message: 'Email-ul este deja utilizat'
+          message: 'ADMIN_INSTITUTION nu are instituție asociată (user_institutions lipsă).',
+        });
+      }
+
+      const scopeCheck = await pool.query(
+        `SELECT 1 FROM user_institutions WHERE user_id = $1 AND institution_id = $2 LIMIT 1`,
+        [userId, myInstitutionId]
+      );
+      if (scopeCheck.rows.length === 0) {
+        return res.status(403).json({
+          success: false,
+          message: 'Nu ai acces la acest utilizator (altă instituție).',
         });
       }
     }
 
-    await client.query('BEGIN');
-
-    // Construiește query dinamic pentru user update
-    const updates = [];
-    const params = [];
-    let paramCount = 1;
-
-    if (email) {
-      updates.push(`email = $${paramCount}`);
-      params.push(email.toLowerCase());
-      paramCount++;
-    }
-    if (firstName) {
-      updates.push(`first_name = $${paramCount}`);
-      params.push(firstName);
-      paramCount++;
-    }
-    if (lastName) {
-      updates.push(`last_name = $${paramCount}`);
-      params.push(lastName);
-      paramCount++;
-    }
-    if (phone !== undefined) {
-      updates.push(`phone = $${paramCount}`);
-      params.push(phone);
-      paramCount++;
-    }
-    if (position !== undefined) {
-      updates.push(`position = $${paramCount}`);
-      params.push(position);
-      paramCount++;
-    }
-    if (department !== undefined) {
-      updates.push(`department = $${paramCount}`);
-      params.push(department);
-      paramCount++;
-    }
-    if (role) {
-      updates.push(`role = $${paramCount}`);
-      params.push(role);
-      paramCount++;
-    }
-    if (isActive !== undefined) {
-      updates.push(`is_active = $${paramCount}`);
-      params.push(isActive);
-      paramCount++;
-    }
-    if (password) {
-      const passwordHash = await bcrypt.hash(password, 10);
-      updates.push(`password_hash = $${paramCount}`);
-      params.push(passwordHash);
-      paramCount++;
-    }
-
-    updates.push(`updated_at = NOW()`);
-    params.push(id);
-
     const query = `
-      UPDATE users 
-      SET ${updates.join(', ')}
-      WHERE id = $${paramCount}
-      RETURNING id, email, first_name, last_name, role, is_active, updated_at
-    `;
-
-    await client.query(query, params);
-    console.log('✅ User updated');
-
-    // Update institution associations
-    if (institutionIds !== undefined) {
-      // Delete existing associations
-      await client.query(
-        'DELETE FROM user_institutions WHERE user_id = $1',
-        [id]
-      );
-
-      // Insert new associations
-      if (institutionIds && institutionIds.length > 0) {
-        for (const instId of institutionIds) {
-          // Check dacă instituția există
-          const instCheck = await client.query(
-            'SELECT id FROM institutions WHERE id = $1 AND deleted_at IS NULL',
-            [instId]
-          );
-          
-          if (instCheck.rows.length === 0) {
-            continue;
-          }
-          
-          // Insert simplu fără ON CONFLICT
-          await client.query(
-            'INSERT INTO user_institutions (user_id, institution_id) VALUES ($1, $2)',
-            [id, instId]
-          );
-        }
-      }
-    }
-
-    await client.query('COMMIT');
-
-    // ✅ FIX: Get updated user with institutions (FĂRĂ ui.deleted_at)
-    const userWithInstitutions = await client.query(
-      `SELECT 
-        u.*,
-        json_agg(
-          jsonb_build_object(
-            'id', i.id,
-            'name', i.name,
-            'type', i.type
+      SELECT 
+        u.id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.phone,
+        u.position,
+        u.department,
+        u.role,
+        u.is_active,
+        u.created_at,
+        u.updated_at,
+        
+        jsonb_build_object(
+          'id', i.id,
+          'name', i.name,
+          'short_name', i.short_name,
+          'type', i.type
+        ) as institution,
+        
+        jsonb_build_object(
+          'can_edit_data', COALESCE(up.can_edit_data, false),
+          'access_type', up.access_type,
+          'sector_id', up.sector_id,
+          'operator_institution_id', up.operator_institution_id
+        ) as permissions,
+        
+        (
+          SELECT json_agg(
+            jsonb_build_object(
+              'id', s.id,
+              'sector_number', s.sector_number,
+              'sector_name', s.sector_name
+            )
           )
-        ) FILTER (WHERE i.id IS NOT NULL) as institutions
+          FROM institution_sectors ins
+          JOIN sectors s ON ins.sector_id = s.id
+          WHERE ins.institution_id = i.id
+        ) as sectors
+        
       FROM users u
       LEFT JOIN user_institutions ui ON u.id = ui.user_id
       LEFT JOIN institutions i ON ui.institution_id = i.id AND i.deleted_at IS NULL
-      WHERE u.id = $1
-      GROUP BY u.id`,
-      [id]
-    );
+      LEFT JOIN user_permissions up ON u.id = up.user_id
+      WHERE u.id = $1 AND u.deleted_at IS NULL
+    `;
 
-    console.log('✅ UPDATE SUCCESSFUL');
+    const result = await pool.query(query, [userId]);
 
-    res.json({
-      success: true,
-      message: 'Utilizator actualizat cu succes',
-      data: userWithInstitutions.rows[0]
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Utilizator negăsit' });
+    }
+
+    res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    console.error('Get user error:', error);
+    res.status(500).json({ success: false, message: 'Eroare la obținerea utilizatorului' });
+  }
+};
+
+// CREATE USER
+export const createUser = async (req, res) => {
+  try {
+    const { email, password, firstName, lastName, phone, position, department, role, isActive, institutionIds } = req.body;
+
+    // ADMIN_INSTITUTION: can create ONLY EDITOR_INSTITUTION and ONLY in own institution
+    if (isInstitutionAdmin(req)) {
+      const myInstitutionId = await getRequesterInstitutionId(req);
+      if (!myInstitutionId) {
+        return res.status(403).json({
+          success: false,
+          message: 'ADMIN_INSTITUTION nu are instituție asociată (user_institutions lipsă).',
+        });
+      }
+
+      if (role !== ROLES.EDITOR_INSTITUTION) {
+        return res.status(403).json({
+          success: false,
+          message: 'ADMIN_INSTITUTION poate crea doar utilizatori cu rol EDITOR_INSTITUTION.',
+        });
+      }
+
+      // Ignore incoming institutionIds and force to own institution
+      return await _createUserInternal(req, res, {
+        email,
+        password,
+        firstName,
+        lastName,
+        phone,
+        position,
+        department,
+        role,
+        isActive,
+        institutionIds: [myInstitutionId],
+      });
+    }
+
+    // PLATFORM_ADMIN: full create
+    return await _createUserInternal(req, res, {
+      email,
+      password,
+      firstName,
+      lastName,
+      phone,
+      position,
+      department,
+      role,
+      isActive,
+      institutionIds,
     });
   } catch (error) {
-    await client.query('ROLLBACK');
-    
-    console.error('❌ UPDATE ERROR');
-    console.error('Error:', error.message);
-    
-    res.status(500).json({
+    console.error('Create user error:', error);
+    res.status(500).json({ success: false, message: 'Eroare la crearea utilizatorului' });
+  }
+};
+
+const _createUserInternal = async (req, res, data) => {
+  const { email, password, firstName, lastName, phone, position, department, role, isActive, institutionIds } = data;
+
+  // Validate required
+  if (!email || !password || !firstName || !lastName || !role || !Array.isArray(institutionIds) || institutionIds.length === 0) {
+    return res.status(400).json({
       success: false,
-      message: error.message || 'Eroare la actualizarea utilizatorului'
+      message: 'Câmpuri lipsă: email, password, firstName, lastName, role, institutionIds[]',
     });
+  }
+
+  // Check if email exists
+  const existing = await pool.query(`SELECT 1 FROM users WHERE email = $1 AND deleted_at IS NULL LIMIT 1`, [email]);
+  if (existing.rows.length > 0) {
+    return res.status(409).json({ success: false, message: 'Email deja existent' });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const userResult = await client.query(
+      `
+      INSERT INTO users (email, password_hash, first_name, last_name, phone, position, department, role, is_active)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      RETURNING id, email, first_name, last_name, role, is_active
+      `,
+      [email, passwordHash, firstName, lastName, phone || null, position || null, department || null, role, isActive !== false]
+    );
+
+    const newUser = userResult.rows[0];
+
+    // Link to first institution (your schema has UNIQUE user_id in user_institutions)
+    await client.query(
+      `INSERT INTO user_institutions (user_id, institution_id) VALUES ($1,$2)
+       ON CONFLICT (user_id) DO UPDATE SET institution_id = EXCLUDED.institution_id, updated_at = CURRENT_TIMESTAMP`,
+      [newUser.id, institutionIds[0]]
+    );
+
+    // Ensure permissions row exists (optional default)
+    await client.query(
+      `INSERT INTO user_permissions (user_id, can_edit_data, access_type, sector_id, operator_institution_id)
+       VALUES ($1,false,NULL,NULL,NULL)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [newUser.id]
+    );
+
+    await client.query('COMMIT');
+
+    return res.status(201).json({
+      success: true,
+      message: 'Utilizator creat cu succes',
+      data: { user: newUser },
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
   } finally {
     client.release();
   }
 };
 
-// DELETE USER (soft delete)
-export const deleteUser = async (req, res) => {
+// UPDATE USER
+export const updateUser = async (req, res) => {
   try {
-    const { id } = req.params;
+    const targetUserId = Number(req.params.id);
 
-    // Verifică dacă user-ul există
-    const existingUser = await pool.query(
-      'SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL',
-      [id]
-    );
+    if (isInstitutionAdmin(req)) {
+      const check = await assertInstitutionAdminCanManageTarget(req, targetUserId);
+      if (!check.ok) {
+        return res.status(check.status).json({ success: false, message: check.message });
+      }
 
-    if (existingUser.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Utilizator negăsit'
-      });
+      // Force constraints for ADMIN_INSTITUTION:
+      // - role must remain EDITOR_INSTITUTION
+      // - institution must remain their institution
+      const body = req.body || {};
+      if (body.role && body.role !== ROLES.EDITOR_INSTITUTION) {
+        return res.status(403).json({
+          success: false,
+          message: 'ADMIN_INSTITUTION nu poate schimba rolul (doar EDITOR_INSTITUTION).',
+        });
+      }
+
+      const payload = {
+        ...body,
+        role: ROLES.EDITOR_INSTITUTION,
+        institutionIds: [check.requesterInstitutionId],
+      };
+
+      return await _updateUserInternal(req, res, targetUserId, payload);
     }
 
-    // Soft delete
-    await pool.query(
-      'UPDATE users SET deleted_at = NOW() WHERE id = $1',
-      [id]
-    );
-
-    res.json({
-      success: true,
-      message: 'Utilizator șters cu succes'
-    });
+    // PLATFORM_ADMIN
+    return await _updateUserInternal(req, res, targetUserId, req.body || {});
   } catch (error) {
-    console.error('Delete user error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la ștergerea utilizatorului'
-    });
+    console.error('Update user error:', error);
+    res.status(500).json({ success: false, message: 'Eroare la actualizarea utilizatorului' });
   }
 };
 
-// GET USER STATISTICS
+const _updateUserInternal = async (req, res, userId, data) => {
+  const { email, firstName, lastName, phone, position, department, role, isActive, password, institutionIds } = data;
+
+  // Check user exists
+  const existing = await pool.query(`SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL`, [userId]);
+  if (existing.rows.length === 0) {
+    return res.status(404).json({ success: false, message: 'Utilizator negăsit' });
+  }
+
+  // Email uniqueness if changed
+  if (email) {
+    const emailCheck = await pool.query(
+      `SELECT 1 FROM users WHERE email = $1 AND id <> $2 AND deleted_at IS NULL LIMIT 1`,
+      [email, userId]
+    );
+    if (emailCheck.rows.length > 0) {
+      return res.status(409).json({ success: false, message: 'Email deja folosit de alt utilizator' });
+    }
+  }
+
+  const fields = [];
+  const params = [];
+  let p = 1;
+
+  if (email !== undefined) { fields.push(`email = $${p++}`); params.push(email); }
+  if (firstName !== undefined) { fields.push(`first_name = $${p++}`); params.push(firstName); }
+  if (lastName !== undefined) { fields.push(`last_name = $${p++}`); params.push(lastName); }
+  if (phone !== undefined) { fields.push(`phone = $${p++}`); params.push(phone || null); }
+  if (position !== undefined) { fields.push(`position = $${p++}`); params.push(position || null); }
+  if (department !== undefined) { fields.push(`department = $${p++}`); params.push(department || null); }
+  if (role !== undefined) { fields.push(`role = $${p++}`); params.push(role); }
+  if (isActive !== undefined) { fields.push(`is_active = $${p++}`); params.push(!!isActive); }
+
+  if (password && String(password).trim()) {
+    const passwordHash = await bcrypt.hash(password, 10);
+    fields.push(`password_hash = $${p++}`);
+    params.push(passwordHash);
+  }
+
+  if (fields.length === 0 && !institutionIds) {
+    return res.status(400).json({ success: false, message: 'Nu există câmpuri de actualizat' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    if (fields.length > 0) {
+      params.push(userId);
+      await client.query(
+        `UPDATE users SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${p}`,
+        params
+      );
+    }
+
+    // Update institution link if provided
+    if (Array.isArray(institutionIds) && institutionIds.length > 0) {
+      await client.query(
+        `INSERT INTO user_institutions (user_id, institution_id)
+         VALUES ($1,$2)
+         ON CONFLICT (user_id) DO UPDATE SET institution_id = EXCLUDED.institution_id, updated_at = CURRENT_TIMESTAMP`,
+        [userId, institutionIds[0]]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    return res.json({
+      success: true,
+      message: 'Utilizator actualizat cu succes',
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+};
+
+// DELETE USER
+export const deleteUser = async (req, res) => {
+  try {
+    const targetUserId = Number(req.params.id);
+
+    if (isInstitutionAdmin(req)) {
+      const check = await assertInstitutionAdminCanManageTarget(req, targetUserId);
+      if (!check.ok) {
+        return res.status(check.status).json({ success: false, message: check.message });
+      }
+    }
+
+    const result = await pool.query(
+      `UPDATE users SET deleted_at = CURRENT_TIMESTAMP, is_active = false, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND deleted_at IS NULL`,
+      [targetUserId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Utilizator negăsit' });
+    }
+
+    res.json({ success: true, message: 'Utilizator șters cu succes' });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({ success: false, message: 'Eroare la ștergerea utilizatorului' });
+  }
+};
+
+// USER STATS (only PLATFORM_ADMIN route-level, still safe)
 export const getUserStats = async (req, res) => {
   try {
     const stats = await pool.query(`
-      SELECT 
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE is_active = true) as active,
-        COUNT(*) FILTER (WHERE role = 'PLATFORM_ADMIN') as admins,
-        COUNT(*) FILTER (WHERE role = 'ADMIN_INSTITUTION') as institution_admins,
-        COUNT(*) FILTER (WHERE role = 'EDITOR_INSTITUTION') as editors,
-        COUNT(*) FILTER (WHERE role = 'REGULATOR_VIEWER') as regulators
+      SELECT
+        COUNT(*) FILTER (WHERE deleted_at IS NULL) as total_users,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL AND is_active = true) as active_users,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL AND is_active = false) as inactive_users,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL AND role = 'PLATFORM_ADMIN') as platform_admins,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL AND role = 'ADMIN_INSTITUTION') as institution_admins,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL AND role = 'EDITOR_INSTITUTION') as institution_editors,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL AND role = 'REGULATOR_VIEWER') as regulators
       FROM users
-      WHERE deleted_at IS NULL
     `);
 
-    res.json({
-      success: true,
-      data: stats.rows[0]
-    });
+    res.json({ success: true, data: stats.rows[0] });
   } catch (error) {
     console.error('Get stats error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea statisticilor'
-    });
+    res.status(500).json({ success: false, message: 'Eroare la obținerea statisticilor' });
   }
 };
+
 
 // ============================================================================
 // USER PROFILE (ALL AUTHENTICATED USERS)

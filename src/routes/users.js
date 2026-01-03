@@ -1,63 +1,71 @@
 // src/routes/users.js
 import express from 'express';
-import { 
-  getAllUsers, 
-  getUserById, 
-  createUser, 
-  updateUser, 
+import {
+  getAllUsers,
+  getUserById,
+  createUser,
+  updateUser,
   deleteUser,
   getUserStats,
-  getUserProfile,      // ✅ ADĂUGAT
-  updateProfile,       // ✅ ADĂUGAT
-  updatePassword,       // ✅ ADĂUGAT
-  getProfileOperators  // ✅ ADAUGĂ
+  getUserProfile,
+  updateUserProfile,
+  getProfileOperators,
 } from '../controllers/userController.js';
+
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
+import { resolveUserAccess } from '../middleware/resolveUserAccess.js';
+import { ROLES } from '../constants/roles.js';
 
 const router = express.Router();
 
-// Toate route-urile necesită autentificare
+// ----------------------------------------------------------------------------
+// PROFILE (any authenticated user)
+// ----------------------------------------------------------------------------
+router.get('/profile', authenticateToken, getUserProfile);
+router.put('/profile', authenticateToken, updateUserProfile);
+router.get('/profile/operators', authenticateToken, getProfileOperators);
+
+// ----------------------------------------------------------------------------
+// USER MANAGEMENT (PLATFORM_ADMIN + ADMIN_INSTITUTION)
+// IMPORTANT: resolveUserAccess is needed to know req.userAccess.institutionId
+// ----------------------------------------------------------------------------
 router.use(authenticateToken);
+router.use(resolveUserAccess);
 
-// ============================================================================
-// USER PROFILE ROUTES (ALL AUTHENTICATED USERS)
-// ============================================================================
+router.get(
+  '/',
+  authorizeRoles(ROLES.PLATFORM_ADMIN, ROLES.ADMIN_INSTITUTION),
+  getAllUsers
+);
 
-// GET current user profile
-router.get('/profile', getUserProfile);
+router.get(
+  '/stats',
+  authorizeRoles(ROLES.PLATFORM_ADMIN),
+  getUserStats
+);
 
-router.get('/profile/operators', getProfileOperators);  // ✅ ADAUGĂ
+router.get(
+  '/:id',
+  authorizeRoles(ROLES.PLATFORM_ADMIN, ROLES.ADMIN_INSTITUTION),
+  getUserById
+);
 
-// PUT update current user profile
-router.put('/profile', updateProfile);
+router.post(
+  '/',
+  authorizeRoles(ROLES.PLATFORM_ADMIN, ROLES.ADMIN_INSTITUTION),
+  createUser
+);
 
-// PUT update current user password
-router.put('/password', updatePassword);
+router.put(
+  '/:id',
+  authorizeRoles(ROLES.PLATFORM_ADMIN, ROLES.ADMIN_INSTITUTION),
+  updateUser
+);
 
-// ============================================================================
-// USER MANAGEMENT ROUTES (PLATFORM_ADMIN ONLY)
-// ============================================================================
-
-// GET routes
-// Doar PLATFORM_ADMIN poate vedea lista de users
-router.get('/', authorizeRoles('PLATFORM_ADMIN'), getAllUsers);
-
-// Doar PLATFORM_ADMIN poate vedea stats
-router.get('/stats', authorizeRoles('PLATFORM_ADMIN'), getUserStats);
-
-// Doar PLATFORM_ADMIN poate vedea detalii user
-router.get('/:id', authorizeRoles('PLATFORM_ADMIN'), getUserById);
-
-// POST routes
-// Doar PLATFORM_ADMIN poate crea users
-router.post('/', authorizeRoles('PLATFORM_ADMIN'), createUser);
-
-// PUT routes
-// Doar PLATFORM_ADMIN poate edita users
-router.put('/:id', authorizeRoles('PLATFORM_ADMIN'), updateUser);
-
-// DELETE routes
-// Doar PLATFORM_ADMIN poate șterge users
-router.delete('/:id', authorizeRoles('PLATFORM_ADMIN'), deleteUser);
+router.delete(
+  '/:id',
+  authorizeRoles(ROLES.PLATFORM_ADMIN, ROLES.ADMIN_INSTITUTION),
+  deleteUser
+);
 
 export default router;
