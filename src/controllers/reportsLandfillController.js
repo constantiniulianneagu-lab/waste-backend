@@ -35,7 +35,7 @@ const assertValidDate = (dateStr, fieldName) => {
   return dateStr;
 };
 
-const buildSectorScope = (req, tableAlias = 't') => {
+const buildSectorScope = (req) => {
   const access = req.userAccess;
   if (!access) throw new Error('Missing req.userAccess (resolveUserAccess not applied)');
 
@@ -45,32 +45,7 @@ const buildSectorScope = (req, tableAlias = 't') => {
   // enforceSectorAccess sets this if the user requested a specific sector (UUID)
   const requestedSectorUuid = req.requestedSectorUuid || null;
 
-  let sectorWhere = '';
-  const sectorParams = [];
-
-  // ⚠️ IMPORTANT: WITHOUT leading "AND" (because buildFilters joins with " AND ")
-  if (requestedSectorUuid) {
-    sectorWhere = `${tableAlias}.sector_id = ${{}}`; // placeholder replaced later
-    sectorParams.push(requestedSectorUuid);
-  } else if (!isAll) {
-    sectorWhere = `${tableAlias}.sector_id = ANY(${{}})`;
-    sectorParams.push(sectorIds);
-  }
-
-  return {
-    isAll,
-    allowedSectorIds: sectorIds,
-    requestedSectorUuid,
-    sectorWhere,
-    sectorParams,
-  };
-};
-
-
-const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
-  // Replace each occurrence of ${{}} in order with $<index>
-  let idx = startIndex;
-  return sqlWithPlaceholders.replace(/\$\{\{\}\}/g, () => `$${idx++}`);
+  return { isAll, allowedSectorIds: sectorIds, requestedSectorUuid };
 };
 
 // Build WHERE + params safely
@@ -108,12 +83,14 @@ const buildFilters = (req, baseAlias = 't') => {
   const params = [startDate, endDate];
   let p = 3;
 
-  // sector scope (UUID)
-  const scope = buildSectorScope(req, baseAlias);
-  if (scope.sectorWhere) {
-    where.push(applyParamIndex(scope.sectorWhere, p));
-    params.push(...scope.sectorParams);
-    p += scope.sectorParams.length;
+  // sector scope (UUID only)
+  const scope = buildSectorScope(req);
+  if (scope.requestedSectorUuid) {
+    where.push(`${baseAlias}.sector_id = $${p++}`);
+    params.push(scope.requestedSectorUuid);
+  } else if (!scope.isAll) {
+    where.push(`${baseAlias}.sector_id = ANY($${p++})`);
+    params.push(scope.allowedSectorIds);
   }
 
   // other filters
@@ -183,7 +160,7 @@ const toCsv = (rows) => {
 export const getAuxiliaryData = async (req, res) => {
   try {
     // Sectors must respect RBAC
-    const scope = buildSectorScope(req, 's');
+    const scope = buildSectorScope(req);
 
     let sectorsSql = `
       SELECT s.id, s.sector_number, s.sector_name
@@ -196,7 +173,7 @@ export const getAuxiliaryData = async (req, res) => {
     if (scope.requestedSectorUuid) {
       sectorsSql += ` AND s.id = $${p++}`;
       sectorsParams.push(scope.requestedSectorUuid);
-    } else if (scope.isAll === false) {
+    } else if (!scope.isAll) {
       sectorsSql += ` AND s.id = ANY($${p++})`;
       sectorsParams.push(scope.allowedSectorIds);
     }
@@ -206,7 +183,7 @@ export const getAuxiliaryData = async (req, res) => {
     const [sectorsRes, suppliersRes, wasteCodesRes, yearsRes] = await Promise.all([
       pool.query(sectorsSql, sectorsParams),
 
-      // Suppliers used in landfill tickets (no need RBAC here; RBAC applied at report query time)
+      // Suppliers used in landfill tickets (RBAC applied in main query; ok to list all)
       pool.query(
         `
         SELECT DISTINCT i.id, i.name
@@ -236,12 +213,12 @@ export const getAuxiliaryData = async (req, res) => {
         const yearsParams = [];
         let yp = 1;
 
-        if (req.requestedSectorUuid) {
+        if (scope.requestedSectorUuid) {
           yearsSql += ` AND t.sector_id = $${yp++}`;
-          yearsParams.push(req.requestedSectorUuid);
-        } else if (req.userAccess?.accessLevel !== 'ALL') {
+          yearsParams.push(scope.requestedSectorUuid);
+        } else if (!scope.isAll) {
           yearsSql += ` AND t.sector_id = ANY($${yp++})`;
-          yearsParams.push(req.userAccess?.sectorIds || []);
+          yearsParams.push(scope.allowedSectorIds);
         }
 
         yearsSql += ` ORDER BY year DESC`;
@@ -261,7 +238,11 @@ export const getAuxiliaryData = async (req, res) => {
   } catch (err) {
     console.error('getAuxiliaryData error:', err);
     const code = err.statusCode || 500;
-    return res.status(code).json({ success: false, message: 'Failed to fetch auxiliary data', error: err.message });
+    return res.status(code).json({
+      success: false,
+      message: 'Failed to fetch auxiliary data',
+      error: err.message,
+    });
   }
 };
 
@@ -271,12 +252,7 @@ export const getAuxiliaryData = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const getLandfillReports = async (req, res) => {
   try {
-    const {
-      page = 1,
-      limit = 50,
-      sort_by = 'ticket_date',
-      sort_dir = 'desc',
-    } = req.query;
+    const { page = 1, limit = 50, sort_by = 'ticket_date', sort_dir = 'desc' } = req.query;
 
     const pageNum = clampInt(page, 1, 1000000, 1);
     const limitNum = clampInt(limit, 1, 500, 50);
@@ -308,7 +284,6 @@ export const getLandfillReports = async (req, res) => {
     const total = countRes.rows[0]?.total || 0;
 
     // LIST
-    // add LIMIT/OFFSET params
     const listParams = [...filters.params];
     const pLimit = filters.nextIndex;
     const pOffset = filters.nextIndex + 1;
