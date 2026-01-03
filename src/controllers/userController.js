@@ -1058,6 +1058,7 @@ export const updateProfile = async (req, res) => {
     });
   }
 };
+export const updateUserProfile = updateProfile;
 
 // UPDATE CURRENT USER PASSWORD
 export const updatePassword = async (req, res) => {
