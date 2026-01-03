@@ -25,6 +25,9 @@ import dashboardLandfillRoutes from './routes/dashboard/landfill.js';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ✅ IMPORTANT (Render / reverse proxy): needed for express-rate-limit + req.ip
+app.set('trust proxy', 1);
+
 // CORS
 app.use(cors({
   origin: [

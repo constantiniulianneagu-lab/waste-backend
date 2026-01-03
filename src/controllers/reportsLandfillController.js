@@ -48,12 +48,12 @@ const buildSectorScope = (req, tableAlias = 't') => {
   let sectorWhere = '';
   const sectorParams = [];
 
+  // ⚠️ IMPORTANT: WITHOUT leading "AND" (because buildFilters joins with " AND ")
   if (requestedSectorUuid) {
-    sectorWhere = `AND ${tableAlias}.sector_id = ${{}}`; // placeholder replaced later
+    sectorWhere = `${tableAlias}.sector_id = ${{}}`; // placeholder replaced later
     sectorParams.push(requestedSectorUuid);
   } else if (!isAll) {
-    // restricted user: only own sectors
-    sectorWhere = `AND ${tableAlias}.sector_id = ANY(${{}})`;
+    sectorWhere = `${tableAlias}.sector_id = ANY(${{}})`;
     sectorParams.push(sectorIds);
   }
 
@@ -65,6 +65,7 @@ const buildSectorScope = (req, tableAlias = 't') => {
     sectorParams,
   };
 };
+
 
 const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
   // Replace each occurrence of ${{}} in order with $<index>
