@@ -1,16 +1,12 @@
 // src/controllers/reportsLandfillController.js
 // ============================================================================
-// LANDFILL REPORTS CONTROLLER (RBAC via req.userAccess, UUID sector scoping)
+// LANDFILL REPORTS CONTROLLER - VERSIUNE 2026 COMPLETĂ
 // ============================================================================
-// REQUIREMENTS (already enforced by routes):
-// - authenticateToken
-// - resolveUserAccess (sets req.userAccess)
-// - authorizeRoles excludes REGULATOR_VIEWER from /reports
-// - enforceSectorAccess (optional) blocks invalid sector requests and sets req.requestedSectorUuid
-//
-// IMPORTANT:
-// - waste_tickets_landfill.sector_id is UUID
-// - No role logic or manual sector computation in this controller.
+// ✅ Coduri deșeuri cu procente
+// ✅ Operator depozitar (ECO SUD SA - id 19)
+// ✅ Valori generator distincte din BD
+// ✅ Contract type (Taxa/Tarif)
+// ✅ Toate câmpurile pentru tabel + expand row
 // ============================================================================
 
 import pool from '../config/database.js';
@@ -41,8 +37,6 @@ const buildSectorScope = (req) => {
 
   const isAll = access.accessLevel === 'ALL';
   const sectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
-
-  // enforceSectorAccess sets this if the user requested a specific sector (UUID)
   const requestedSectorUuid = req.requestedSectorUuid || null;
 
   return { isAll, allowedSectorIds: sectorIds, requestedSectorUuid };
@@ -98,194 +92,78 @@ const buildFilters = (req, baseAlias = 't') => {
     where.push(`${baseAlias}.supplier_id = $${p++}`);
     params.push(parseInt(String(supplier_id), 10));
   }
-
   if (isNonEmpty(waste_code_id)) {
     where.push(`${baseAlias}.waste_code_id = $${p++}`);
     params.push(String(waste_code_id));
   }
-
   if (isNonEmpty(generator_type)) {
     where.push(`${baseAlias}.generator_type = $${p++}`);
     params.push(String(generator_type));
   }
-
   if (isNonEmpty(operation_type)) {
     where.push(`${baseAlias}.operation_type = $${p++}`);
     params.push(String(operation_type));
   }
-
   if (isNonEmpty(contract_type)) {
     where.push(`${baseAlias}.contract_type = $${p++}`);
     params.push(String(contract_type));
   }
-
   if (isNonEmpty(search)) {
-    // Search in ticket_number or vehicle_number
     where.push(`(${baseAlias}.ticket_number ILIKE $${p} OR ${baseAlias}.vehicle_number ILIKE $${p})`);
     params.push(`%${String(search).trim()}%`);
     p++;
   }
 
   return {
-    startDate,
-    endDate,
-    currentYear,
     whereSql: where.join(' AND '),
     params,
     nextIndex: p,
-    scope,
+    startDate,
+    endDate,
+    currentYear,
   };
 };
 
-// CSV export helper
-const toCsv = (rows) => {
-  if (!rows || !rows.length) return '';
-  const headers = Object.keys(rows[0]);
-  const escape = (v) => {
-    const s = v === null || v === undefined ? '' : String(v);
-    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-    return s;
-  };
-  const lines = [headers.join(',')];
-  for (const r of rows) {
-    lines.push(headers.map((h) => escape(r[h])).join(','));
-  }
-  return lines.join('\n');
-};
-
-// ----------------------------------------------------------------------------
-// 1) Auxiliary data (filters)
-// GET /api/reports/landfill/auxiliary
-// ----------------------------------------------------------------------------
-export const getAuxiliaryData = async (req, res) => {
-  try {
-    // Sectors must respect RBAC
-    const scope = buildSectorScope(req);
-
-    let sectorsSql = `
-      SELECT s.id, s.sector_number, s.sector_name
-      FROM sectors s
-      WHERE s.deleted_at IS NULL AND s.is_active = true
-    `;
-    const sectorsParams = [];
-    let p = 1;
-
-    if (scope.requestedSectorUuid) {
-      sectorsSql += ` AND s.id = $${p++}`;
-      sectorsParams.push(scope.requestedSectorUuid);
-    } else if (!scope.isAll) {
-      sectorsSql += ` AND s.id = ANY($${p++})`;
-      sectorsParams.push(scope.allowedSectorIds);
-    }
-
-    sectorsSql += ` ORDER BY s.sector_number`;
-
-    const [sectorsRes, suppliersRes, wasteCodesRes, yearsRes] = await Promise.all([
-      pool.query(sectorsSql, sectorsParams),
-
-      // Suppliers used in landfill tickets (RBAC applied in main query; ok to list all)
-      pool.query(
-        `
-        SELECT DISTINCT i.id, i.name
-        FROM waste_tickets_landfill t
-        JOIN institutions i ON t.supplier_id = i.id
-        WHERE t.deleted_at IS NULL
-        ORDER BY i.name
-        `
-      ),
-
-      pool.query(
-        `
-        SELECT id, code, description, category
-        FROM waste_codes
-        WHERE is_active = true
-        ORDER BY code
-        `
-      ),
-
-      // Available years must respect RBAC scope
-      (async () => {
-        let yearsSql = `
-          SELECT DISTINCT EXTRACT(YEAR FROM t.ticket_date)::INTEGER AS year
-          FROM waste_tickets_landfill t
-          WHERE t.deleted_at IS NULL
-        `;
-        const yearsParams = [];
-        let yp = 1;
-
-        if (scope.requestedSectorUuid) {
-          yearsSql += ` AND t.sector_id = $${yp++}`;
-          yearsParams.push(scope.requestedSectorUuid);
-        } else if (!scope.isAll) {
-          yearsSql += ` AND t.sector_id = ANY($${yp++})`;
-          yearsParams.push(scope.allowedSectorIds);
-        }
-
-        yearsSql += ` ORDER BY year DESC`;
-        return pool.query(yearsSql, yearsParams);
-      })(),
-    ]);
-
-
-    
-    return res.json({
-      success: true,
-      data: {
-        sectors: sectorsRes.rows,
-        suppliers: suppliersRes.rows,
-        waste_codes: wasteCodesRes.rows,
-        available_years: yearsRes.rows.map((r) => r.year),
-      },
-    });
-  } catch (err) {
-    console.error('getAuxiliaryData error:', err);
-    const code = err.statusCode || 500;
-    return res.status(code).json({
-      success: false,
-      message: 'Failed to fetch auxiliary data',
-      error: err.message,
-    });
-  }
-};
-
-// ----------------------------------------------------------------------------
-// 2) Main landfill report
-// GET /api/reports/landfill
-// ----------------------------------------------------------------------------
+// ============================================================================
+// GET LANDFILL REPORTS
+// ============================================================================
 export const getLandfillReports = async (req, res) => {
   try {
-    const { page = 1, limit = 50, sort_by = 'ticket_date', sort_dir = 'desc' } = req.query;
+    const {
+      page = 1,
+      limit = 10,
+      sort_by = 'ticket_date',
+      sort_dir = 'desc',
+    } = req.query;
 
     const pageNum = clampInt(page, 1, 1000000, 1);
-    const limitNum = clampInt(limit, 1, 500, 50);
+    const limitNum = clampInt(limit, 1, 500, 10);
     const offset = (pageNum - 1) * limitNum;
 
     const filters = buildFilters(req, 't');
 
-    // Whitelist sorting
+    // SORT MAP
     const sortMap = {
       ticket_date: 't.ticket_date',
       ticket_number: 't.ticket_number',
       sector_number: 's.sector_number',
       supplier_name: 'i.name',
       net_weight_tons: 't.net_weight_tons',
+      contract_type: 't.contract_type',
     };
     const sortCol = sortMap[sort_by] || 't.ticket_date';
     const dir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
-    // COUNT
+    // COUNT TOTAL
     const countSql = `
       SELECT COUNT(*)::INTEGER AS total
       FROM waste_tickets_landfill t
-      JOIN sectors s ON t.sector_id = s.id
-      JOIN institutions i ON t.supplier_id = i.id
-      JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${filters.whereSql}
     `;
     const countRes = await pool.query(countSql, filters.params);
     const total = countRes.rows[0]?.total || 0;
 
-    // LIST
+    // LIST WITH ALL FIELDS
     const listParams = [...filters.params];
     const pLimit = filters.nextIndex;
     const pOffset = filters.nextIndex + 1;
@@ -310,21 +188,25 @@ export const getLandfillReports = async (req, res) => {
         t.tare_weight_kg,
         t.net_weight_kg,
         t.net_weight_tons,
+        t.gross_weight_tons,
+        t.tare_weight_tons,
         t.generator_type,
         t.operation_type,
         t.contract_type,
-        t.created_at
+        t.created_at,
+        op.name as operator_name
       FROM waste_tickets_landfill t
       JOIN sectors s ON t.sector_id = s.id
       JOIN institutions i ON t.supplier_id = i.id
       JOIN waste_codes wc ON t.waste_code_id = wc.id
+      LEFT JOIN institutions op ON op.id = 19
       WHERE ${filters.whereSql}
       ORDER BY ${sortCol} ${dir}, t.created_at ${dir}
       LIMIT $${pLimit} OFFSET $${pOffset}
     `;
     const listRes = await pool.query(listSql, listParams);
 
-    // SUMMARY (within filters)
+    // SUMMARY
     const summarySql = `
       SELECT
         COALESCE(SUM(t.net_weight_tons), 0) as total_tons,
@@ -335,7 +217,7 @@ export const getLandfillReports = async (req, res) => {
     `;
     const summaryRes = await pool.query(summarySql, filters.params);
 
-    // BY SECTOR (within filters)
+    // BY SECTOR
     const bySectorSql = `
       SELECT
         s.sector_number,
@@ -350,9 +232,52 @@ export const getLandfillReports = async (req, res) => {
     `;
     const bySectorRes = await pool.query(bySectorSql, filters.params);
 
-    // ============================================================================
-    // ✅ FIX: AVAILABLE YEARS
-    // ============================================================================
+    // ========================================================================
+    // ✅ CODURI DEȘEURI CU PROCENTE (sortate descrescător după cantitate)
+    // ========================================================================
+    const wasteCodesSql = `
+      SELECT
+        wc.code as waste_code,
+        wc.description as waste_description,
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons,
+        COUNT(*)::INTEGER as ticket_count
+      FROM waste_tickets_landfill t
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${filters.whereSql}
+      GROUP BY wc.code, wc.description
+      ORDER BY total_tons DESC
+    `;
+    const wasteCodesRes = await pool.query(wasteCodesSql, filters.params);
+
+    const totalTons = Number(summaryRes.rows[0]?.total_tons || 0);
+    const wasteCodesWithPercent = wasteCodesRes.rows.map(row => ({
+      code: row.waste_code,
+      description: row.waste_description,
+      total_tons: Number(row.total_tons || 0),
+      ticket_count: row.ticket_count,
+      percent: totalTons > 0 ? ((Number(row.total_tons) / totalTons) * 100).toFixed(2) : '0.00',
+    }));
+
+    // ========================================================================
+    // ✅ FURNIZORI (operatori salubrizare) - cu coduri deșeuri
+    // ========================================================================
+    const suppliersSql = `
+      SELECT 
+        i.name,
+        wc.code as waste_code,
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_landfill t
+      JOIN institutions i ON t.supplier_id = i.id
+      LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${filters.whereSql}
+      GROUP BY i.name, wc.code
+      ORDER BY total_tons DESC
+    `;
+    const suppliersRes = await pool.query(suppliersSql, filters.params);
+
+    // ========================================================================
+    // ✅ AVAILABLE YEARS & ALL SECTORS
+    // ========================================================================
     const scope = buildSectorScope(req);
     let yearsWhere = '';
     let yearsParams = [];
@@ -376,13 +301,11 @@ export const getLandfillReports = async (req, res) => {
     const yearsRes = await pool.query(yearsQuery, yearsParams);
     let availableYears = yearsRes.rows.map((r) => r.year);
 
-    // Asigură anul curent
     const currentYearInt = new Date().getFullYear();
     if (!availableYears.includes(currentYearInt)) {
       availableYears.unshift(currentYearInt);
     }
 
-    // Asigură minimum 3 ani
     const minYears = 3;
     while (availableYears.length < minYears) {
       const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
@@ -391,9 +314,6 @@ export const getLandfillReports = async (req, res) => {
 
     availableYears.sort((a, b) => b - a);
 
-    // ============================================================================
-    // ✅ FIX: ALL SECTORS (pentru dropdown)
-    // ============================================================================
     const allSectorsQuery = `
       SELECT 
         s.id AS sector_id,
@@ -409,29 +329,13 @@ export const getLandfillReports = async (req, res) => {
     const allSectorsParams = !scope.isAll ? [scope.allowedSectorIds] : [];
     const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
 
-    // ============================================================================
-    // ✅ FIX: SUPPLIERS & OPERATORS (pentru cards)
-    // ============================================================================
-    const suppliersSql = `
-      SELECT 
-        i.name,
-        wc.code as waste_code,
-        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_landfill t
-      JOIN institutions i ON t.supplier_id = i.id
-      LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
-      WHERE ${filters.whereSql}
-      GROUP BY i.name, wc.code
-      ORDER BY total_tons DESC
-    `;
-    const suppliersRes = await pool.query(suppliersSql, filters.params);
-
-    // Landfill nu are operator_id - returnăm listă goală
-const operatorsRes = { rows: [] };
+    // ========================================================================
+    // ✅ RETURN RESPONSE
+    // ========================================================================
     return res.json({
       success: true,
       data: {
-        items: listRes.rows,  // ✅ Deja corect!
+        items: listRes.rows,
         pagination: {
           total,
           page: pageNum,
@@ -450,21 +354,18 @@ const operatorsRes = { rows: [] };
           ticket_count: r.ticket_count,
           total_tons: Number(r.total_tons || 0),
         })),
-        suppliers: suppliersRes.rows.map(s => ({  // ✅ ADAUGĂ
+        waste_codes: wasteCodesWithPercent,
+        suppliers: suppliersRes.rows.map(s => ({
           name: s.name,
-          waste_code: s.waste_code,
+          code: s.waste_code,
           total_tons: Number(s.total_tons || 0),
         })),
-        operators: operatorsRes.rows.map(o => ({  // ✅ ADAUGĂ
-          name: o.name,
-          total_tons: Number(o.total_tons || 0),
-        })),
-        all_sectors: allSectorsRes.rows.map(s => ({  // ✅ ADAUGĂ
+        all_sectors: allSectorsRes.rows.map(s => ({
           sector_id: s.sector_id,
           sector_number: s.sector_number,
           sector_name: s.sector_name,
         })),
-        available_years: availableYears,  // ✅ ADAUGĂ
+        available_years: availableYears,
       },
       filters_applied: {
         year: filters.currentYear,
@@ -484,10 +385,79 @@ const operatorsRes = { rows: [] };
   }
 };
 
-// ----------------------------------------------------------------------------
-// 3) Export landfill report (CSV)
-// GET /api/reports/landfill/export
-// ----------------------------------------------------------------------------
+// ============================================================================
+// GET AUXILIARY DATA (pentru formulare)
+// ============================================================================
+export const getAuxiliaryData = async (req, res) => {
+  try {
+    // ✅ WASTE CODES
+    const wasteCodesQuery = `
+      SELECT id, code, description, category
+      FROM waste_codes
+      WHERE is_active = true AND deleted_at IS NULL
+      ORDER BY code
+    `;
+    const wasteCodesRes = await pool.query(wasteCodesQuery);
+
+    // ✅ OPERATORS (colectori, TMB, sortatori) - exclude operatori depozitare
+    const operatorsQuery = `
+      SELECT id, name, institution_type
+      FROM institutions
+      WHERE is_active = true 
+        AND deleted_at IS NULL
+        AND institution_type IN ('COLLECTOR', 'TMB', 'SORTING_FACILITY')
+      ORDER BY name
+    `;
+    const operatorsRes = await pool.query(operatorsQuery);
+
+    // ✅ GENERATOR TYPES (valori distincte din BD)
+    const generatorTypesQuery = `
+      SELECT DISTINCT generator_type
+      FROM waste_tickets_landfill
+      WHERE deleted_at IS NULL 
+        AND generator_type IS NOT NULL 
+        AND generator_type != ''
+      ORDER BY generator_type
+    `;
+    const generatorTypesRes = await pool.query(generatorTypesQuery);
+
+    return res.json({
+      success: true,
+      data: {
+        waste_codes: wasteCodesRes.rows,
+        operators: operatorsRes.rows,
+        generator_types: generatorTypesRes.rows.map(r => r.generator_type),
+        contract_types: ['TAXA', 'TARIF'],
+      },
+    });
+  } catch (err) {
+    console.error('getAuxiliaryData error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch auxiliary data',
+      error: err.message,
+    });
+  }
+};
+
+// ============================================================================
+// EXPORT (CSV) - păstrăm funcția existentă
+// ============================================================================
+const toCsv = (rows) => {
+  if (!rows || rows.length === 0) return '';
+  const headers = Object.keys(rows[0]);
+  const csvRows = [headers.join(',')];
+  for (const row of rows) {
+    const values = headers.map((h) => {
+      const val = row[h];
+      const escaped = String(val || '').replace(/"/g, '""');
+      return `"${escaped}"`;
+    });
+    csvRows.push(values.join(','));
+  }
+  return csvRows.join('\n');
+};
+
 export const exportLandfillReports = async (req, res) => {
   try {
     const filters = buildFilters(req, 't');
