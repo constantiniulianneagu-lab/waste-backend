@@ -188,8 +188,6 @@ export const getLandfillReports = async (req, res) => {
         t.tare_weight_kg,
         t.net_weight_kg,
         t.net_weight_tons,
-        t.gross_weight_tons,
-        t.tare_weight_tons,
         t.generator_type,
         t.operation_type,
         t.contract_type,
@@ -394,7 +392,7 @@ export const getAuxiliaryData = async (req, res) => {
     const wasteCodesQuery = `
       SELECT id, code, description, category
       FROM waste_codes
-      WHERE is_active = true AND deleted_at IS NULL
+      WHERE is_active = true
       ORDER BY code
     `;
     const wasteCodesRes = await pool.query(wasteCodesQuery);
