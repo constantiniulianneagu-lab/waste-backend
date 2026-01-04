@@ -226,65 +226,8 @@ export const getAuxiliaryData = async (req, res) => {
       })(),
     ]);
 
-// ============================================================================
-    // ✅ FIX: AVAILABLE YEARS
-    // ============================================================================
-    let yearsWhere = '';
-    let yearsParams = [];
 
-    if (requestedSectorUuid) {
-      yearsWhere = `AND sector_id = $1`;
-      yearsParams = [requestedSectorUuid];
-    } else if (!isAll) {
-      yearsWhere = `AND sector_id = ANY($1)`;
-      yearsParams = [allowedSectorIds];
-    }
-
-    // IMPORTANT: Înlocuiește TABLE_NAME cu numele tabelei corespunzătoare
-    const yearsQuery = `
-      SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
-      FROM waste_tickets_landfill
-      WHERE deleted_at IS NULL
-        ${yearsWhere}
-      ORDER BY year DESC
-    `;
     
-    const yearsRes = await pool.query(yearsQuery, yearsParams);
-    let availableYears = yearsRes.rows.map((r) => r.year);
-
-    // Asigură anul curent
-    const currentYearInt = new Date().getFullYear();
-    if (!availableYears.includes(currentYearInt)) {
-      availableYears.unshift(currentYearInt);
-    }
-
-    // Asigură minimum 3 ani
-    const minYears = 3;
-    while (availableYears.length < minYears) {
-      const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
-      availableYears.push(lastYear - 1);
-    }
-
-    availableYears.sort((a, b) => b - a);
-
-    // ============================================================================
-    // ✅ FIX: ALL SECTORS (pentru dropdown)
-    // ============================================================================
-    const allSectorsQuery = `
-      SELECT 
-        s.id AS sector_id,
-        s.sector_number,
-        s.sector_name
-      FROM sectors s
-      WHERE s.is_active = true 
-        AND s.deleted_at IS NULL
-        ${!isAll ? 'AND s.id = ANY($1)' : ''}
-      ORDER BY s.sector_number
-    `;
-
-    const allSectorsParams = !isAll ? [allowedSectorIds] : [];
-    const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
-
     return res.json({
       success: true,
       data: {
@@ -407,10 +350,98 @@ export const getLandfillReports = async (req, res) => {
     `;
     const bySectorRes = await pool.query(bySectorSql, filters.params);
 
+    // ============================================================================
+    // ✅ FIX: AVAILABLE YEARS
+    // ============================================================================
+    const scope = buildSectorScope(req);
+    let yearsWhere = '';
+    let yearsParams = [];
+
+    if (scope.requestedSectorUuid) {
+      yearsWhere = `AND sector_id = $1`;
+      yearsParams = [scope.requestedSectorUuid];
+    } else if (!scope.isAll) {
+      yearsWhere = `AND sector_id = ANY($1)`;
+      yearsParams = [scope.allowedSectorIds];
+    }
+
+    const yearsQuery = `
+      SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
+      FROM waste_tickets_landfill
+      WHERE deleted_at IS NULL
+        ${yearsWhere}
+      ORDER BY year DESC
+    `;
+    
+    const yearsRes = await pool.query(yearsQuery, yearsParams);
+    let availableYears = yearsRes.rows.map((r) => r.year);
+
+    // Asigură anul curent
+    const currentYearInt = new Date().getFullYear();
+    if (!availableYears.includes(currentYearInt)) {
+      availableYears.unshift(currentYearInt);
+    }
+
+    // Asigură minimum 3 ani
+    const minYears = 3;
+    while (availableYears.length < minYears) {
+      const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
+      availableYears.push(lastYear - 1);
+    }
+
+    availableYears.sort((a, b) => b - a);
+
+    // ============================================================================
+    // ✅ FIX: ALL SECTORS (pentru dropdown)
+    // ============================================================================
+    const allSectorsQuery = `
+      SELECT 
+        s.id AS sector_id,
+        s.sector_number,
+        s.sector_name
+      FROM sectors s
+      WHERE s.is_active = true 
+        AND s.deleted_at IS NULL
+        ${!scope.isAll ? 'AND s.id = ANY($1)' : ''}
+      ORDER BY s.sector_number
+    `;
+
+    const allSectorsParams = !scope.isAll ? [scope.allowedSectorIds] : [];
+    const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
+
+    // ============================================================================
+    // ✅ FIX: SUPPLIERS & OPERATORS (pentru cards)
+    // ============================================================================
+    const suppliersSql = `
+      SELECT 
+        i.name,
+        wc.code as waste_code,
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_landfill t
+      JOIN institutions i ON t.supplier_id = i.id
+      LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${filters.whereSql}
+      GROUP BY i.name, wc.code
+      ORDER BY total_tons DESC
+    `;
+    const suppliersRes = await pool.query(suppliersSql, filters.params);
+
+    const operatorsSql = `
+      SELECT 
+        i.name,
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_landfill t
+      LEFT JOIN institutions i ON t.operator_id = i.id
+      WHERE ${filters.whereSql} AND t.operator_id IS NOT NULL
+      GROUP BY i.name
+      ORDER BY total_tons DESC
+    `;
+    const operatorsRes = await pool.query(operatorsSql, filters.params);
+
     return res.json({
       success: true,
       data: {
-        items: listRes.rows,
+        items: listRes.rows,  // ✅ Deja corect!
         pagination: {
           total,
           page: pageNum,
@@ -429,6 +460,21 @@ export const getLandfillReports = async (req, res) => {
           ticket_count: r.ticket_count,
           total_tons: Number(r.total_tons || 0),
         })),
+        suppliers: suppliersRes.rows.map(s => ({  // ✅ ADAUGĂ
+          name: s.name,
+          waste_code: s.waste_code,
+          total_tons: Number(s.total_tons || 0),
+        })),
+        operators: operatorsRes.rows.map(o => ({  // ✅ ADAUGĂ
+          name: o.name,
+          total_tons: Number(o.total_tons || 0),
+        })),
+        all_sectors: allSectorsRes.rows.map(s => ({  // ✅ ADAUGĂ
+          sector_id: s.sector_id,
+          sector_number: s.sector_number,
+          sector_name: s.sector_name,
+        })),
+        available_years: availableYears,  // ✅ ADAUGĂ
       },
       filters_applied: {
         year: filters.currentYear,
