@@ -475,7 +475,58 @@ export const getTmbStats = async (req, res) => {
         };
       }).filter(o => o.total_tons > 0).sort((a,b)=>b.total_tons-a.total_tons);
     }
+// ✅ FIX #1: AVAILABLE YEARS
+let yearsWhere = '';
+let yearsParams = [];
 
+if (requestedSectorUuid) {
+  yearsWhere = `AND sector_id = $1`;
+  yearsParams = [requestedSectorUuid];
+} else if (!isAll) {
+  yearsWhere = `AND sector_id = ANY($1)`;
+  yearsParams = [allowedSectorUuids];
+}
+
+const yearsQuery = `
+  SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
+  FROM waste_tickets_tmb
+  WHERE deleted_at IS NULL
+    ${yearsWhere}
+  ORDER BY year DESC
+`;
+const yearsRes = await pool.query(yearsQuery, yearsParams);
+let availableYears = yearsRes.rows.map((r) => r.year);
+
+// Asigură anul curent
+const currentYearInt = new Date().getFullYear();
+if (!availableYears.includes(currentYearInt)) {
+  availableYears.unshift(currentYearInt);
+}
+
+// Asigură minimum 3 ani
+const minYears = 3;
+while (availableYears.length < minYears) {
+  const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
+  availableYears.push(lastYear - 1);
+}
+
+availableYears.sort((a, b) => b - a);
+
+// ✅ FIX #2: ALL SECTORS pentru dropdown
+const allSectorsQuery = `
+  SELECT 
+    s.id AS sector_id,
+    s.sector_number,
+    s.sector_name
+  FROM sectors s
+  WHERE s.is_active = true 
+    AND s.deleted_at IS NULL
+    ${!isAll ? 'AND s.id = ANY($1)' : ''}
+  ORDER BY s.sector_number
+`;
+
+const allSectorsParams = !isAll ? [allowedSectorUuids] : [];
+const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
     // ----------------------------------------------------------------------
     // Response
     // ----------------------------------------------------------------------
@@ -503,6 +554,12 @@ export const getTmbStats = async (req, res) => {
         monthly_evolution,
         sector_distribution,
         operators,
+        all_sectors: allSectorsRes.rows.map(s => ({  // ✅ ADAUGĂ ACEASTĂ LINIE
+          sector_id: s.sector_id,
+          sector_number: s.sector_number,
+          sector_name: s.sector_name,
+        })),
+        available_years: availableYears,  // ✅ ADAUGĂ ACEASTĂ LINIE
       },
       filters_applied: {
         year: year ? Number(year) : null,
