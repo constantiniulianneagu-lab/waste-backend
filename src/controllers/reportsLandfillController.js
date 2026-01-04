@@ -426,18 +426,8 @@ export const getLandfillReports = async (req, res) => {
     `;
     const suppliersRes = await pool.query(suppliersSql, filters.params);
 
-    const operatorsSql = `
-      SELECT 
-        i.name,
-        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_landfill t
-      LEFT JOIN institutions i ON t.operator_id = i.id
-      WHERE ${filters.whereSql} AND t.operator_id IS NOT NULL
-      GROUP BY i.name
-      ORDER BY total_tons DESC
-    `;
-    const operatorsRes = await pool.query(operatorsSql, filters.params);
-
+    // Landfill nu are operator_id - returnăm listă goală
+const operatorsRes = { rows: [] };
     return res.json({
       success: true,
       data: {
