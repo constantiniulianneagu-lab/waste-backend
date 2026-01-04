@@ -226,6 +226,65 @@ export const getAuxiliaryData = async (req, res) => {
       })(),
     ]);
 
+// ============================================================================
+    // ✅ FIX: AVAILABLE YEARS
+    // ============================================================================
+    let yearsWhere = '';
+    let yearsParams = [];
+
+    if (requestedSectorUuid) {
+      yearsWhere = `AND sector_id = $1`;
+      yearsParams = [requestedSectorUuid];
+    } else if (!isAll) {
+      yearsWhere = `AND sector_id = ANY($1)`;
+      yearsParams = [allowedSectorIds];
+    }
+
+    // IMPORTANT: Înlocuiește TABLE_NAME cu numele tabelei corespunzătoare
+    const yearsQuery = `
+      SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
+      FROM waste_tickets_landfill
+      WHERE deleted_at IS NULL
+        ${yearsWhere}
+      ORDER BY year DESC
+    `;
+    
+    const yearsRes = await pool.query(yearsQuery, yearsParams);
+    let availableYears = yearsRes.rows.map((r) => r.year);
+
+    // Asigură anul curent
+    const currentYearInt = new Date().getFullYear();
+    if (!availableYears.includes(currentYearInt)) {
+      availableYears.unshift(currentYearInt);
+    }
+
+    // Asigură minimum 3 ani
+    const minYears = 3;
+    while (availableYears.length < minYears) {
+      const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
+      availableYears.push(lastYear - 1);
+    }
+
+    availableYears.sort((a, b) => b - a);
+
+    // ============================================================================
+    // ✅ FIX: ALL SECTORS (pentru dropdown)
+    // ============================================================================
+    const allSectorsQuery = `
+      SELECT 
+        s.id AS sector_id,
+        s.sector_number,
+        s.sector_name
+      FROM sectors s
+      WHERE s.is_active = true 
+        AND s.deleted_at IS NULL
+        ${!isAll ? 'AND s.id = ANY($1)' : ''}
+      ORDER BY s.sector_number
+    `;
+
+    const allSectorsParams = !isAll ? [allowedSectorIds] : [];
+    const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
+
     return res.json({
       success: true,
       data: {
