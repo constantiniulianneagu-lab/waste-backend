@@ -1,20 +1,13 @@
 /**
  * ============================================================================
- * DASHBOARD LANDFILL CONTROLLER - FINAL (RBAC + SECTOR SCOPING)
+ * DASHBOARD LANDFILL CONTROLLER - FIXED VERSION
  * ============================================================================
  *
- * ✅ GOALS (per cerință):
- * - NU mai calculează sectoare manual în controller (nu mai face RBAC aici).
- * - NU mai folosește roluri inexistente în DB (INSTITUTION_ADMIN / OPERATOR_USER etc.).
- * - NU mai folosește ui.deleted_at (nu există în schema ta).
- * - Folosește STRICT req.userAccess (setat de resolveUserAccess middleware).
- * - Filtrare pe sector_id UUID (waste_tickets_landfill.sector_id este UUID).
- * - Query param sector_id (1..6) este suportat (mapat la UUID din tabela sectors).
- * - Parametrizare SQL (fără string IN(...)).
+ * ✅ FIXES:
+ * - Available years include always current year + minimum 3 years
+ * - All sectors returned separately for dropdown
+ * - Per sector data includes all accessible sectors (even with 0 data)
  *
- * IMPORTANT:
- * - Acest controller presupune că pe rută ai: authenticateToken + resolveUserAccess
- *   Ex: router.get('/stats', authenticateToken, resolveUserAccess, getStats)
  * ============================================================================
  */
 
@@ -60,7 +53,6 @@ const getMonthName = (month) => {
 const isoDate = (d) => new Date(d).toISOString().split('T')[0];
 
 const assertValidDate = (dateStr, fieldName) => {
-  // Acceptă YYYY-MM-DD; dacă e invalid, aruncă.
   if (!dateStr || typeof dateStr !== 'string') throw new Error(`Invalid ${fieldName}`);
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) throw new Error(`Invalid ${fieldName}: ${dateStr}`);
@@ -158,7 +150,6 @@ export const getStats = async (req, res) => {
     // ----------------------------------------------------------------------
     // 4) Build WHERE sector filter (UUID, parametrizat)
     // ----------------------------------------------------------------------
-    // paramsBase = [startDate, endDate, sectorFilterArg?]
     let sectorWhere = '';
     let paramsBase = [startDate, endDate];
 
@@ -177,7 +168,7 @@ export const getStats = async (req, res) => {
       console.log('[LANDFILL] sectorWhere:', sectorWhere || 'NONE');
     }
 
-    // Helper: prev period params (same sectorWhere)
+    // Helper: prev period params
     const prevStart = new Date(startDate);
     prevStart.setFullYear(prevStart.getFullYear() - 1);
     const prevEnd = new Date(endDate);
@@ -214,8 +205,8 @@ export const getStats = async (req, res) => {
         wc.code AS waste_code,
         wc.description AS waste_description,
         wc.category,
-        COUNT(*) AS ticket_count,
-        COALESCE(SUM(wtl.net_weight_tons), 0) AS total_tons
+        COUNT(*) as ticket_count,
+        COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
       FROM waste_tickets_landfill wtl
       JOIN waste_codes wc ON wtl.waste_code_id = wc.id
       WHERE wtl.deleted_at IS NULL
@@ -234,96 +225,107 @@ export const getStats = async (req, res) => {
         waste_code: r.waste_code,
         waste_description: r.waste_description,
         category: r.category,
-        icon_color: getWasteCodeColor(r.waste_code),
+        ticket_count: Number(r.ticket_count || 0),
         total_tons: tons,
         total_tons_formatted: formatTons(tons),
         percentage_of_total: totalTons > 0 ? Number(((tons / totalTons) * 100).toFixed(1)) : 0,
-        ticket_count: Number(r.ticket_count || 0),
+        color: getWasteCodeColor(r.waste_code),
       };
     });
 
     // ----------------------------------------------------------------------
-    // 7) PER SECTOR BREAKDOWN + YoY
+    // 7) ✅ FIX #2: ALL SECTORS (pentru dropdown) + PER SECTOR DATA
     // ----------------------------------------------------------------------
-    const perSectorQuery = `
-      SELECT
-        s.id as sector_id,
-        s.sector_name,
+    
+    // 7a) Toate sectoarele accesibile (pentru dropdown)
+    const allSectorsQuery = `
+      SELECT 
+        s.id AS sector_id,
         s.sector_number,
-        COUNT(*) as ticket_count,
-        COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_landfill wtl
-      JOIN sectors s ON wtl.sector_id = s.id
-      WHERE wtl.deleted_at IS NULL
-        AND wtl.ticket_date >= $1
-        AND wtl.ticket_date <= $2
-        ${sectorWhere}
-      GROUP BY s.id, s.sector_name, s.sector_number
+        s.sector_name
+      FROM sectors s
+      WHERE s.is_active = true 
+        AND s.deleted_at IS NULL
+        ${!isAll ? 'AND s.id = ANY($1)' : ''}
       ORDER BY s.sector_number
     `;
 
-    const perSectorRes = await db.query(perSectorQuery, paramsBase);
-
-    const prevYearSectorQuery = `
+    const allSectorsParams = !isAll ? [allowedSectorUuids] : [];
+    const allSectorsRes = await db.query(allSectorsQuery, allSectorsParams);
+    
+    // 7b) Date per sector (doar cele cu tichete)
+    const sectorQuery = `
       SELECT
-        s.id as sector_id,
-        COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
-      FROM waste_tickets_landfill wtl
-      JOIN sectors s ON wtl.sector_id = s.id
-      WHERE wtl.deleted_at IS NULL
+        s.id AS sector_id,
+        s.sector_number,
+        s.sector_name,
+        COUNT(wtl.id) AS total_tickets,
+        COALESCE(SUM(wtl.net_weight_tons), 0) AS total_tons
+      FROM sectors s
+      LEFT JOIN waste_tickets_landfill wtl 
+        ON wtl.sector_id = s.id 
+        AND wtl.deleted_at IS NULL
         AND wtl.ticket_date >= $1
         AND wtl.ticket_date <= $2
-        ${sectorWhere}
-      GROUP BY s.id
+      WHERE s.is_active = true 
+        AND s.deleted_at IS NULL
+        ${!isAll ? 'AND s.id = ANY($3)' : ''}
+      GROUP BY s.id, s.sector_number, s.sector_name
+      ORDER BY s.sector_number
     `;
 
-    const prevYearSectorRes = await db.query(prevYearSectorQuery, prevParamsBase);
-    const prevMap = Object.fromEntries(prevYearSectorRes.rows.map((r) => [r.sector_id, Number(r.total_tons || 0)]));
+    const sectorParams = !isAll 
+      ? [startDate, endDate, allowedSectorUuids]
+      : [startDate, endDate];
 
-    const perSector = perSectorRes.rows.map((r) => {
-      const currentTons = Number(r.total_tons || 0);
-      const prevTons = prevMap[r.sector_id] || 0;
-      const variation = prevTons > 0 ? Number((((currentTons - prevTons) / prevTons) * 100).toFixed(1)) : 0;
+    const sectorRes = await db.query(sectorQuery, sectorParams);
 
+    // Merge: toate sectoarele cu datele lor
+    const perSector = allSectorsRes.rows.map(sector => {
+      const data = sectorRes.rows.find(s => s.sector_id === sector.sector_id);
+      const tons = Number(data?.total_tons || 0);
+      
       return {
-        sector_id: r.sector_id,
-        sector_number: r.sector_number,
-        sector_name: r.sector_name,
-        city: 'București',
-        icon_color: getSectorColor(r.sector_number),
-        total_tons: currentTons,
-        total_tons_formatted: formatTons(currentTons),
-        ticket_count: Number(r.ticket_count || 0),
-        percentage_of_total: totalTons > 0 ? Number(((currentTons / totalTons) * 100).toFixed(2)) : 0,
-        variation_percent: variation,
-        variation_direction: variation >= 0 ? 'up' : 'down',
+        sector_id: sector.sector_id,
+        sector_number: sector.sector_number,
+        sector_name: sector.sector_name,
+        total_tickets: Number(data?.total_tickets || 0),
+        total_tons: tons,
+        total_tons_formatted: formatTons(tons),
+        percentage_of_total: totalTons > 0 ? Number(((tons / totalTons) * 100).toFixed(1)) : 0,
+        color: getSectorColor(sector.sector_number),
       };
     });
 
     // ----------------------------------------------------------------------
-    // 8) MONTHLY EVOLUTION + STATS + TRENDING vs prev period
+    // 8) MONTHLY EVOLUTION
     // ----------------------------------------------------------------------
     const monthlyQuery = `
       SELECT
-        EXTRACT(YEAR FROM wtl.ticket_date)::INTEGER as year,
-        EXTRACT(MONTH FROM wtl.ticket_date)::INTEGER as month,
-        COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons
+        EXTRACT(YEAR FROM wtl.ticket_date)::INTEGER AS year,
+        EXTRACT(MONTH FROM wtl.ticket_date)::INTEGER AS month,
+        COALESCE(SUM(wtl.net_weight_tons), 0) AS total_tons
       FROM waste_tickets_landfill wtl
       WHERE wtl.deleted_at IS NULL
         AND wtl.ticket_date >= $1
         AND wtl.ticket_date <= $2
         ${sectorWhere}
-      GROUP BY 1,2
-      ORDER BY 1,2
+      GROUP BY year, month
+      ORDER BY year, month
     `;
 
     const monthlyRes = await db.query(monthlyQuery, paramsBase);
-
-    const monthlyEvolution = monthlyRes.rows.map((r) => ({
-      month: getMonthName(r.month),
-      year: r.year,
-      total_tons: Number(r.total_tons || 0),
-    }));
+    const monthlyEvolution = monthlyRes.rows.map((r) => {
+      const tons = Number(r.total_tons || 0);
+      return {
+        year: r.year,
+        month: r.month,
+        month_name: getMonthName(r.month),
+        month_label: `${getMonthName(r.month)} ${r.year}`,
+        total_tons: tons,
+        total_tons_formatted: formatTons(tons),
+      };
+    });
 
     const monthlyTotals = monthlyRes.rows.map((r) => Number(r.total_tons || 0));
     const maxMonthly = monthlyTotals.length ? Math.max(...monthlyTotals) : 0;
@@ -461,7 +463,7 @@ export const getStats = async (req, res) => {
     });
 
     // ----------------------------------------------------------------------
-    // 11) AVAILABLE YEARS (respectă RBAC!)
+    // 11) ✅ FIX #1: AVAILABLE YEARS (include current + min 3 years)
     // ----------------------------------------------------------------------
     let yearsWhere = '';
     let yearsParams = [];
@@ -482,7 +484,23 @@ export const getStats = async (req, res) => {
       ORDER BY year DESC
     `;
     const yearsRes = await db.query(yearsQuery, yearsParams);
-    const availableYears = yearsRes.rows.map((r) => r.year);
+    let availableYears = yearsRes.rows.map((r) => r.year);
+
+    // ✅ Asigură anul curent este în listă
+    const currentYearInt = new Date().getFullYear();
+    if (!availableYears.includes(currentYearInt)) {
+      availableYears.unshift(currentYearInt);
+    }
+
+    // ✅ Asigură minimum 3 ani
+    const minYears = 3;
+    while (availableYears.length < minYears) {
+      const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
+      availableYears.push(lastYear - 1);
+    }
+
+    // ✅ Sortează descrescător
+    availableYears.sort((a, b) => b - a);
 
     // ----------------------------------------------------------------------
     // 12) Response
@@ -503,6 +521,11 @@ export const getStats = async (req, res) => {
         },
         waste_categories: wasteCategories,
         per_sector: perSector,
+        all_sectors: allSectorsRes.rows.map(s => ({  // ✅ Pentru dropdown
+          sector_id: s.sector_id,
+          sector_number: s.sector_number,
+          sector_name: s.sector_name,
+        })),
         monthly_evolution: monthlyEvolution,
         monthly_stats: monthlyStats,
         top_operators: topOperators,
@@ -522,6 +545,7 @@ export const getStats = async (req, res) => {
         total_tons: totalTons,
         total_tickets: response.data.summary.total_tickets,
         per_sector: response.data.per_sector.length,
+        all_sectors: response.data.all_sectors.length,
         categories: response.data.waste_categories.length,
         operators: response.data.top_operators.length,
         recent: response.data.recent_tickets.length,
