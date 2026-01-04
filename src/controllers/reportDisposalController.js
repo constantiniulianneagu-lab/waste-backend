@@ -185,6 +185,93 @@ export const getDisposalTickets = async (req, res) => {
     const accepted = Number(s.accepted_tons || 0);
     const rate = delivered > 0 ? (accepted / delivered) * 100 : 0;
 
+    // ============================================================================
+    // ✅ FIX: AVAILABLE YEARS & ALL SECTORS
+    // ============================================================================
+    const access = req.userAccess;
+    const isAll = access.accessLevel === 'ALL';
+    const allowedSectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+    const requestedSectorUuid = req.requestedSectorUuid || null;
+
+    let yearsWhere = '';
+    let yearsParams = [];
+
+    if (requestedSectorUuid) {
+      yearsWhere = `AND sector_id = $1`;
+      yearsParams = [requestedSectorUuid];
+    } else if (!isAll) {
+      yearsWhere = `AND sector_id = ANY($1)`;
+      yearsParams = [allowedSectorIds];
+    }
+
+    const yearsQuery = `
+      SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
+      FROM waste_tickets_disposal
+      WHERE deleted_at IS NULL
+        ${yearsWhere}
+      ORDER BY year DESC
+    `;
+    
+    const yearsRes = await pool.query(yearsQuery, yearsParams);
+    let availableYears = yearsRes.rows.map((r) => r.year);
+
+    const currentYearInt = new Date().getFullYear();
+    if (!availableYears.includes(currentYearInt)) {
+      availableYears.unshift(currentYearInt);
+    }
+
+    const minYears = 3;
+    while (availableYears.length < minYears) {
+      const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
+      availableYears.push(lastYear - 1);
+    }
+
+    availableYears.sort((a, b) => b - a);
+
+    const allSectorsQuery = `
+      SELECT 
+        s.id AS sector_id,
+        s.sector_number,
+        s.sector_name
+      FROM sectors s
+      WHERE s.is_active = true 
+        AND s.deleted_at IS NULL
+        ${!isAll ? 'AND s.id = ANY($1)' : ''}
+      ORDER BY s.sector_number
+    `;
+
+    const allSectorsParams = !isAll ? [allowedSectorIds] : [];
+    const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
+
+    // Suppliers & Clients pentru cards
+    const suppliersSql = `
+      SELECT 
+        sup.name,
+        wc.code as waste_code,
+        COALESCE(SUM(t.delivered_quantity_tons), 0) as total_tons
+      FROM waste_tickets_disposal t
+      JOIN institutions sup ON t.supplier_id = sup.id
+      LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
+      GROUP BY sup.name, wc.code
+      ORDER BY total_tons DESC
+    `;
+    const suppliersRes = await pool.query(suppliersSql, f.params);
+
+    const clientsSql = `
+      SELECT 
+        rec.name,
+        wc.code as waste_code,
+        COALESCE(SUM(t.accepted_quantity_tons), 0) as total_tons
+      FROM waste_tickets_disposal t
+      JOIN institutions rec ON t.recipient_id = rec.id
+      LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
+      GROUP BY rec.name, wc.code
+      ORDER BY total_tons DESC
+    `;
+    const clientsRes = await pool.query(clientsSql, f.params);
+
     return res.json({
       success: true,
       data: {
@@ -192,12 +279,28 @@ export const getDisposalTickets = async (req, res) => {
         pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
         summary: {
           total_tickets: s.total_tickets || 0,
-          delivered_tons: delivered,
-          accepted_tons: accepted,
+          total_delivered: delivered,
+          total_accepted: accepted,
           acceptance_rate_percent: Number(rate.toFixed(2)),
           difference_tons: Number(s.difference_tons || 0),
           date_range: { from: f.startDate, to: f.endDate },
         },
+        suppliers: suppliersRes.rows.map(s => ({
+          name: s.name,
+          code: s.waste_code,
+          total_tons: Number(s.total_tons || 0),
+        })),
+        clients: clientsRes.rows.map(c => ({
+          name: c.name,
+          code: c.waste_code,
+          total_tons: Number(c.total_tons || 0),
+        })),
+        all_sectors: allSectorsRes.rows.map(s => ({
+          sector_id: s.sector_id,
+          sector_number: s.sector_number,
+          sector_name: s.sector_name,
+        })),
+        available_years: availableYears,
       },
     });
   } catch (err) {
