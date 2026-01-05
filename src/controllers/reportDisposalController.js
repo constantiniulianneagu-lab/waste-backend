@@ -1,8 +1,7 @@
 // src/controllers/reportDisposalController.js
 // ============================================================================
-// REPORT: DISPOSAL OUTPUT TICKETS (RBAC via req.userAccess, UUID sector scoping)
-// Route: GET /api/reports/tmb/disposal
-// Table: waste_tickets_disposal
+// REPORT: DISPOSAL TICKETS (LANDFILL) (RBAC via req.userAccess, UUID sector scoping)
+// Route: GET /api/reports/disposal/landfill
 // ============================================================================
 
 import pool from '../config/database.js';
@@ -33,11 +32,14 @@ const buildSectorScope = (req, alias = 't') => {
   let sectorWhere = '';
   const sectorParams = [];
 
+  // ✅ IMPORTANT:
+  // - sectorWhere MUST NOT start with "AND" (because buildFilters joins with ' AND ')
+  // - placeholders must be literal "${{}}" (escaped as \${{}}) so applyParamIndex can replace them
   if (requestedSectorUuid) {
-    sectorWhere = `AND ${alias}.sector_id = ${{}}`;
+    sectorWhere = `${alias}.sector_id = \${{}}`;
     sectorParams.push(requestedSectorUuid);
   } else if (!isAll) {
-    sectorWhere = `AND ${alias}.sector_id = ANY(${{}})`;
+    sectorWhere = `${alias}.sector_id = ANY(\${{}})`;
     sectorParams.push(sectorIds);
   }
 
@@ -99,7 +101,7 @@ const buildFilters = (req, alias = 't') => {
   return { whereSql: where.join(' AND '), params, nextIndex: p, startDate, endDate, year: y };
 };
 
-export const getDisposalTickets = async (req, res) => {
+export const getLandfillTickets = async (req, res) => {
   try {
     const { page = 1, limit = 50, sort_by = 'ticket_date', sort_dir = 'desc' } = req.query;
 
@@ -115,15 +117,15 @@ export const getDisposalTickets = async (req, res) => {
       sector_number: 's.sector_number',
       supplier_name: 'sup.name',
       recipient_name: 'rec.name',
-      delivered_quantity_tons: 't.delivered_quantity_tons',
-      accepted_quantity_tons: 't.accepted_quantity_tons',
+      net_weight_tons: 't.net_weight_tons',
     };
+
     const sortCol = sortMap[sort_by] || 't.ticket_date';
     const dir = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
     const countSql = `
       SELECT COUNT(*)::INTEGER AS total
-      FROM waste_tickets_disposal t
+      FROM waste_tickets_landfill t
       JOIN sectors s ON t.sector_id = s.id
       JOIN institutions sup ON t.supplier_id = sup.id
       JOIN institutions rec ON t.recipient_id = rec.id
@@ -155,11 +157,10 @@ export const getDisposalTickets = async (req, res) => {
         wc.code as waste_code,
         wc.description as waste_description,
         t.vehicle_number,
-        t.delivered_quantity_tons,
-        t.accepted_quantity_tons,
-        t.difference_tons,
+        t.net_weight_kg,
+        t.net_weight_tons,
         t.created_at
-      FROM waste_tickets_disposal t
+      FROM waste_tickets_landfill t
       JOIN sectors s ON t.sector_id = s.id
       JOIN institutions sup ON t.supplier_id = sup.id
       JOIN institutions rec ON t.recipient_id = rec.id
@@ -173,20 +174,15 @@ export const getDisposalTickets = async (req, res) => {
     const summarySql = `
       SELECT
         COUNT(*)::INTEGER as total_tickets,
-        COALESCE(SUM(t.delivered_quantity_tons), 0) as delivered_tons,
-        COALESCE(SUM(t.accepted_quantity_tons), 0) as accepted_tons,
-        COALESCE(SUM(t.difference_tons), 0) as difference_tons
-      FROM waste_tickets_disposal t
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons,
+        COALESCE(AVG(t.net_weight_tons), 0) as avg_tons_per_ticket
+      FROM waste_tickets_landfill t
       WHERE ${f.whereSql}
     `;
     const summaryRes = await pool.query(summarySql, f.params);
-    const s = summaryRes.rows[0] || {};
-    const delivered = Number(s.delivered_tons || 0);
-    const accepted = Number(s.accepted_tons || 0);
-    const rate = delivered > 0 ? (accepted / delivered) * 100 : 0;
 
     // ============================================================================
-    // ✅ FIX: AVAILABLE YEARS & ALL SECTORS
+    // AVAILABLE YEARS + ALL SECTORS (scoped)
     // ============================================================================
     const access = req.userAccess;
     const isAll = access.accessLevel === 'ALL';
@@ -206,12 +202,11 @@ export const getDisposalTickets = async (req, res) => {
 
     const yearsQuery = `
       SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
-      FROM waste_tickets_disposal
+      FROM waste_tickets_landfill
       WHERE deleted_at IS NULL
         ${yearsWhere}
       ORDER BY year DESC
     `;
-    
     const yearsRes = await pool.query(yearsQuery, yearsParams);
     let availableYears = yearsRes.rows.map((r) => r.year);
 
@@ -239,17 +234,16 @@ export const getDisposalTickets = async (req, res) => {
         ${!isAll ? 'AND s.id = ANY($1)' : ''}
       ORDER BY s.sector_number
     `;
-
     const allSectorsParams = !isAll ? [allowedSectorIds] : [];
     const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
 
-    // Suppliers & Clients pentru cards
+    // Suppliers / Recipients cards
     const suppliersSql = `
       SELECT 
         sup.name,
         wc.code as waste_code,
-        COALESCE(SUM(t.delivered_quantity_tons), 0) as total_tons
-      FROM waste_tickets_disposal t
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_landfill t
       JOIN institutions sup ON t.supplier_id = sup.id
       LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${f.whereSql}
@@ -258,31 +252,32 @@ export const getDisposalTickets = async (req, res) => {
     `;
     const suppliersRes = await pool.query(suppliersSql, f.params);
 
-    const clientsSql = `
+    const recipientsSql = `
       SELECT 
         rec.name,
-        wc.code as waste_code,
-        COALESCE(SUM(t.accepted_quantity_tons), 0) as total_tons
-      FROM waste_tickets_disposal t
+        COALESCE(SUM(t.net_weight_tons), 0) as total_tons
+      FROM waste_tickets_landfill t
       JOIN institutions rec ON t.recipient_id = rec.id
-      LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${f.whereSql}
-      GROUP BY rec.name, wc.code
+      GROUP BY rec.name
       ORDER BY total_tons DESC
     `;
-    const clientsRes = await pool.query(clientsSql, f.params);
+    const recipientsRes = await pool.query(recipientsSql, f.params);
 
     return res.json({
       success: true,
       data: {
         items: listRes.rows,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
         summary: {
-          total_tickets: s.total_tickets || 0,
-          total_delivered: delivered,
-          total_accepted: accepted,
-          acceptance_rate_percent: Number(rate.toFixed(2)),
-          difference_tons: Number(s.difference_tons || 0),
+          total_tickets: summaryRes.rows[0]?.total_tickets || 0,
+          total_tons: Number(summaryRes.rows[0]?.total_tons || 0),
+          avg_tons_per_ticket: Number(summaryRes.rows[0]?.avg_tons_per_ticket || 0),
           date_range: { from: f.startDate, to: f.endDate },
         },
         suppliers: suppliersRes.rows.map(s => ({
@@ -290,10 +285,9 @@ export const getDisposalTickets = async (req, res) => {
           code: s.waste_code,
           total_tons: Number(s.total_tons || 0),
         })),
-        clients: clientsRes.rows.map(c => ({
-          name: c.name,
-          code: c.waste_code,
-          total_tons: Number(c.total_tons || 0),
+        recipients: recipientsRes.rows.map(r => ({
+          name: r.name,
+          total_tons: Number(r.total_tons || 0),
         })),
         all_sectors: allSectorsRes.rows.map(s => ({
           sector_id: s.sector_id,
@@ -304,10 +298,10 @@ export const getDisposalTickets = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('getDisposalTickets error:', err);
+    console.error('getLandfillTickets error:', err);
     const code = err.statusCode || 500;
-    return res.status(code).json({ success: false, message: 'Failed to fetch Disposal report', error: err.message });
+    return res.status(code).json({ success: false, message: 'Failed to fetch landfill report', error: err.message });
   }
 };
 
-export default { getDisposalTickets };
+export default { getLandfillTickets };
