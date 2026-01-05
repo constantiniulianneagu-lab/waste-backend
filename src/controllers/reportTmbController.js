@@ -32,11 +32,14 @@ const buildSectorScope = (req, alias = 't') => {
   let sectorWhere = '';
   const sectorParams = [];
 
+  // ✅ IMPORTANT:
+  // - sectorWhere MUST NOT start with "AND" because buildFilters joins with " AND "
+  // - placeholders must be literal "${{}}" (escaped as \${{}}) so applyParamIndex can replace them
   if (requestedSectorUuid) {
-    sectorWhere = `AND ${alias}.sector_id = \${{}}`;
+    sectorWhere = `${alias}.sector_id = \${{}}`;
     sectorParams.push(requestedSectorUuid);
   } else if (!isAll) {
-    sectorWhere = `AND ${alias}.sector_id = ANY(\${{}})`;
+    sectorWhere = `${alias}.sector_id = ANY(\${{}})`;
     sectorParams.push(sectorIds);
   }
 
