@@ -33,10 +33,10 @@ const buildSectorScope = (req, alias = 't') => {
   const sectorParams = [];
 
   if (requestedSectorUuid) {
-    sectorWhere = `AND ${alias}.sector_id = ${{}}`;
+    sectorWhere = `AND ${alias}.sector_id = \${{}}`;
     sectorParams.push(requestedSectorUuid);
   } else if (!isAll) {
-    sectorWhere = `AND ${alias}.sector_id = ANY(${{}})`;
+    sectorWhere = `AND ${alias}.sector_id = ANY(\${{}})`;
     sectorParams.push(sectorIds);
   }
 
