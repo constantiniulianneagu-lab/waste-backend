@@ -33,11 +33,14 @@ const buildSectorScope = (req, alias = 't') => {
   let sectorWhere = '';
   const sectorParams = [];
 
+  // ✅ IMPORTANT:
+  // - sectorWhere MUST NOT start with "AND" because buildFilters joins with " AND "
+  // - placeholders must be literal "${{}}" (escaped as \${{}}) so applyParamIndex can replace them
   if (requestedSectorUuid) {
-    sectorWhere = `AND ${alias}.sector_id = ${{}}`;
+    sectorWhere = `${alias}.sector_id = \${{}}`;
     sectorParams.push(requestedSectorUuid);
   } else if (!isAll) {
-    sectorWhere = `AND ${alias}.sector_id = ANY(${{}})`;
+    sectorWhere = `${alias}.sector_id = ANY(\${{}})`;
     sectorParams.push(sectorIds);
   }
 
@@ -50,11 +53,7 @@ const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
 };
 
 const buildFilters = (req, alias = 't') => {
-  const {
-    year, from, to,
-    supplier_id, recipient_id,
-    waste_code_id, search
-  } = req.query;
+  const { year, from, to, supplier_id, recipient_id, waste_code_id, search } = req.query;
 
   const now = new Date();
   const y = isNonEmpty(year) ? clampInt(year, 2000, 2100, now.getFullYear()) : now.getFullYear();
@@ -162,7 +161,6 @@ export const getRecyclingTickets = async (req, res) => {
         t.delivered_quantity_tons,
         t.accepted_quantity_tons,
         t.difference_tons,
-        t.stock_month,
         t.created_at
       FROM waste_tickets_recycling t
       JOIN sectors s ON t.sector_id = s.id
@@ -216,7 +214,7 @@ export const getRecyclingTickets = async (req, res) => {
         ${yearsWhere}
       ORDER BY year DESC
     `;
-    
+
     const yearsRes = await pool.query(yearsQuery, yearsParams);
     let availableYears = yearsRes.rows.map((r) => r.year);
 
