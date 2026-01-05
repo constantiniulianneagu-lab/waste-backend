@@ -1,6 +1,6 @@
 // src/controllers/reportRejectedController.js
 // ============================================================================
-// REPORT: REJECTED (TMB refusuri / neacceptate) (RBAC via req.userAccess)
+// REPORT: REJECTED OUTPUT TICKETS (RBAC via req.userAccess, UUID sector scoping)
 // Route: GET /api/reports/tmb/rejected
 // Table: waste_tickets_rejected
 // ============================================================================
@@ -33,11 +33,14 @@ const buildSectorScope = (req, alias = 't') => {
   let sectorWhere = '';
   const sectorParams = [];
 
+  // ✅ IMPORTANT:
+  // - sectorWhere MUST NOT start with "AND" because buildFilters joins with " AND "
+  // - placeholders must be literal "${{}}" (escaped as \${{}}) so applyParamIndex can replace them
   if (requestedSectorUuid) {
-    sectorWhere = `AND ${alias}.sector_id = ${{}}`;
+    sectorWhere = `${alias}.sector_id = \${{}}`;
     sectorParams.push(requestedSectorUuid);
   } else if (!isAll) {
-    sectorWhere = `AND ${alias}.sector_id = ANY(${{}})`;
+    sectorWhere = `${alias}.sector_id = ANY(\${{}})`;
     sectorParams.push(sectorIds);
   }
 
@@ -50,7 +53,7 @@ const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
 };
 
 const buildFilters = (req, alias = 't') => {
-  const { year, from, to, supplier_id, operator_id, waste_code_id, search } = req.query;
+  const { year, from, to, supplier_id, recipient_id, waste_code_id, search } = req.query;
 
   const now = new Date();
   const y = isNonEmpty(year) ? clampInt(year, 2000, 2100, now.getFullYear()) : now.getFullYear();
@@ -82,9 +85,9 @@ const buildFilters = (req, alias = 't') => {
     where.push(`${alias}.supplier_id = $${p++}`);
     params.push(parseInt(String(supplier_id), 10));
   }
-  if (isNonEmpty(operator_id)) {
-    where.push(`${alias}.operator_id = $${p++}`);
-    params.push(parseInt(String(operator_id), 10));
+  if (isNonEmpty(recipient_id)) {
+    where.push(`${alias}.recipient_id = $${p++}`);
+    params.push(parseInt(String(recipient_id), 10));
   }
   if (isNonEmpty(waste_code_id)) {
     where.push(`${alias}.waste_code_id = $${p++}`);
@@ -114,7 +117,7 @@ export const getRejectedTickets = async (req, res) => {
       ticket_number: 't.ticket_number',
       sector_number: 's.sector_number',
       supplier_name: 'sup.name',
-      operator_name: 'op.name',
+      recipient_name: 'rec.name',
       rejected_quantity_tons: 't.rejected_quantity_tons',
     };
     const sortCol = sortMap[sort_by] || 't.ticket_date';
@@ -125,7 +128,7 @@ export const getRejectedTickets = async (req, res) => {
       FROM waste_tickets_rejected t
       JOIN sectors s ON t.sector_id = s.id
       JOIN institutions sup ON t.supplier_id = sup.id
-      JOIN institutions op ON t.operator_id = op.id
+      JOIN institutions rec ON t.recipient_id = rec.id
       JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${f.whereSql}
     `;
@@ -148,20 +151,19 @@ export const getRejectedTickets = async (req, res) => {
         s.sector_name,
         sup.id as supplier_id,
         sup.name as supplier_name,
-        op.id as operator_id,
-        op.name as operator_name,
+        rec.id as recipient_id,
+        rec.name as recipient_name,
         wc.id as waste_code_id,
         wc.code as waste_code,
         wc.description as waste_description,
         t.vehicle_number,
-        t.rejected_quantity_kg,
         t.rejected_quantity_tons,
-        t.rejection_reason,
+        t.reason,
         t.created_at
       FROM waste_tickets_rejected t
       JOIN sectors s ON t.sector_id = s.id
       JOIN institutions sup ON t.supplier_id = sup.id
-      JOIN institutions op ON t.operator_id = op.id
+      JOIN institutions rec ON t.recipient_id = rec.id
       JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${f.whereSql}
       ORDER BY ${sortCol} ${dir}, t.created_at ${dir}
@@ -172,7 +174,7 @@ export const getRejectedTickets = async (req, res) => {
     const summarySql = `
       SELECT
         COUNT(*)::INTEGER as total_tickets,
-        COALESCE(SUM(t.rejected_quantity_tons), 0) as total_rejected_tons
+        COALESCE(SUM(t.rejected_quantity_tons), 0) as rejected_tons
       FROM waste_tickets_rejected t
       WHERE ${f.whereSql}
     `;
@@ -180,7 +182,7 @@ export const getRejectedTickets = async (req, res) => {
     const s = summaryRes.rows[0] || {};
 
     // ============================================================================
-    // ✅ FIX: AVAILABLE YEARS & ALL SECTORS
+    // AVAILABLE YEARS + ALL SECTORS (scoped)
     // ============================================================================
     const access = req.userAccess;
     const isAll = access.accessLevel === 'ALL';
@@ -205,7 +207,6 @@ export const getRejectedTickets = async (req, res) => {
         ${yearsWhere}
       ORDER BY year DESC
     `;
-    
     const yearsRes = await pool.query(yearsQuery, yearsParams);
     let availableYears = yearsRes.rows.map((r) => r.year);
 
@@ -233,11 +234,10 @@ export const getRejectedTickets = async (req, res) => {
         ${!isAll ? 'AND s.id = ANY($1)' : ''}
       ORDER BY s.sector_number
     `;
-
     const allSectorsParams = !isAll ? [allowedSectorIds] : [];
     const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
 
-    // Suppliers & Operators pentru cards
+    // Suppliers / Recipients cards
     const suppliersSql = `
       SELECT 
         sup.name,
@@ -252,17 +252,17 @@ export const getRejectedTickets = async (req, res) => {
     `;
     const suppliersRes = await pool.query(suppliersSql, f.params);
 
-    const operatorsSql = `
+    const recipientsSql = `
       SELECT 
-        op.name,
+        rec.name,
         COALESCE(SUM(t.rejected_quantity_tons), 0) as total_tons
       FROM waste_tickets_rejected t
-      JOIN institutions op ON t.operator_id = op.id
+      JOIN institutions rec ON t.recipient_id = rec.id
       WHERE ${f.whereSql}
-      GROUP BY op.name
+      GROUP BY rec.name
       ORDER BY total_tons DESC
     `;
-    const operatorsRes = await pool.query(operatorsSql, f.params);
+    const recipientsRes = await pool.query(recipientsSql, f.params);
 
     return res.json({
       success: true,
@@ -271,17 +271,17 @@ export const getRejectedTickets = async (req, res) => {
         pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
         summary: {
           total_tickets: s.total_tickets || 0,
-          total_rejected_tons: Number(s.total_rejected_tons || 0),
+          total_rejected: Number(s.rejected_tons || 0),
           date_range: { from: f.startDate, to: f.endDate },
         },
-        suppliers: suppliersRes.rows.map(s => ({
-          name: s.name,
-          code: s.waste_code,
-          total_tons: Number(s.total_tons || 0),
+        suppliers: suppliersRes.rows.map(x => ({
+          name: x.name,
+          code: x.waste_code,
+          total_tons: Number(x.total_tons || 0),
         })),
-        operators: operatorsRes.rows.map(o => ({
-          name: o.name,
-          total_tons: Number(o.total_tons || 0),
+        recipients: recipientsRes.rows.map(x => ({
+          name: x.name,
+          total_tons: Number(x.total_tons || 0),
         })),
         all_sectors: allSectorsRes.rows.map(s => ({
           sector_id: s.sector_id,
