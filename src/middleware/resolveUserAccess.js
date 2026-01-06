@@ -1,39 +1,50 @@
 // src/middleware/resolveUserAccess.js
 // ============================================================================
-// resolveUserAccess middleware
-// - Computes visibility scope ONCE and attaches it to req.userAccess
-// - Adds BOTH:
-//   - sectorIdsAll: all Bucharest sectors (1..6)
-//   - institutionSectorIds: sectors mapped to the user's institution (if any)
-// - This lets you implement your requirements correctly:
-//   * Landfill + TMB pages: ADMIN_INSTITUTION = FULL access (use sectorIdsAll)
-//   * Reports: ADMIN_INSTITUTION PMB = ALL, Sector city hall = only its sectors (use institutionSectorIds)
+// resolveUserAccess middleware - VERSIUNE SIMPLIFICATĂ 2.0
+// ============================================================================
+// Calculează scope-ul de vizibilitate o singură dată și îl atașează la req.userAccess
+//
+// LOGICA SIMPLIFICATĂ:
+// 1. User → Role (din users.role)
+// 2. User → Institution (din user_institutions)
+// 3. Institution → Sectors (din institution_sectors)
+// 4. Rolul + Instituția determină automat toate permisiunile
+//
+// NU MAI FOLOSIM: user_permissions (păstrat pentru backwards compatibility)
 // ============================================================================
 
-import pool from "../config/database.js";
-import { ROLES } from "../constants/roles.js";
+import pool from '../config/database.js';
+import { ROLES, getPageScope, isPMBInstitution } from '../constants/roles.js';
 
 export const resolveUserAccess = async (req, res, next) => {
   try {
     if (!req.user?.id || !req.user?.role) {
-      return res.status(401).json({ success: false, message: "Neautentificat" });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Neautentificat' 
+      });
     }
 
     const userId = req.user.id;
     const role = req.user.role;
 
-    // Helper: fetch ALL sectors (București 1..6)
-    const allSectorsQ = await pool.query(
-      `SELECT id, sector_number
+    // ----------------------------------------------------------------------------
+    // STEP 1: Fetch ALL sectors (București 1-6)
+    // ----------------------------------------------------------------------------
+    const allSectorsQuery = await pool.query(
+      `SELECT id, sector_number, sector_name
        FROM sectors
        WHERE is_active = true AND deleted_at IS NULL
        ORDER BY sector_number`
     );
-    const sectorIdsAll = allSectorsQ.rows.map((r) => r.id);
+    const allSectors = allSectorsQuery.rows;
+    const sectorIdsAll = allSectors.map((s) => s.id);
 
-    // Helper: fetch user's institution (optional for some roles)
-    const instQ = await pool.query(
-      `SELECT i.id, i.name, i.type, i.short_name
+    // ----------------------------------------------------------------------------
+    // STEP 2: Fetch user's institution (if exists)
+    // ----------------------------------------------------------------------------
+    const institutionQuery = await pool.query(
+      `SELECT i.id, i.name, i.type, i.short_name, i.sector
        FROM user_institutions ui
        JOIN institutions i ON ui.institution_id = i.id
        WHERE ui.user_id = $1
@@ -41,15 +52,18 @@ export const resolveUserAccess = async (req, res, next) => {
       [userId]
     );
 
-    const institutionId = instQ.rows[0]?.id ?? null;
-    const institutionName = instQ.rows[0]?.name ?? null;
-    const institutionType = instQ.rows[0]?.type ?? null;
+    const institution = institutionQuery.rows[0] || null;
+    const institutionId = institution?.id || null;
+    const institutionName = institution?.name || null;
+    const institutionType = institution?.type || null;
 
-    // Helper: fetch sectors mapped to institution (if institution exists)
+    // ----------------------------------------------------------------------------
+    // STEP 3: Fetch sectors mapped to institution
+    // ----------------------------------------------------------------------------
     let institutionSectorIds = [];
     if (institutionId) {
-      const sectorsQ = await pool.query(
-        `SELECT s.id, s.sector_number
+      const sectorsQuery = await pool.query(
+        `SELECT s.id, s.sector_number, s.sector_name
          FROM institution_sectors ins
          JOIN sectors s ON ins.sector_id = s.id
          WHERE ins.institution_id = $1
@@ -58,151 +72,223 @@ export const resolveUserAccess = async (req, res, next) => {
          ORDER BY s.sector_number`,
         [institutionId]
       );
-      institutionSectorIds = sectorsQ.rows.map((r) => r.id);
+      institutionSectorIds = sectorsQuery.rows.map((s) => s.id);
     }
 
-    // PMB detection (best effort):
-    // - If institution has all 6 sectors mapped => PMB-like access for sector-scoped pages
-    // - IMPORTANT: This does NOT affect LANDFILL/TMB for ADMIN_INSTITUTION (they must be FULL)
-    const isPMB = institutionSectorIds.length === 6;
+    // Detectăm dacă instituția este PMB (are toate cele 6 sectoare)
+    const isPMB = isPMBInstitution(institutionSectorIds);
 
-    // 1) PLATFORM_ADMIN => ALL sectors, can edit
+    // ----------------------------------------------------------------------------
+    // STEP 4: Build userAccess object based on role
+    // ----------------------------------------------------------------------------
+
+    // === PLATFORM_ADMIN ===
     if (role === ROLES.PLATFORM_ADMIN) {
       req.userAccess = {
-        accessLevel: "ALL",
+        role,
+        userId,
+        accessLevel: 'ALL',
+        
+        // Sector data
         sectorIdsAll,
-        sectorIds: sectorIdsAll, // backward compatible
         institutionSectorIds: sectorIdsAll,
-        institutionId: null,
-        institutionName: "ADIGIDMB",
-        institutionType: "ASSOCIATION",
+        visibleSectorIds: sectorIdsAll, // pentru backwards compatibility
+        
+        // Institution data
+        institutionId: null, // PLATFORM_ADMIN nu este legat de o instituție specifică
+        institutionName: 'ADIGIDMB',
+        institutionType: 'ASSOCIATION',
         isPMB: false,
-        canEditData: true,
-
-        // Per-page scopes (explicit, so requirements are clear)
+        
+        // Permissions
+        canEdit: true,
+        canCreate: true,
+        canDelete: true,
+        canExport: true,
+        
+        // Per-page scopes (explicit pentru claritate)
         scopes: {
-          landfill: "ALL",
-          tmb: "ALL",
-          reports: "ALL",
-          institutions: "ALL",
-          sectors: "ALL",
-          users: "ALL",
-          profileContracts: "ALL",
+          landfill: 'ALL',
+          tmb: 'ALL',
+          reports: 'ALL',
+          sectors: 'ALL',
+          profileContracts: 'ALL',
+          users: 'ALL',
+          institutions: 'ALL',
         },
       };
       return next();
     }
 
-    // 2) REGULATOR_VIEWER => ALL sectors, no edit, NO reports & NO profile contracts section (per requirements)
+    // === REGULATOR_VIEWER ===
     if (role === ROLES.REGULATOR_VIEWER) {
       req.userAccess = {
-        accessLevel: "ALL",
+        role,
+        userId,
+        accessLevel: 'ALL',
+        
+        // Sector data - vede toate sectoarele
         sectorIdsAll,
-        sectorIds: sectorIdsAll, // backward compatible
         institutionSectorIds: sectorIdsAll,
+        visibleSectorIds: sectorIdsAll,
+        
+        // Institution data
         institutionId,
-        institutionName: institutionName ?? "Autoritate Publică",
+        institutionName: institutionName || 'Autoritate Publică',
         institutionType,
         isPMB: false,
-        canEditData: false,
+        
+        // Permissions - doar read-only
+        canEdit: false,
+        canCreate: false,
+        canDelete: false,
+        canExport: true,
+        
+        // Per-page scopes
         scopes: {
-          landfill: "ALL",
-          tmb: "ALL",
-          reports: "NONE",          // ✅ per your table (not listed)
-          institutions: "NONE",     // ✅ per your table (not listed)
-          sectors: "NONE",          // ✅ per your table (not listed)
-          users: "NONE",
-          profileContracts: "NONE", // ✅ per your table: regulator doesn't see contract section
+          landfill: 'ALL',           // ✅ Vede toate sectoarele
+          tmb: 'ALL',                // ✅ Vede toate sectoarele
+          reports: 'NONE',           // ❌ Nu vede pagina Rapoarte
+          sectors: 'ALL',            // ✅ Vede toate sectoarele (conform cerințelor actualizate)
+          profileContracts: 'NONE',  // ❌ Nu vede secțiunea Contracte din profil
+          users: 'NONE',             // ❌ Nu vede pagina Utilizatori
+          institutions: 'NONE',      // ❌ Nu vede pagina Instituții
         },
       };
       return next();
     }
 
-    // For roles that MUST have an institution
-    if (role === ROLES.ADMIN_INSTITUTION || role === ROLES.EDITOR_INSTITUTION) {
+    // === INSTITUTION_ADMIN și EDITOR_INSTITUTION ===
+    // Aceste roluri TREBUIE să aibă o instituție asociată
+    if (role === ROLES.INSTITUTION_ADMIN || role === ROLES.EDITOR_INSTITUTION) {
       if (!institutionId) {
-        return res.status(403).json({ success: false, message: "User fără instituție asociată" });
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Utilizator fără instituție asociată' 
+        });
       }
 
-      // ADMIN_INSTITUTION:
-      // - MUST see LANDFILL + TMB pages with FULL access (use sectorIdsAll)
-      // - Reports depend on PMB vs Sector (PMB ALL, Sector only its sectorIds)
-      if (role === ROLES.ADMIN_INSTITUTION) {
+      // --- INSTITUTION_ADMIN (PMB) ---
+      if (role === ROLES.INSTITUTION_ADMIN) {
         req.userAccess = {
-          accessLevel: "ALL",          // ✅ IMPORTANT: for main pages they must not get empty data
+          role,
+          userId,
+          accessLevel: 'ALL',
+          
+          // Sector data - INSTITUTION_ADMIN vede toate sectoarele
           sectorIdsAll,
-          sectorIds: sectorIdsAll,     // ✅ backward compatible: controllers using req.userAccess.sectorIds will work
-          institutionSectorIds,        // ✅ for sector-scoped features (reports/institutions filtering)
+          institutionSectorIds,
+          visibleSectorIds: sectorIdsAll, // Vede toate pentru Landfill/TMB/Sectoare
+          
+          // Institution data
           institutionId,
           institutionName,
           institutionType,
           isPMB,
-          canEditData: false,
-
+          
+          // Permissions - read-only (nu poate modifica)
+          canEdit: false,
+          canCreate: false,
+          canDelete: false,
+          canExport: true,
+          
+          // Per-page scopes
           scopes: {
-            landfill: "ALL", // ✅ per your table
-            tmb: "ALL",      // ✅ per your table
-
-            // Reports: PMB full, sector city hall only its sectors (read-only anyway)
-            reports: isPMB ? "ALL" : "SECTOR",
-
-            // Institutions page exists for admin institution, but filtered if sector city hall
-            institutions: isPMB ? "ALL" : "SECTOR",
-
-            // Sectors page exists: PMB all, sector city hall only its sector(s)
-            sectors: isPMB ? "ALL" : "SECTOR",
-
-            // Users page exists for institution admin (PMB & sector), but backend should scope by institution (not by sector)
-            users: "INSTITUTION",
-
-            // Profile contracts MUST be visible to ADMIN_INSTITUTION
-            profileContracts: "ALL",
+            landfill: 'ALL',           // ✅ Vede toate sectoarele
+            tmb: 'ALL',                // ✅ Vede toate sectoarele
+            reports: 'ALL',            // ✅ Vede toate sectoarele (deoarece este PMB)
+            sectors: 'ALL',            // ✅ Vede toate sectoarele
+            profileContracts: 'ALL',   // ✅ Vede toate contractele
+            users: 'NONE',             // ❌ Nu vede pagina Utilizatori
+            institutions: 'NONE',      // ❌ Nu vede pagina Instituții
           },
         };
         return next();
       }
 
-      // EDITOR_INSTITUTION:
-      // - Landfill/TMB access depends on PMB vs sector (PMB ALL, sector only its sector)
-      // - Reports: same idea but always read-only
-      // - Institutions: view-only and filtered for sector city hall
+      // --- EDITOR_INSTITUTION (Primării Sectoare) ---
       if (role === ROLES.EDITOR_INSTITUTION) {
-        // If PMB editor has 6 sectors mapped, treat as ALL, else sector scoped
-        const editorSectorIds = isPMB ? sectorIdsAll : institutionSectorIds;
-
+        // Determină ce sectoare vede:
+        // - Pentru Landfill/TMB: toate sectoarele
+        // - Pentru Rapoarte/Contracte/Sectoare: doar sectoarele sale
+        
         req.userAccess = {
-          accessLevel: isPMB ? "ALL" : "SECTOR",
+          role,
+          userId,
+          accessLevel: 'SECTOR',
+          
+          // Sector data
           sectorIdsAll,
-          sectorIds: editorSectorIds,
           institutionSectorIds,
+          visibleSectorIds: institutionSectorIds, // Doar sectoarele sale pentru filtrare
+          
+          // Institution data
           institutionId,
           institutionName,
           institutionType,
           isPMB,
-          canEditData: false,
-
+          
+          // Permissions - read-only
+          canEdit: false,
+          canCreate: false,
+          canDelete: false,
+          canExport: true,
+          
+          // Per-page scopes
           scopes: {
-            landfill: isPMB ? "ALL" : "SECTOR",
-            tmb: isPMB ? "ALL" : "SECTOR",
-            reports: isPMB ? "ALL" : "SECTOR",
-            institutions: isPMB ? "ALL" : "SECTOR",
-            sectors: isPMB ? "ALL" : "SECTOR",
-            users: "NONE", // ✅ per your table: editors don't access /users page
-            profileContracts: "ALL", // ✅ per your table: editor sees contracts (PMB all, sector filtered in controller)
+            landfill: 'ALL',           // ✅ Vede toate sectoarele
+            tmb: 'ALL',                // ✅ Vede toate sectoarele
+            reports: 'SECTOR',         // ⚠️ Vede doar sectorul său
+            sectors: 'SECTOR',         // ⚠️ Vede doar sectorul său
+            profileContracts: 'SECTOR',// ⚠️ Vede doar contractele sectorului său
+            users: 'NONE',             // ❌ Nu vede pagina Utilizatori
+            institutions: 'NONE',      // ❌ Nu vede pagina Instituții
           },
         };
         return next();
       }
     }
 
-    // Unknown role
-    return res.status(403).json({ success: false, message: `Rol necunoscut: ${role}` });
+    // === UNKNOWN ROLE ===
+    return res.status(403).json({ 
+      success: false, 
+      message: `Rol necunoscut sau invalid: ${role}` 
+    });
+
   } catch (err) {
-    console.error("resolveUserAccess error:", err);
-    return res
-      .status(500)
-      .json({ success: false, message: "Eroare la calculul accesului (resolveUserAccess)" });
+    console.error('[resolveUserAccess] Error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Eroare la calculul permisiunilor de acces' 
+    });
   }
 };
 
-export default { resolveUserAccess };
+// ----------------------------------------------------------------------------
+// Helper: Verifică dacă utilizatorul are acces la un sector specific
+// ----------------------------------------------------------------------------
+export const hasAccessToSector = (userAccess, sectorId) => {
+  if (!userAccess || !sectorId) return false;
+  
+  // PLATFORM_ADMIN și cei cu accessLevel ALL au acces la orice sector
+  if (userAccess.accessLevel === 'ALL') return true;
+  
+  // Verifică dacă sectorul este în lista de sectoare vizibile
+  return userAccess.visibleSectorIds.includes(sectorId);
+};
+
+// ----------------------------------------------------------------------------
+// Helper: Verifică dacă utilizatorul poate edita date
+// ----------------------------------------------------------------------------
+export const canEditData = (userAccess) => {
+  return userAccess?.canEdit === true;
+};
+
+// ----------------------------------------------------------------------------
+// EXPORT
+// ----------------------------------------------------------------------------
+export default { 
+  resolveUserAccess,
+  hasAccessToSector,
+  canEditData,
+};
