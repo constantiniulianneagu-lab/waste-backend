@@ -1,8 +1,12 @@
 // src/controllers/reportRejectedController.js
 // ============================================================================
-// REPORT: REJECTED OUTPUT TICKETS (RBAC via req.userAccess, UUID sector scoping)
+// REPORT: REJECTED (NEACCEPTATE/REFUZATE) TICKETS
 // Route: GET /api/reports/tmb/rejected
 // Table: waste_tickets_rejected
+// NOTE (DB):
+//  - operator_id (institutions.id)  ✅
+//  - rejection_reason              ✅
+//  - rejected_quantity_tons        ✅
 // ============================================================================
 
 import pool from '../config/database.js';
@@ -51,7 +55,7 @@ const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
 };
 
 const buildFilters = (req, alias = 't') => {
-  // ✅ compatibilitate: frontend trimite start_date/end_date, alte rapoarte folosesc from/to
+  // compatibilitate frontend: start_date/end_date
   const {
     year,
     from,
@@ -59,7 +63,7 @@ const buildFilters = (req, alias = 't') => {
     start_date,
     end_date,
     supplier_id,
-    recipient_id,
+    operator_id,
     waste_code_id,
     search,
   } = req.query;
@@ -98,9 +102,9 @@ const buildFilters = (req, alias = 't') => {
     where.push(`${alias}.supplier_id = $${p++}`);
     params.push(parseInt(String(supplier_id), 10));
   }
-  if (isNonEmpty(recipient_id)) {
-    where.push(`${alias}.recipient_id = $${p++}`);
-    params.push(parseInt(String(recipient_id), 10));
+  if (isNonEmpty(operator_id)) {
+    where.push(`${alias}.operator_id = $${p++}`);
+    params.push(parseInt(String(operator_id), 10));
   }
   if (isNonEmpty(waste_code_id)) {
     where.push(`${alias}.waste_code_id = $${p++}`);
@@ -130,7 +134,7 @@ export const getRejectedTickets = async (req, res) => {
       ticket_number: 't.ticket_number',
       sector_number: 's.sector_number',
       supplier_name: 'sup.name',
-      recipient_name: 'rec.name',
+      operator_name: 'op.name',
       rejected_quantity_tons: 't.rejected_quantity_tons',
     };
     const sortCol = sortMap[sort_by] || 't.ticket_date';
@@ -141,7 +145,7 @@ export const getRejectedTickets = async (req, res) => {
       FROM waste_tickets_rejected t
       JOIN sectors s ON t.sector_id = s.id
       JOIN institutions sup ON t.supplier_id = sup.id
-      JOIN institutions rec ON t.recipient_id = rec.id
+      JOIN institutions op ON t.operator_id = op.id
       JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${f.whereSql}
     `;
@@ -164,19 +168,19 @@ export const getRejectedTickets = async (req, res) => {
         s.sector_name,
         sup.id as supplier_id,
         sup.name as supplier_name,
-        rec.id as recipient_id,
-        rec.name as recipient_name,
+        op.id as operator_id,
+        op.name as operator_name,
         wc.id as waste_code_id,
         wc.code as waste_code,
         wc.description as waste_description,
         t.vehicle_number,
         t.rejected_quantity_tons,
-        t.reason,
+        t.rejection_reason,
         t.created_at
       FROM waste_tickets_rejected t
       JOIN sectors s ON t.sector_id = s.id
       JOIN institutions sup ON t.supplier_id = sup.id
-      JOIN institutions rec ON t.recipient_id = rec.id
+      JOIN institutions op ON t.operator_id = op.id
       JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${f.whereSql}
       ORDER BY ${sortCol} ${dir}, t.created_at ${dir}
@@ -225,13 +229,11 @@ export const getRejectedTickets = async (req, res) => {
     if (!availableYears.includes(currentYearInt)) {
       availableYears.unshift(currentYearInt);
     }
-
     const minYears = 3;
     while (availableYears.length < minYears) {
       const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
       availableYears.push(lastYear - 1);
     }
-
     availableYears.sort((a, b) => b - a);
 
     const allSectorsQuery = `
@@ -248,6 +250,7 @@ export const getRejectedTickets = async (req, res) => {
     const allSectorsParams = !isAll ? [allowedSectorIds] : [];
     const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
 
+    // Cards
     const suppliersSql = `
       SELECT 
         sup.name,
@@ -262,17 +265,17 @@ export const getRejectedTickets = async (req, res) => {
     `;
     const suppliersRes = await pool.query(suppliersSql, f.params);
 
-    const recipientsSql = `
+    const operatorsSql = `
       SELECT 
-        rec.name,
+        op.name,
         COALESCE(SUM(t.rejected_quantity_tons), 0) as total_tons
       FROM waste_tickets_rejected t
-      JOIN institutions rec ON t.recipient_id = rec.id
+      JOIN institutions op ON t.operator_id = op.id
       WHERE ${f.whereSql}
-      GROUP BY rec.name
+      GROUP BY op.name
       ORDER BY total_tons DESC
     `;
-    const recipientsRes = await pool.query(recipientsSql, f.params);
+    const operatorsRes = await pool.query(operatorsSql, f.params);
 
     return res.json({
       success: true,
@@ -289,7 +292,7 @@ export const getRejectedTickets = async (req, res) => {
           code: x.waste_code,
           total_tons: Number(x.total_tons || 0),
         })),
-        recipients: recipientsRes.rows.map(x => ({
+        operators: operatorsRes.rows.map(x => ({
           name: x.name,
           total_tons: Number(x.total_tons || 0),
         })),
