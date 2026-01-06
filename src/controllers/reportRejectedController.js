@@ -33,9 +33,7 @@ const buildSectorScope = (req, alias = 't') => {
   let sectorWhere = '';
   const sectorParams = [];
 
-  // ✅ IMPORTANT:
-  // - sectorWhere MUST NOT start with "AND" because buildFilters joins with " AND "
-  // - placeholders must be literal "${{}}" (escaped as \${{}}) so applyParamIndex can replace them
+  // ✅ FIX: fara "AND" la inceput + placeholder literal \${{}}
   if (requestedSectorUuid) {
     sectorWhere = `${alias}.sector_id = \${{}}`;
     sectorParams.push(requestedSectorUuid);
@@ -237,7 +235,7 @@ export const getRejectedTickets = async (req, res) => {
     const allSectorsParams = !isAll ? [allowedSectorIds] : [];
     const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
 
-    // Suppliers / Recipients cards
+    // Suppliers / Recipients cards (pentru UI)
     const suppliersSql = `
       SELECT 
         sup.name,
