@@ -5,7 +5,7 @@
 // - Route must include: authenticateToken + resolveUserAccess
 //   e.g. router.get('/stats', authenticateToken, resolveUserAccess, getTmbStats)
 // - sector_id query param supported as 1..6 (mapped to UUID).
-// - Uses ONLY parameterized SQL (no string interpolation).
+// - Uses ONLY parameterized SQL (no unsafe interpolation for user inputs).
 // ============================================================================
 
 import pool from '../config/database.js';
@@ -20,7 +20,9 @@ const isoDate = (d) => new Date(d).toISOString().split('T')[0];
 const parseSectorNumber = (sector_id) => {
   if (sector_id === undefined || sector_id === null || String(sector_id).trim() === '') return null;
   const n = parseInt(String(sector_id), 10);
-  if (Number.isNaN(n) || n < 1 || n > 6) return { error: `Invalid sector_id: ${sector_id}. Must be between 1 and 6.` };
+  if (Number.isNaN(n) || n < 1 || n > 6) {
+    return { error: `Invalid sector_id: ${sector_id}. Must be between 1 and 6.` };
+  }
   return { value: n };
 };
 
@@ -51,7 +53,14 @@ const buildDateWhere = ({ year, start_date, end_date, alias = '' }) => {
   return { where: where.join(' AND '), params };
 };
 
-const applySectorScope = ({ baseWhere, baseParams, alias = '', isAll, allowedSectorUuids, requestedSectorUuid }) => {
+const applySectorScope = ({
+  baseWhere,
+  baseParams,
+  alias = '',
+  isAll,
+  allowedSectorUuids,
+  requestedSectorUuid
+}) => {
   const col = alias ? `${alias}.sector_id` : 'sector_id';
 
   let where = baseWhere;
@@ -77,7 +86,10 @@ export const getTmbStats = async (req, res) => {
     // ----------------------------------------------------------------------
     const access = req.userAccess;
     if (!access) {
-      return res.status(500).json({ success: false, message: 'Missing req.userAccess (resolveUserAccess not applied)' });
+      return res.status(500).json({
+        success: false,
+        message: 'Missing req.userAccess (resolveUserAccess not applied)'
+      });
     }
 
     const isAll = access.accessLevel === 'ALL';
@@ -97,13 +109,16 @@ export const getTmbStats = async (req, res) => {
 
     if (parsed?.value) {
       requestedSectorNumber = parsed.value;
+
       const sectorQ = await pool.query(
         `SELECT id FROM sectors WHERE sector_number = $1 AND deleted_at IS NULL LIMIT 1`,
         [requestedSectorNumber]
       );
+
       if (sectorQ.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'Sector inexistent' });
       }
+
       requestedSectorUuid = sectorQ.rows[0].id;
 
       if (!isAll && !allowedSectorUuids.includes(requestedSectorUuid)) {
@@ -112,14 +127,13 @@ export const getTmbStats = async (req, res) => {
     }
 
     // ----------------------------------------------------------------------
-    // Date filters
+    // Date filters (aliases)
     // ----------------------------------------------------------------------
-    const dateBase = buildDateWhere({ year, start_date, end_date, alias: '' });
-    if (dateBase.error) return res.status(400).json({ success: false, message: dateBase.error });
-
-    // Landfill uses waste_tickets_landfill alias "wl" sometimes, TMB uses "wtt"
     const dateLandfill = buildDateWhere({ year, start_date, end_date, alias: 'wl' });
     const dateTmb = buildDateWhere({ year, start_date, end_date, alias: 'wtt' });
+
+    if (dateLandfill.error) return res.status(400).json({ success: false, message: dateLandfill.error });
+    if (dateTmb.error) return res.status(400).json({ success: false, message: dateTmb.error });
 
     // ----------------------------------------------------------------------
     // Get waste_code_id for '20 03 01'
@@ -190,8 +204,9 @@ export const getTmbStats = async (req, res) => {
     // 3) Output stats helper (recycling / recovery / disposal)
     // ----------------------------------------------------------------------
     const getOutputStats = async (tableName) => {
-      // alias wt pentru output tables
       const dateOut = buildDateWhere({ year, start_date, end_date, alias: 'wt' });
+      if (dateOut.error) throw new Error(dateOut.error);
+
       let outWhere = dateOut.where;
       let outParams = [...dateOut.params];
 
@@ -204,6 +219,7 @@ export const getTmbStats = async (req, res) => {
         requestedSectorUuid
       }));
 
+      // tableName este din map (constant), nu vine din user input
       const q = `
         SELECT
           COALESCE(SUM(wt.delivered_quantity_tons), 0) as sent,
@@ -212,9 +228,11 @@ export const getTmbStats = async (req, res) => {
         WHERE ${outWhere}
       `;
       const r = await pool.query(q, outParams);
+
       const sent = Number(r.rows[0]?.sent || 0);
       const accepted = Number(r.rows[0]?.accepted || 0);
       const rate = sent > 0 ? (accepted / sent) * 100 : 0;
+
       return {
         sent: Number(sent.toFixed(2)),
         accepted: Number(accepted.toFixed(2)),
@@ -240,11 +258,12 @@ export const getTmbStats = async (req, res) => {
     // ----------------------------------------------------------------------
     // 5) Monthly evolution (TMB vs Landfill direct)
     // ----------------------------------------------------------------------
-    // Refolosim tmbWhere/tmbParams și wlWhere/wlParams, dar pentru monthly trebuie agregat lunar.
-    // Simplificăm: construim date+sector scope separat pentru tmb & landfill.
     const tmbMonthlyDate = buildDateWhere({ year, start_date, end_date, alias: 'wtt' });
+    if (tmbMonthlyDate.error) throw new Error(tmbMonthlyDate.error);
+
     let tmbMonthlyWhere = tmbMonthlyDate.where;
     let tmbMonthlyParams = [...tmbMonthlyDate.params];
+
     ({ where: tmbMonthlyWhere, params: tmbMonthlyParams } = applySectorScope({
       baseWhere: tmbMonthlyWhere,
       baseParams: tmbMonthlyParams,
@@ -255,22 +274,25 @@ export const getTmbStats = async (req, res) => {
     }));
 
     const wlMonthlyDate = buildDateWhere({ year, start_date, end_date, alias: 'wl' });
-    let wlMonthlyWhere2 = wlMonthlyDate.where;
-    let wlMonthlyParams2 = [...wlMonthlyDate.params];
+    if (wlMonthlyDate.error) throw new Error(wlMonthlyDate.error);
+
+    let wlMonthlyWhere = wlMonthlyDate.where;
+    let wlMonthlyParams = [...wlMonthlyDate.params];
+
     if (wasteCode2003Id) {
-      wlMonthlyParams2.push(wasteCode2003Id);
-      wlMonthlyWhere2 += ` AND wl.waste_code_id = $${wlMonthlyParams2.length}`;
+      wlMonthlyParams.push(wasteCode2003Id);
+      wlMonthlyWhere += ` AND wl.waste_code_id = $${wlMonthlyParams.length}`;
     }
-    ({ where: wlMonthlyWhere2, params: wlMonthlyParams2 } = applySectorScope({
-      baseWhere: wlMonthlyWhere2,
-      baseParams: wlMonthlyParams2,
+
+    ({ where: wlMonthlyWhere, params: wlMonthlyParams } = applySectorScope({
+      baseWhere: wlMonthlyWhere,
+      baseParams: wlMonthlyParams,
       alias: 'wl',
       isAll,
       allowedSectorUuids,
       requestedSectorUuid
     }));
 
-    // Pentru CTE-uri, parametrii trebuie să fie un set unic; cel mai simplu e să rulăm două query-uri separate și să le combinăm în JS.
     const tmbMonthlyQuery = `
       SELECT DATE_TRUNC('month', wtt.ticket_date) as month,
              COALESCE(SUM(wtt.net_weight_tons), 0) as tmb_total
@@ -285,45 +307,54 @@ export const getTmbStats = async (req, res) => {
       GROUP BY 1
       ORDER BY 1
     `;
+
     const wlMonthlyQuery = `
       SELECT DATE_TRUNC('month', wl.ticket_date) as month,
              COALESCE(SUM(wl.net_weight_tons), 0) as landfill_total
       FROM waste_tickets_landfill wl
-      WHERE ${wlMonthlyWhere2}
+      WHERE ${wlMonthlyWhere}
       GROUP BY 1
       ORDER BY 1
     `;
 
     const [tmbMonthlyRes, wlMonthlyRes] = await Promise.all([
       pool.query(tmbMonthlyQuery, tmbMonthlyParams),
-      pool.query(wlMonthlyQuery, wlMonthlyParams2),
+      pool.query(wlMonthlyQuery, wlMonthlyParams),
     ]);
 
-    const map = new Map(); // key = ISO month
+    const monthlyMap = new Map(); // key=YYYY-MM-DD (month)
     for (const r of tmbMonthlyRes.rows) {
-      map.set(isoDate(r.month), { month: r.month, tmb_total: Number(r.tmb_total || 0), landfill_total: 0 });
+      monthlyMap.set(isoDate(r.month), {
+        month: r.month,
+        tmb_total: Number(r.tmb_total || 0),
+        landfill_total: 0
+      });
     }
     for (const r of wlMonthlyRes.rows) {
       const key = isoDate(r.month);
-      const existing = map.get(key) || { month: r.month, tmb_total: 0, landfill_total: 0 };
+      const existing = monthlyMap.get(key) || {
+        month: r.month,
+        tmb_total: 0,
+        landfill_total: 0
+      };
       existing.landfill_total = Number(r.landfill_total || 0);
-      map.set(key, existing);
+      monthlyMap.set(key, existing);
     }
 
-    const monthly_evolution = [...map.values()]
+    const monthly_evolution = [...monthlyMap.values()]
       .sort((a, b) => new Date(a.month) - new Date(b.month))
       .map((x) => ({
-        month: new Date(x.month).toLocaleString('en-US', { month: 'short' }), // păstrezi ca înainte: Mon/Feb...
+        month: new Date(x.month).toLocaleString('en-US', { month: 'short' }),
         tmb_total: Number(x.tmb_total.toFixed(2)),
         landfill_total: Number(x.landfill_total.toFixed(2)),
       }));
 
     // ----------------------------------------------------------------------
-    // 6) Sector distribution (pie) – respectă RBAC (sectors filtrate)
+    // 6) Sector distribution (TMB vs landfill 20 03 01)
     // ----------------------------------------------------------------------
-    // Filtrăm sectors în funcție de requested/allowed
     let sectorsWhere = `s.deleted_at IS NULL AND s.is_active = true`;
     const sectorsParams = [];
+
     if (requestedSectorUuid) {
       sectorsParams.push(requestedSectorUuid);
       sectorsWhere += ` AND s.id = $${sectorsParams.length}`;
@@ -332,45 +363,6 @@ export const getTmbStats = async (req, res) => {
       sectorsWhere += ` AND s.id = ANY($${sectorsParams.length})`;
     }
 
-    // Query: tmb + landfill (20 03 01) per sector
-    const sectorDistributionQuery = `
-      WITH tmb_by_sector AS (
-        SELECT wtt.sector_id, COALESCE(SUM(wtt.net_weight_tons),0) as tmb_tons
-        FROM waste_tickets_tmb wtt
-        JOIN tmb_associations ta ON (
-          wtt.sector_id = ta.sector_id AND
-          wtt.operator_id IN (ta.primary_operator_id, ta.secondary_operator_id) AND
-          wtt.ticket_date >= ta.valid_from AND
-          (ta.valid_to IS NULL OR wtt.ticket_date <= ta.valid_to)
-        )
-        WHERE ${tmbWhere}
-        GROUP BY wtt.sector_id
-      ),
-      landfill_by_sector AS (
-        SELECT wl.sector_id, COALESCE(SUM(wl.net_weight_tons),0) as landfill_tons
-        FROM waste_tickets_landfill wl
-        WHERE ${wlWhere}
-        GROUP BY wl.sector_id
-      )
-      SELECT
-        s.sector_name,
-        s.sector_number,
-        COALESCE(tbs.tmb_tons,0) as tmb_tons,
-        COALESCE(lbs.landfill_tons,0) as landfill_tons
-      FROM sectors s
-      LEFT JOIN tmb_by_sector tbs ON tbs.sector_id = s.id
-      LEFT JOIN landfill_by_sector lbs ON lbs.sector_id = s.id
-      WHERE ${sectorsWhere}
-      ORDER BY s.sector_number
-    `;
-
-    // Atenție: tmbWhere/wlWhere au deja params (tmbParams / wlParams), dar sunt seturi diferite.
-    // Ca să rămânem 100% parametrizați fără complicații, rulăm sectorDistribution în 2 pași:
-    // - luăm sectoarele accesibile
-    // - pentru fiecare set (tmb, wl) avem agregări deja în memorie din tmbInput + landfillQuery? (nu).
-    // Simplu & sigur: refacem două agregări parametrizate și apoi combinăm cu sectoarele.
-
-    // 6a) get sectors list
     const sectorsListRes = await pool.query(
       `SELECT id, sector_name, sector_number
        FROM sectors s
@@ -380,7 +372,6 @@ export const getTmbStats = async (req, res) => {
     );
     const sectorsList = sectorsListRes.rows;
 
-    // 6b) aggregate tmb per sector (parametrizat)
     const tmbBySectorQuery = `
       SELECT wtt.sector_id, COALESCE(SUM(wtt.net_weight_tons),0) as tmb_tons
       FROM waste_tickets_tmb wtt
@@ -393,6 +384,7 @@ export const getTmbStats = async (req, res) => {
       WHERE ${tmbWhere}
       GROUP BY wtt.sector_id
     `;
+
     const wlBySectorQuery = `
       SELECT wl.sector_id, COALESCE(SUM(wl.net_weight_tons),0) as landfill_tons
       FROM waste_tickets_landfill wl
@@ -405,22 +397,25 @@ export const getTmbStats = async (req, res) => {
       pool.query(wlBySectorQuery, wlParams),
     ]);
 
-    const tmbMap = new Map(tmbBySectorRes.rows.map(r => [r.sector_id, Number(r.tmb_tons || 0)]));
-    const wlMap = new Map(wlBySectorRes.rows.map(r => [r.sector_id, Number(r.landfill_tons || 0)]));
+    const tmbSectorMap = new Map(tmbBySectorRes.rows.map(r => [r.sector_id, Number(r.tmb_tons || 0)]));
+    const wlSectorMap = new Map(wlBySectorRes.rows.map(r => [r.sector_id, Number(r.landfill_tons || 0)]));
 
     const sector_distribution = sectorsList.map(s => ({
       sector_name: s.sector_name,
       sector_number: s.sector_number,
-      tmb_tons: Number((tmbMap.get(s.id) || 0).toFixed(2)),
-      landfill_tons: Number((wlMap.get(s.id) || 0).toFixed(2)),
+      tmb_tons: Number((tmbSectorMap.get(s.id) || 0).toFixed(2)),
+      landfill_tons: Number((wlSectorMap.get(s.id) || 0).toFixed(2)),
     }));
 
     // ----------------------------------------------------------------------
-    // 7) Operators (suppliers) – TMB vs Landfill direct
+    // 7) Operators table (suppliers) – ✅ include sector_numbers for each operator
     // ----------------------------------------------------------------------
+    // TMB suppliers grouped + sector_numbers from sectors join
     const tmbSuppliersQuery = `
-      SELECT wtt.supplier_id as institution_id,
-             COALESCE(SUM(wtt.net_weight_tons),0) as tmb_total_tons
+      SELECT 
+        wtt.supplier_id as institution_id,
+        COALESCE(SUM(wtt.net_weight_tons),0) as tmb_total_tons,
+        ARRAY_AGG(DISTINCT s.sector_number ORDER BY s.sector_number) as sector_numbers
       FROM waste_tickets_tmb wtt
       JOIN tmb_associations ta ON (
         wtt.sector_id = ta.sector_id AND
@@ -428,13 +423,19 @@ export const getTmbStats = async (req, res) => {
         wtt.ticket_date >= ta.valid_from AND
         (ta.valid_to IS NULL OR wtt.ticket_date <= ta.valid_to)
       )
+      JOIN sectors s ON s.id = wtt.sector_id
       WHERE ${tmbWhere}
       GROUP BY wtt.supplier_id
     `;
+
+    // Landfill suppliers grouped + sector_numbers from sectors join
     const wlSuppliersQuery = `
-      SELECT wl.supplier_id as institution_id,
-             COALESCE(SUM(wl.net_weight_tons),0) as landfill_total_tons
+      SELECT 
+        wl.supplier_id as institution_id,
+        COALESCE(SUM(wl.net_weight_tons),0) as landfill_total_tons,
+        ARRAY_AGG(DISTINCT s.sector_number ORDER BY s.sector_number) as sector_numbers
       FROM waste_tickets_landfill wl
+      JOIN sectors s ON s.id = wl.sector_id
       WHERE ${wlWhere}
       GROUP BY wl.supplier_id
     `;
@@ -444,89 +445,107 @@ export const getTmbStats = async (req, res) => {
       pool.query(wlSuppliersQuery, wlParams),
     ]);
 
-    const suppliersMap = new Map(); // institution_id -> {tmb, landfill}
-    for (const r of tmbSupRes.rows) suppliersMap.set(r.institution_id, { tmb: Number(r.tmb_total_tons || 0), landfill: 0 });
+    // institution_id -> { tmb, landfill, sectors:Set }
+    const suppliersMap = new Map();
+
+    for (const r of tmbSupRes.rows) {
+      suppliersMap.set(r.institution_id, {
+        tmb: Number(r.tmb_total_tons || 0),
+        landfill: 0,
+        sectors: new Set((r.sector_numbers || []).map(Number)),
+      });
+    }
+
     for (const r of wlSupRes.rows) {
-      const existing = suppliersMap.get(r.institution_id) || { tmb: 0, landfill: 0 };
+      const existing = suppliersMap.get(r.institution_id) || {
+        tmb: 0,
+        landfill: 0,
+        sectors: new Set(),
+      };
       existing.landfill = Number(r.landfill_total_tons || 0);
+      (r.sector_numbers || []).forEach((sn) => existing.sectors.add(Number(sn)));
       suppliersMap.set(r.institution_id, existing);
     }
 
     const ids = [...suppliersMap.keys()];
     let operators = [];
+
     if (ids.length) {
       const namesRes = await pool.query(
         `SELECT id, name FROM institutions WHERE id = ANY($1)`,
         [ids]
       );
-
       const nameMap = new Map(namesRes.rows.map(r => [r.id, r.name]));
-      operators = ids.map((id) => {
-        const v = suppliersMap.get(id);
-        const total = (v.tmb + v.landfill);
-        return {
-          id,
-          name: nameMap.get(id) || 'N/A',
-          tmb_total_tons: Number(v.tmb.toFixed(2)),
-          landfill_total_tons: Number(v.landfill.toFixed(2)),
-          total_tons: Number(total.toFixed(2)),
-          tmb_percent: total > 0 ? Number(((v.tmb / total) * 100).toFixed(2)) : 0,
-          landfill_percent: total > 0 ? Number(((v.landfill / total) * 100).toFixed(2)) : 0,
-        };
-      }).filter(o => o.total_tons > 0).sort((a,b)=>b.total_tons-a.total_tons);
+
+      operators = ids
+        .map((id) => {
+          const v = suppliersMap.get(id);
+          const total = v.tmb + v.landfill;
+          const sector_numbers = Array.from(v.sectors).filter(Boolean).sort((a, b) => a - b);
+
+          return {
+            id,
+            name: nameMap.get(id) || 'N/A',
+            sector_numbers, // ✅ AICI e ce-ți trebuie în tabel (în loc de 1..n)
+            tmb_total_tons: Number(v.tmb.toFixed(2)),
+            landfill_total_tons: Number(v.landfill.toFixed(2)),
+            total_tons: Number(total.toFixed(2)),
+            tmb_percent: total > 0 ? Number(((v.tmb / total) * 100).toFixed(2)) : 0,
+            landfill_percent: total > 0 ? Number(((v.landfill / total) * 100).toFixed(2)) : 0,
+          };
+        })
+        .filter(o => o.total_tons > 0)
+        .sort((a, b) => b.total_tons - a.total_tons);
     }
-// ✅ FIX #1: AVAILABLE YEARS
-let yearsWhere = '';
-let yearsParams = [];
 
-if (requestedSectorUuid) {
-  yearsWhere = `AND sector_id = $1`;
-  yearsParams = [requestedSectorUuid];
-} else if (!isAll) {
-  yearsWhere = `AND sector_id = ANY($1)`;
-  yearsParams = [allowedSectorUuids];
-}
+    // ----------------------------------------------------------------------
+    // 8) AVAILABLE YEARS + ALL SECTORS (for filters)
+    // ----------------------------------------------------------------------
+    let yearsWhere = '';
+    let yearsParams = [];
 
-const yearsQuery = `
-  SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
-  FROM waste_tickets_tmb
-  WHERE deleted_at IS NULL
-    ${yearsWhere}
-  ORDER BY year DESC
-`;
-const yearsRes = await pool.query(yearsQuery, yearsParams);
-let availableYears = yearsRes.rows.map((r) => r.year);
+    if (requestedSectorUuid) {
+      yearsWhere = `AND sector_id = $1`;
+      yearsParams = [requestedSectorUuid];
+    } else if (!isAll) {
+      yearsWhere = `AND sector_id = ANY($1)`;
+      yearsParams = [allowedSectorUuids];
+    }
 
-// Asigură anul curent
-const currentYearInt = new Date().getFullYear();
-if (!availableYears.includes(currentYearInt)) {
-  availableYears.unshift(currentYearInt);
-}
+    const yearsQuery = `
+      SELECT DISTINCT EXTRACT(YEAR FROM ticket_date)::INTEGER AS year
+      FROM waste_tickets_tmb
+      WHERE deleted_at IS NULL
+        ${yearsWhere}
+      ORDER BY year DESC
+    `;
+    const yearsRes = await pool.query(yearsQuery, yearsParams);
+    let availableYears = yearsRes.rows.map((r) => r.year);
 
-// Asigură minimum 3 ani
-const minYears = 3;
-while (availableYears.length < minYears) {
-  const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
-  availableYears.push(lastYear - 1);
-}
+    const currentYearInt = new Date().getFullYear();
+    if (!availableYears.includes(currentYearInt)) availableYears.unshift(currentYearInt);
 
-availableYears.sort((a, b) => b - a);
+    const minYears = 3;
+    while (availableYears.length < minYears) {
+      const lastYear = availableYears[availableYears.length - 1] || currentYearInt;
+      availableYears.push(lastYear - 1);
+    }
+    availableYears.sort((a, b) => b - a);
 
-// ✅ FIX #2: ALL SECTORS pentru dropdown
-const allSectorsQuery = `
-  SELECT 
-    s.id AS sector_id,
-    s.sector_number,
-    s.sector_name
-  FROM sectors s
-  WHERE s.is_active = true 
-    AND s.deleted_at IS NULL
-    ${!isAll ? 'AND s.id = ANY($1)' : ''}
-  ORDER BY s.sector_number
-`;
+    const allSectorsQuery = `
+      SELECT 
+        s.id AS sector_id,
+        s.sector_number,
+        s.sector_name
+      FROM sectors s
+      WHERE s.is_active = true 
+        AND s.deleted_at IS NULL
+        ${!isAll ? 'AND s.id = ANY($1)' : ''}
+      ORDER BY s.sector_number
+    `;
+    const allSectorsParams = !isAll ? [allowedSectorUuids] : [];
+    const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
 
-const allSectorsParams = !isAll ? [allowedSectorUuids] : [];
-const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
     // ----------------------------------------------------------------------
     // Response
     // ----------------------------------------------------------------------
@@ -554,12 +573,12 @@ const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
         monthly_evolution,
         sector_distribution,
         operators,
-        all_sectors: allSectorsRes.rows.map(s => ({  // ✅ ADAUGĂ ACEASTĂ LINIE
+        all_sectors: allSectorsRes.rows.map(s => ({
           sector_id: s.sector_id,
           sector_number: s.sector_number,
           sector_name: s.sector_name,
         })),
-        available_years: availableYears,  // ✅ ADAUGĂ ACEASTĂ LINIE
+        available_years: availableYears,
       },
       filters_applied: {
         year: year ? Number(year) : null,
@@ -582,9 +601,10 @@ export const getOutputDetails = async (req, res) => {
   try {
     const { output_type, start_date, end_date, sector_id, year } = req.query;
 
-    // Access from middleware
     const access = req.userAccess;
-    if (!access) return res.status(500).json({ success: false, message: 'Missing req.userAccess (resolveUserAccess not applied)' });
+    if (!access) {
+      return res.status(500).json({ success: false, message: 'Missing req.userAccess (resolveUserAccess not applied)' });
+    }
 
     const isAll = access.accessLevel === 'ALL';
     const allowedSectorUuids = Array.isArray(access.sectorIds) ? access.sectorIds : [];
