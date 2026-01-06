@@ -51,15 +51,30 @@ const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
 };
 
 const buildFilters = (req, alias = 't') => {
-  const { year, from, to, supplier_id, recipient_id, waste_code_id, search } = req.query;
+  // ✅ compatibilitate: frontend trimite start_date/end_date, alte rapoarte folosesc from/to
+  const {
+    year,
+    from,
+    to,
+    start_date,
+    end_date,
+    supplier_id,
+    recipient_id,
+    waste_code_id,
+    search,
+  } = req.query;
 
   const now = new Date();
   const y = isNonEmpty(year) ? clampInt(year, 2000, 2100, now.getFullYear()) : now.getFullYear();
-  const startDate = assertValidDate(from || `${y}-01-01`, 'from');
-  const endDate = assertValidDate(to || isoDate(now), 'to');
+
+  const effectiveFrom = from || start_date || `${y}-01-01`;
+  const effectiveTo = to || end_date || isoDate(now);
+
+  const startDate = assertValidDate(effectiveFrom, 'start_date');
+  const endDate = assertValidDate(effectiveTo, 'end_date');
 
   if (new Date(startDate) > new Date(endDate)) {
-    const err = new Error('`from` must be <= `to`');
+    const err = new Error('`start_date` must be <= `end_date`');
     err.statusCode = 400;
     throw err;
   }
@@ -179,9 +194,7 @@ export const getRejectedTickets = async (req, res) => {
     const summaryRes = await pool.query(summarySql, f.params);
     const s = summaryRes.rows[0] || {};
 
-    // ============================================================================
     // AVAILABLE YEARS + ALL SECTORS (scoped)
-    // ============================================================================
     const access = req.userAccess;
     const isAll = access.accessLevel === 'ALL';
     const allowedSectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
@@ -235,7 +248,6 @@ export const getRejectedTickets = async (req, res) => {
     const allSectorsParams = !isAll ? [allowedSectorIds] : [];
     const allSectorsRes = await pool.query(allSectorsQuery, allSectorsParams);
 
-    // Suppliers / Recipients cards (pentru UI)
     const suppliersSql = `
       SELECT 
         sup.name,
@@ -270,7 +282,7 @@ export const getRejectedTickets = async (req, res) => {
         summary: {
           total_tickets: s.total_tickets || 0,
           total_rejected: Number(s.rejected_tons || 0),
-          date_range: { from: f.startDate, to: f.endDate },
+          date_range: { start_date: f.startDate, end_date: f.endDate },
         },
         suppliers: suppliersRes.rows.map(x => ({
           name: x.name,
