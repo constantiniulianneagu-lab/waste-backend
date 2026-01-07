@@ -9,9 +9,13 @@ import pool from '../config/database.js';
 export const exportLandfillDashboard = async (req, res) => {
   try {
     const { year, from, to, sectorId } = req.query;
-    const { visibleSectorIds, role } = req.userAccess;
-    const userName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim();
-    const userRole = req.user.role;
+    const { visibleSectorIds = [], role } = req.userAccess || {};
+    
+    // Safe user name
+    const userName = [req.user?.firstName, req.user?.lastName]
+      .filter(Boolean)
+      .join(' ') || 'Utilizator';
+    const userRole = req.user?.role || 'UNKNOWN';
 
     // Fetch dashboard data
     const stats = await fetchDashboardData(from, to, sectorId, visibleSectorIds);
@@ -103,18 +107,18 @@ async function fetchDashboardData(from, to, sectorId, visibleSectorIds) {
   
   if (from) {
     params.push(from);
-    whereClause += ` AND delivery_date >= $${params.length}`;
+    whereClause += ` AND ticket_date >= $${params.length}`;
   }
   
   if (to) {
     params.push(to);
-    whereClause += ` AND delivery_date <= $${params.length}`;
+    whereClause += ` AND ticket_date <= $${params.length}`;
   }
   
   if (sectorId) {
     params.push(sectorId);
     whereClause += ` AND sector_id = $${params.length}`;
-  } else if (visibleSectorIds.length > 0) {
+  } else if (visibleSectorIds && visibleSectorIds.length > 0) {
     params.push(visibleSectorIds);
     whereClause += ` AND sector_id = ANY($${params.length})`;
   }
