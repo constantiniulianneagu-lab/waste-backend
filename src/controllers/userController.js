@@ -607,7 +607,7 @@ export const getUserStats = async (req, res) => {
         COUNT(*) FILTER (WHERE deleted_at IS NULL AND is_active = true) as active_users,
         COUNT(*) FILTER (WHERE deleted_at IS NULL AND is_active = false) as inactive_users,
         COUNT(*) FILTER (WHERE deleted_at IS NULL AND role = 'PLATFORM_ADMIN') as platform_admins,
-        COUNT(*) FILTER (WHERE deleted_at IS NULL AND role = 'ADMIN_INSTITUTION') as institution_admins,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL AND role = 'ADMIN_INSTITUTION') as ADMIN_INSTITUTIONs,
         COUNT(*) FILTER (WHERE deleted_at IS NULL AND role = 'EDITOR_INSTITUTION') as institution_editors,
         COUNT(*) FILTER (WHERE deleted_at IS NULL AND role = 'REGULATOR_VIEWER') as regulators
       FROM users

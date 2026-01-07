@@ -6,21 +6,21 @@
 
 export const ROLES = {
   PLATFORM_ADMIN: 'PLATFORM_ADMIN',           // ADIGIDMB (institution_id=100)
-  INSTITUTION_ADMIN: 'INSTITUTION_ADMIN',     // PMB - Primăria Municipiului București
+  ADMIN_INSTITUTION: 'ADMIN_INSTITUTION',     // PMB - Primăria Municipiului București
   EDITOR_INSTITUTION: 'EDITOR_INSTITUTION',   // Primării Sectoare 1-6
   REGULATOR_VIEWER: 'REGULATOR_VIEWER',       // MMAP / GNM / APM / Alte autorități
 };
 
 export const ROLE_LABELS = {
   PLATFORM_ADMIN: 'Administrator Platformă',
-  INSTITUTION_ADMIN: 'Administrator Instituție',
+  ADMIN_INSTITUTION: 'Administrator Instituție',
   EDITOR_INSTITUTION: 'Editor Instituție',
   REGULATOR_VIEWER: 'Regulator (Viewer)',
 };
 
 export const ROLE_DESCRIPTIONS = {
   PLATFORM_ADMIN: 'Acces complet la toate datele și funcționalitățile platformei (CRUD).',
-  INSTITUTION_ADMIN: 'Acces complet la date (read-only), fără posibilitate de modificare.',
+  ADMIN_INSTITUTION: 'Acces complet la date (read-only), fără posibilitate de modificare.',
   EDITOR_INSTITUTION: 'Acces limitat la sectorul instituției (read-only).',
   REGULATOR_VIEWER: 'Acces de vizualizare pentru autoritățile de reglementare.',
 };
@@ -93,48 +93,48 @@ export const getPageScope = (role, page) => {
     // Depozitare & TMB - toți văd toate sectoarele
     landfill: {
       PLATFORM_ADMIN: 'ALL',
-      INSTITUTION_ADMIN: 'ALL',
+      ADMIN_INSTITUTION: 'ALL',
       EDITOR_INSTITUTION: 'ALL',
       REGULATOR_VIEWER: 'ALL',
     },
     tmb: {
       PLATFORM_ADMIN: 'ALL',
-      INSTITUTION_ADMIN: 'ALL',
+      ADMIN_INSTITUTION: 'ALL',
       EDITOR_INSTITUTION: 'ALL',
       REGULATOR_VIEWER: 'ALL',
     },
     // Rapoarte - EDITOR vede doar sectorul său
     reports: {
       PLATFORM_ADMIN: 'ALL',
-      INSTITUTION_ADMIN: 'ALL',
+      ADMIN_INSTITUTION: 'ALL',
       EDITOR_INSTITUTION: 'SECTOR',
       REGULATOR_VIEWER: 'NONE',
     },
     // Sectoare - EDITOR vede doar sectorul său, REGULATOR vede toate
     sectors: {
       PLATFORM_ADMIN: 'ALL',
-      INSTITUTION_ADMIN: 'ALL',
+      ADMIN_INSTITUTION: 'ALL',
       EDITOR_INSTITUTION: 'SECTOR',
       REGULATOR_VIEWER: 'ALL',
     },
     // Contracte (în profil) - EDITOR vede doar sectorul său
     profileContracts: {
       PLATFORM_ADMIN: 'ALL',
-      INSTITUTION_ADMIN: 'ALL',
+      ADMIN_INSTITUTION: 'ALL',
       EDITOR_INSTITUTION: 'SECTOR',
       REGULATOR_VIEWER: 'NONE',
     },
     // Utilizatori - doar PLATFORM_ADMIN
     users: {
       PLATFORM_ADMIN: 'ALL',
-      INSTITUTION_ADMIN: 'NONE',
+      ADMIN_INSTITUTION: 'NONE',
       EDITOR_INSTITUTION: 'NONE',
       REGULATOR_VIEWER: 'NONE',
     },
     // Instituții - doar PLATFORM_ADMIN
     institutions: {
       PLATFORM_ADMIN: 'ALL',
-      INSTITUTION_ADMIN: 'NONE',
+      ADMIN_INSTITUTION: 'NONE',
       EDITOR_INSTITUTION: 'NONE',
       REGULATOR_VIEWER: 'NONE',
     },
@@ -147,12 +147,12 @@ export const getPageScope = (role, page) => {
 // ROLE CHECKS (helper functions)
 // ----------------------------------------------------------------------------
 export const isPlatformAdmin = (role) => role === ROLES.PLATFORM_ADMIN;
-export const isInstitutionAdmin = (role) => role === ROLES.INSTITUTION_ADMIN;
+export const isInstitutionAdmin = (role) => role === ROLES.ADMIN_INSTITUTION;
 export const isInstitutionEditor = (role) => role === ROLES.EDITOR_INSTITUTION;
 export const isRegulator = (role) => role === ROLES.REGULATOR_VIEWER;
 
 export const isInstitutionRole = (role) =>
-  role === ROLES.INSTITUTION_ADMIN || role === ROLES.EDITOR_INSTITUTION;
+  role === ROLES.ADMIN_INSTITUTION || role === ROLES.EDITOR_INSTITUTION;
 
 export const hasFullAccess = (role) => role === ROLES.PLATFORM_ADMIN;
 
