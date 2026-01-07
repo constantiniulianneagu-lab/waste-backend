@@ -1,344 +1,316 @@
 // src/controllers/dashboardExportController.js
-import PDFDocument from 'pdfkit';
-import pool from '../config/database.js';
-import { createCanvas } from 'canvas';
-import Chart from 'chart.js/auto';
+import PDFDocument from "pdfkit";
+import path from "path";
+import { fileURLToPath } from "url";
+import { createCanvas } from "canvas";
+import Chart from "chart.js/auto";
+
+import dashboardLandfillController from "./dashboardLandfillController.js";
 
 /**
- * Export Dashboard Landfill - PROFESSIONAL PDF
+ * Export Dashboard Landfill - ONE PAGE, REAL DATA (same as /stats)
+ * - reuses dashboardLandfillController.getStats => same RBAC, same filters, same sector mapping
+ * - 1 page guaranteed (layout calculated)
+ * - diacritics OK with TTF font
  */
 export const exportLandfillDashboard = async (req, res) => {
   try {
-    const { year, from, to, sector_id } = req.query;
-    const { visibleSectorIds = [] } = req.userAccess || {};
-    
-    const userName = [req.user?.firstName, req.user?.lastName]
-      .filter(Boolean).join(' ') || 'Utilizator';
-    const userRole = req.user?.role || 'UNKNOWN';
+    // 1) Get SAME payload as /stats
+    const payload = await captureGetStats(req);
 
-    // Fetch data
-    const stats = await fetchDashboardData(from, to, sector_id, visibleSectorIds);
+    if (!payload?.success) {
+      return res.status(400).json(payload || { success: false, message: "Nu pot genera raportul." });
+    }
 
-    // Create PDF - A4 Landscape for more space
-    const doc = new PDFDocument({ 
-      size: 'A4',
-      layout: 'landscape',
-      margin: 30
+    const data = payload.data || {};
+    const filters = payload.filters_applied || {};
+
+    // 2) Build “export model” from your real data
+    const summary = data.summary || {};
+    const perSector = Array.isArray(data.per_sector) ? data.per_sector : [];
+    const topOperators = Array.isArray(data.top_operators) ? data.top_operators : [];
+
+    // 3) Create PDF (A4 landscape)
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margin: 28,
+      info: {
+        Title: "Raport Depozitare",
+        Author: "SAMD",
+      },
     });
 
-    const filename = `raport-depozitare-${year || 'current'}.pdf`;
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+    const filename = `raport-depozitare-${filters.from || "start"}-${filters.to || "end"}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     doc.pipe(res);
 
-    // ===============================================
-    // HEADER - Professional with gradient background
-    // ===============================================
-    doc.rect(0, 0, 842, 80).fill('#10b981');
-    
-    doc.fontSize(24).font('Helvetica-Bold').fillColor('#ffffff')
-       .text('RAPORT DEPOZITARE DEȘEURI', 30, 20);
-    
-    doc.fontSize(10).font('Helvetica').fillColor('#ffffff')
-       .text(`București, Sectoarele 1-6`, 30, 50)
-       .text(`Perioada: ${from || 'Start'} - ${to || 'Prezent'}`, 500, 30, { width: 300, align: 'right' })
-       .text(`Data: ${new Date().toLocaleDateString('ro-RO')}`, 500, 45, { width: 300, align: 'right' })
-       .text(`Generat de: ${userName}`, 500, 60, { width: 300, align: 'right' });
+    // 4) Fonts (diacritics)
+    const { fontRegular, fontBold } = getFonts();
+    doc.registerFont("Inter", fontRegular);
+    doc.registerFont("InterBold", fontBold);
 
-    doc.fillColor('#000000'); // Reset color
+    // Helpers
+    const pageW = doc.page.width;
+    const pageH = doc.page.height;
+    const M = doc.page.margins.left; // same on all sides in your config
+    const contentW = pageW - M * 2;
 
-    // ===============================================
-    // STATS CARDS - 3 columns with colored boxes
-    // ===============================================
-    const cardY = 100;
-    const cardWidth = 250;
-    const cardHeight = 80;
-    const cardGap = 20;
+    const userName = [req.user?.firstName, req.user?.lastName].filter(Boolean).join(" ") || "Utilizator";
+    const generatedAt = new Date().toLocaleString("ro-RO");
 
-    // Card 1: Total Bilete
-    drawStatCard(doc, 30, cardY, cardWidth, cardHeight, 
-      'TOTAL BILETE', 
-      (stats.summary.total_tickets || 0).toLocaleString('ro-RO'),
-      'înregistrări',
-      '#3b82f6');
+    // =========================
+    // HEADER
+    // =========================
+    const headerH = 72;
+    doc.save();
+    doc.rect(0, 0, pageW, headerH).fill("#10b981");
+    doc.restore();
 
-    // Card 2: Total Tone
-    drawStatCard(doc, 30 + cardWidth + cardGap, cardY, cardWidth, cardHeight,
-      'CANTITATE TOTALĂ',
-      parseFloat(stats.summary.total_tons || 0).toLocaleString('ro-RO', {maximumFractionDigits: 1}),
-      'tone depozitate',
-      '#10b981');
+    doc.font("InterBold").fontSize(20).fillColor("#ffffff")
+      .text("RAPORT DEPOZITARE DEȘEURI", M, 18, { width: contentW });
 
-    // Card 3: Medie
-    drawStatCard(doc, 30 + (cardWidth + cardGap) * 2, cardY, cardWidth, cardHeight,
-      'MEDIE PER BILET',
-      parseFloat(stats.summary.avg_weight_per_ticket || 0).toFixed(2),
-      'tone / bilet',
-      '#f59e0b');
+    doc.font("Inter").fontSize(10).fillColor("#ffffff")
+      .text(`Perioada: ${filters.from || "-"} → ${filters.to || "-"}`, M, 42, { width: contentW });
 
-    // ===============================================
-    // CHARTS - Side by side
-    // ===============================================
-    const chartY = cardY + cardHeight + 30;
-    
-    // LEFT: Sector Distribution (Pie Chart)
-    if (stats.bySector.length > 0) {
-      const sectorChart = await generateSectorPieChart(stats.bySector);
-      doc.image(sectorChart, 30, chartY, { width: 280, height: 200 });
-      
-      doc.fontSize(12).font('Helvetica-Bold').fillColor('#000000')
-         .text('Distribuție pe Sectoare', 30, chartY + 210);
+    doc.font("Inter").fontSize(10).fillColor("#ffffff")
+      .text(`Generat de: ${userName} · ${generatedAt}`, M, 56, { width: contentW, align: "right" });
+
+    doc.fillColor("#111827");
+
+    // =========================
+    // KPI CARDS (4)
+    // =========================
+    const cardsY = headerH + 16;
+    const cardH = 72;
+    const cardGap = 12;
+    const cardW = (contentW - cardGap * 3) / 4;
+
+    const kpis = [
+      { title: "TOTAL TONE", value: summary.total_tons_formatted || "0.00", sub: "tone depozitate", color: "#10b981" },
+      { title: "TOTAL TICHETE", value: (summary.total_tickets || 0).toLocaleString("ro-RO"), sub: "înregistrări", color: "#3b82f6" },
+      { title: "MEDIE / TICHET", value: Number(summary.avg_weight_per_ticket || 0).toFixed(2), sub: "tone", color: "#f59e0b" },
+      { title: "ZILE", value: String(summary.date_range?.days || 0), sub: "zile analizate", color: "#8b5cf6" },
+    ];
+
+    kpis.forEach((k, i) => {
+      const x = M + i * (cardW + cardGap);
+      drawKpiCard(doc, x, cardsY, cardW, cardH, k);
+    });
+
+    // =========================
+    // CHARTS (2) - ONE ROW
+    // =========================
+    const chartsY = cardsY + cardH + 16;
+    const chartH = 210;
+    const leftW = Math.floor(contentW * 0.42);
+    const rightW = contentW - leftW - 12;
+
+    // Build chart data from your REAL stats:
+    // Pie: per_sector (tone)
+    const pieData = perSector.map(s => ({
+      label: `S${s.sector_number}`,
+      value: Number(s.total_tons || 0),
+      color: s.color || "#10b981",
+    }));
+
+    // Bar: top_operators (tone)
+    const barData = topOperators.slice(0, 5).map(o => ({
+      label: o.institution_name || "—",
+      value: Number(o.total_tons || 0),
+    }));
+
+    if (pieData.length) {
+      const piePng = await makePieChart(pieData);
+      doc.image(piePng, M, chartsY, { width: leftW, height: chartH });
+      doc.font("InterBold").fontSize(11).fillColor("#111827")
+        .text("Distribuție pe sectoare (tone)", M, chartsY + chartH + 6, { width: leftW });
     }
 
-    // RIGHT: Top Operators (Bar Chart)
-    if (stats.topOperators.length > 0) {
-      const operatorChart = await generateOperatorBarChart(stats.topOperators);
-      doc.image(operatorChart, 350, chartY, { width: 450, height: 200 });
-      
-      doc.fontSize(12).font('Helvetica-Bold').fillColor('#000000')
-         .text('Top 5 Operatori Colectare', 350, chartY + 210);
+    if (barData.length) {
+      const barPng = await makeHorizontalBar(barData);
+      doc.image(barPng, M + leftW + 12, chartsY, { width: rightW, height: chartH });
+      doc.font("InterBold").fontSize(11).fillColor("#111827")
+        .text("Top 5 operatori (tone)", M + leftW + 12, chartsY + chartH + 6, { width: rightW });
     }
 
-    // ===============================================
-    // DETAILED TABLE - Sectors breakdown
-    // ===============================================
-    const tableY = chartY + 250;
-    drawSectorTable(doc, 30, tableY, stats.bySector, stats.summary.total_tons);
+    // =========================
+    // TABLE (compact) - keep 1 page
+    // =========================
+    const tableY = chartsY + chartH + 30;
+    const footerH = 22;
+    const maxTableH = pageH - M - footerH - tableY;
 
-    // ===============================================
-    // FOOTER
-    // ===============================================
-    doc.fontSize(8).font('Helvetica').fillColor('#6b7280')
-       .text('Raport generat automat de Sistemul SAMD | ADIGIDMB 2026', 30, 560, { 
-         width: 782, 
-         align: 'center' 
-       });
+    drawSectorMiniTable(doc, M, tableY, contentW, Math.max(80, maxTableH), perSector, Number(summary.total_tons || 0));
+
+    // =========================
+    // FOOTER (always inside page)
+    // =========================
+    const footerY = pageH - M - 14;
+    doc.font("Inter").fontSize(8.5).fillColor("#64748b")
+      .text("Raport generat automat din SAMD · reflectă filtrele aplicate la momentul exportului.", M, footerY, {
+        width: contentW,
+        align: "left",
+      });
 
     doc.end();
-
   } catch (error) {
-    console.error('💥 Export PDF error:', error);
+    console.error("💥 Export PDF error:", error);
     if (!res.headersSent) {
-      res.status(500).json({ 
-        success: false, 
-        message: 'Eroare la generarea raportului PDF',
-        error: error.message
+      res.status(500).json({
+        success: false,
+        message: "Eroare la generarea raportului PDF",
+        error: error.message,
       });
     }
   }
 };
 
-// ===============================================
-// HELPER: Draw Stat Card
-// ===============================================
-function drawStatCard(doc, x, y, width, height, title, value, subtitle, color) {
-  // Background with shadow
-  doc.rect(x + 2, y + 2, width, height).fill('#e5e7eb');
-  doc.rect(x, y, width, height).fillAndStroke('#ffffff', '#d1d5db');
-  
-  // Colored left border
-  doc.rect(x, y, 5, height).fill(color);
-  
-  // Title
-  doc.fontSize(9).font('Helvetica').fillColor('#6b7280')
-     .text(title, x + 15, y + 15, { width: width - 30 });
-  
-  // Value
-  doc.fontSize(22).font('Helvetica-Bold').fillColor('#111827')
-     .text(value, x + 15, y + 35, { width: width - 30 });
-  
-  // Subtitle
-  doc.fontSize(8).font('Helvetica').fillColor('#9ca3af')
-     .text(subtitle, x + 15, y + 62, { width: width - 30 });
-}
-
-// ===============================================
-// HELPER: Generate Sector Pie Chart
-// ===============================================
-async function generateSectorPieChart(sectors) {
-  const canvas = createCanvas(400, 300);
-  const ctx = canvas.getContext('2d');
-
-  const colors = ['#7c3aed', '#e5e7eb', '#10b981', '#f59e0b', '#ec4899', '#06b6d4'];
-  
-  new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: sectors.map(s => `Sector ${s.sector_number}`),
-      datasets: [{
-        data: sectors.map(s => parseFloat(s.tons || 0)),
-        backgroundColor: colors,
-        borderWidth: 2,
-        borderColor: '#ffffff'
-      }]
-    },
-    options: {
-      responsive: false,
-      plugins: {
-        legend: {
-          position: 'bottom',
-          labels: { font: { size: 11 }, padding: 8 }
-        },
-        title: {
-          display: false
-        }
-      }
-    }
-  });
-
-  return canvas.toBuffer('image/png');
-}
-
-// ===============================================
-// HELPER: Generate Operator Bar Chart
-// ===============================================
-async function generateOperatorBarChart(operators) {
-  const canvas = createCanvas(600, 300);
-  const ctx = canvas.getContext('2d');
-
-  new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: operators.map(op => op.name.length > 25 ? op.name.substring(0, 22) + '...' : op.name),
-      datasets: [{
-        label: 'Tone',
-        data: operators.map(op => parseFloat(op.tons || 0)),
-        backgroundColor: '#10b981',
-        borderColor: '#059669',
-        borderWidth: 1
-      }]
-    },
-    options: {
-      responsive: false,
-      indexAxis: 'y',
-      plugins: {
-        legend: { display: false },
-        title: { display: false }
-      },
-      scales: {
-        x: {
-          beginAtZero: true,
-          grid: { display: true, color: '#e5e7eb' }
-        },
-        y: {
-          grid: { display: false }
-        }
-      }
-    }
-  });
-
-  return canvas.toBuffer('image/png');
-}
-
-// ===============================================
-// HELPER: Draw Sector Table
-// ===============================================
-function drawSectorTable(doc, x, y, sectors, totalTons) {
-  const colWidth = 130;
-  const rowHeight = 25;
-  
-  // Header
-  doc.rect(x, y, colWidth * 6, rowHeight).fill('#f3f4f6');
-  doc.fontSize(9).font('Helvetica-Bold').fillColor('#374151');
-  
-  ['Sector', 'Tone', 'Procent', 'Sector', 'Tone', 'Procent'].forEach((header, i) => {
-    doc.text(header, x + 10 + (i * colWidth), y + 8, { width: colWidth - 20 });
-  });
-  
-  doc.fillColor('#000000');
-  
-  // Rows - 2 columns layout
-  sectors.forEach((sector, idx) => {
-    const col = idx % 2;
-    const row = Math.floor(idx / 2);
-    const cellX = x + (col * colWidth * 3);
-    const cellY = y + rowHeight + (row * rowHeight);
-    
-    if (idx % 2 === 0) {
-      doc.rect(cellX, cellY, colWidth * 3, rowHeight).fill('#ffffff');
-    } else {
-      doc.rect(cellX, cellY, colWidth * 3, rowHeight).fill('#f9fafb');
-    }
-    
-    const tons = parseFloat(sector.tons || 0);
-    const percent = totalTons > 0 ? ((tons / totalTons) * 100).toFixed(1) : '0.0';
-    
-    doc.fontSize(9).font('Helvetica').fillColor('#111827');
-    doc.text(`Sector ${sector.sector_number}`, cellX + 10, cellY + 8, { width: colWidth - 20 });
-    doc.text(tons.toFixed(2), cellX + colWidth + 10, cellY + 8, { width: colWidth - 20 });
-    doc.text(`${percent}%`, cellX + colWidth * 2 + 10, cellY + 8, { width: colWidth - 20 });
+async function captureGetStats(req) {
+  return new Promise((resolve, reject) => {
+    const fakeRes = {
+      status(code) { this.statusCode = code; return this; },
+      json(payload) { resolve(payload); },
+    };
+    dashboardLandfillController.getStats(req, fakeRes).catch(reject);
   });
 }
 
-// ===============================================
-// DATA FETCHING - Same as before
-// ===============================================
-async function fetchDashboardData(from, to, sectorId, visibleSectorIds) {
-  let sectorWhere = '';
-  let params = [from || '2024-01-01', to || new Date().toISOString().split('T')[0]];
-  
-  if (sectorId) {
-    params.push(sectorId);
-    sectorWhere = `AND wtl.sector_id = $${params.length}`;
-  } else if (visibleSectorIds && visibleSectorIds.length > 0) {
-    params.push(visibleSectorIds);
-    sectorWhere = `AND wtl.sector_id = ANY($${params.length})`;
-  }
+function getFonts() {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
 
-  const summaryQuery = `
-    SELECT
-      COUNT(*) as total_tickets,
-      COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons,
-      COALESCE(AVG(wtl.net_weight_tons), 0) as avg_weight_per_ticket
-    FROM waste_tickets_landfill wtl
-    WHERE wtl.deleted_at IS NULL
-      AND wtl.ticket_date >= $1
-      AND wtl.ticket_date <= $2
-      ${sectorWhere}
-  `;
-  
-  const summaryResult = await pool.query(summaryQuery, params);
-
-  const sectorQuery = `
-    SELECT 
-      s.sector_number,
-      COALESCE(SUM(wtl.net_weight_tons), 0) as tons
-    FROM sectors s
-    LEFT JOIN waste_tickets_landfill wtl ON s.id = wtl.sector_id 
-      AND wtl.deleted_at IS NULL
-      AND wtl.ticket_date >= $1
-      AND wtl.ticket_date <= $2
-      ${sectorWhere.replace('wtl.sector_id', 's.id')}
-    WHERE s.deleted_at IS NULL
-    GROUP BY s.sector_number
-    ORDER BY s.sector_number
-  `;
-  
-  const sectorResult = await pool.query(sectorQuery, params);
-
-  const operatorQuery = `
-    SELECT 
-      i.name,
-      COALESCE(SUM(wtl.net_weight_tons), 0) as tons
-    FROM institutions i
-    LEFT JOIN waste_tickets_landfill wtl ON i.id = wtl.supplier_id
-      AND wtl.deleted_at IS NULL
-      AND wtl.ticket_date >= $1
-      AND wtl.ticket_date <= $2
-      ${sectorWhere}
-    WHERE i.deleted_at IS NULL
-      AND i.type = 'COLECTARE'
-    GROUP BY i.name
-    HAVING SUM(wtl.net_weight_tons) > 0
-    ORDER BY tons DESC
-    LIMIT 5
-  `;
-  
-  const operatorResult = await pool.query(operatorQuery, params);
-
+  // src/controllers -> src/assets/fonts
+  const base = path.resolve(__dirname, "../assets/fonts");
   return {
-    summary: summaryResult.rows[0],
-    bySector: sectorResult.rows,
-    topOperators: operatorResult.rows
+    fontRegular: path.join(base, "Inter-Regular.ttf"),
+    fontBold: path.join(base, "Inter-Bold.ttf"),
   };
+}
+
+function drawKpiCard(doc, x, y, w, h, { title, value, sub, color }) {
+  // Card
+  doc.save();
+  doc.roundedRect(x, y, w, h, 12).fill("#ffffff");
+  doc.roundedRect(x, y, w, h, 12).stroke("#e5e7eb");
+
+  // Accent bar
+  doc.rect(x, y, 5, h).fill(color);
+
+  // Text
+  doc.fillColor("#64748b").font("Inter").fontSize(9)
+    .text(title, x + 14, y + 12, { width: w - 20 });
+
+  doc.fillColor("#0f172a").font("InterBold").fontSize(18)
+    .text(String(value), x + 14, y + 28, { width: w - 20 });
+
+  doc.fillColor("#94a3b8").font("Inter").fontSize(9)
+    .text(sub, x + 14, y + 54, { width: w - 20 });
+
+  doc.restore();
+}
+
+async function makePieChart(items) {
+  const canvas = createCanvas(520, 360);
+  const ctx = canvas.getContext("2d");
+
+  new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      labels: items.map(i => i.label),
+      datasets: [{
+        data: items.map(i => i.value),
+        backgroundColor: items.map(i => i.color),
+        borderWidth: 2,
+        borderColor: "#ffffff",
+      }],
+    },
+    options: {
+      responsive: false,
+      cutout: "62%",
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } },
+      },
+    },
+  });
+
+  return canvas.toBuffer("image/png");
+}
+
+async function makeHorizontalBar(items) {
+  const canvas = createCanvas(780, 360);
+  const ctx = canvas.getContext("2d");
+
+  const labels = items.map(i => (i.label.length > 28 ? i.label.slice(0, 25) + "..." : i.label));
+
+  new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{
+        data: items.map(i => i.value),
+        backgroundColor: "#10b981",
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      responsive: false,
+      indexAxis: "y",
+      plugins: { legend: { display: false } },
+      scales: { x: { beginAtZero: true } },
+    },
+  });
+
+  return canvas.toBuffer("image/png");
+}
+
+function drawSectorMiniTable(doc, x, y, w, h, sectors, totalTons) {
+  const rows = [...sectors].sort((a, b) => (b.total_tons || 0) - (a.total_tons || 0)).slice(0, 6);
+  const rowH = 18;
+
+  // Header
+  doc.save();
+  doc.roundedRect(x, y, w, h, 12).fill("#ffffff");
+  doc.roundedRect(x, y, w, h, 12).stroke("#e5e7eb");
+
+  doc.rect(x, y, w, 24).fill("#f8fafc");
+  doc.font("InterBold").fontSize(10).fillColor("#334155")
+    .text("Top sectoare (după tone)", x + 12, y + 7, { width: w - 24 });
+
+  // Columns
+  const col1 = x + 12;
+  const col2 = x + Math.floor(w * 0.55);
+  const col3 = x + Math.floor(w * 0.75);
+  const col4 = x + w - 12;
+
+  doc.font("InterBold").fontSize(9).fillColor("#64748b");
+  doc.text("Sector", col1, y + 30);
+  doc.text("Tichete", col2, y + 30, { width: 80, align: "right" });
+  doc.text("Tone", col3, y + 30, { width: 80, align: "right" });
+  doc.text("%", col4 - 30, y + 30, { width: 30, align: "right" });
+
+  // Rows
+  let cy = y + 46;
+  doc.font("Inter").fontSize(9).fillColor("#0f172a");
+
+  rows.forEach((r, idx) => {
+    const tons = Number(r.total_tons || 0);
+    const pct = totalTons > 0 ? ((tons / totalTons) * 100).toFixed(1) : "0.0";
+
+    if (idx % 2 === 1) {
+      doc.rect(x + 1, cy - 2, w - 2, rowH).fill("#fafafa");
+    }
+
+    doc.fillColor("#0f172a").font("InterBold").text(`S${r.sector_number}`, col1, cy, { width: 60 });
+    doc.fillColor("#64748b").font("Inter").text(r.sector_name || "", col1 + 34, cy, { width: 220 });
+
+    doc.fillColor("#0f172a").text(String((r.total_tickets || 0).toLocaleString("ro-RO")), col2, cy, { width: 80, align: "right" });
+    doc.fillColor("#0f172a").text(String(r.total_tons_formatted || tons.toFixed(2)), col3, cy, { width: 80, align: "right" });
+    doc.fillColor("#0f172a").text(`${pct}%`, col4 - 30, cy, { width: 30, align: "right" });
+
+    cy += rowH;
+  });
+
+  doc.restore();
 }
