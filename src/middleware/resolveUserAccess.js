@@ -13,36 +13,41 @@
 import pool from "../config/database.js";
 import { ROLES } from "../constants/roles.js";
 
-// ============================================================================
-// PURE FUNCTION: Calculate userAccess without Express dependencies
-// ============================================================================
-export const calculateUserAccess = async (userId, role) => {
-  // Helper: fetch ALL sectors (București 1..6)
-  const allSectorsQ = await pool.query(
-    `SELECT id, sector_number
-     FROM sectors
-     WHERE is_active = true AND deleted_at IS NULL
-     ORDER BY sector_number`
-  );
-  const sectorIdsAll = allSectorsQ.rows.map((r) => r.id);
+export const resolveUserAccess = async (req, res, next) => {
+  try {
+    if (!req.user?.id || !req.user?.role) {
+      return res.status(401).json({ success: false, message: "Neautentificat" });
+    }
 
-  // Helper: fetch user's institution (optional for some roles)
-  const instQ = await pool.query(
-    `SELECT i.id, i.name, i.type, i.short_name
-     FROM user_institutions ui
-     JOIN institutions i ON ui.institution_id = i.id
-     WHERE ui.user_id = $1
-     LIMIT 1`,
-    [userId]
-  );
+    const userId = req.user.id;
+    const role = req.user.role;
 
-  const institutionId = instQ.rows[0]?.id ?? null;
-  const institutionName = instQ.rows[0]?.name ?? null;
-  const institutionType = instQ.rows[0]?.type ?? null;
+    // Helper: fetch ALL sectors (București 1..6)
+    const allSectorsQ = await pool.query(
+      `SELECT id, sector_number
+       FROM sectors
+       WHERE is_active = true AND deleted_at IS NULL
+       ORDER BY sector_number`
+    );
+    const sectorIdsAll = allSectorsQ.rows.map((r) => r.id);
 
-  // Helper: fetch sectors mapped to institution (if institution exists)
-  let institutionSectorIds = [];
-  if (institutionId) {
+    // Helper: fetch user's institution (optional for some roles)
+    const instQ = await pool.query(
+      `SELECT i.id, i.name, i.type, i.short_name
+       FROM user_institutions ui
+       JOIN institutions i ON ui.institution_id = i.id
+       WHERE ui.user_id = $1
+       LIMIT 1`,
+      [userId]
+    );
+
+    const institutionId = instQ.rows[0]?.id ?? null;
+    const institutionName = instQ.rows[0]?.name ?? null;
+    const institutionType = instQ.rows[0]?.type ?? null;
+
+    // Helper: fetch sectors mapped to institution (if institution exists)
+    let institutionSectorIds = [];
+    if (institutionId) {
       const sectorsQ = await pool.query(
         `SELECT s.id, s.sector_number
          FROM institution_sectors ins
