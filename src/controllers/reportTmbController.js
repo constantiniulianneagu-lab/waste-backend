@@ -26,7 +26,7 @@ const buildSectorScope = (req, alias = 't') => {
   if (!access) throw new Error('Missing req.userAccess (resolveUserAccess not applied)');
 
   const isAll = access.accessLevel === 'ALL';
-  const sectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+  const visibleSectorIds = Array.isArray(access.visibleSectorIds) ? access.visibleSectorIds : [];
   const requestedSectorUuid = req.requestedSectorUuid || null;
 
   let sectorWhere = '';
@@ -40,10 +40,10 @@ const buildSectorScope = (req, alias = 't') => {
     sectorParams.push(requestedSectorUuid);
   } else if (!isAll) {
     sectorWhere = `${alias}.sector_id = ANY(\${{}})`;
-    sectorParams.push(sectorIds);
+    sectorParams.push(visibleSectorIds);
   }
 
-  return { isAll, sectorIds, requestedSectorUuid, sectorWhere, sectorParams };
+  return { isAll, visibleSectorIds, requestedSectorUuid, sectorWhere, sectorParams };
 };
 
 const applyParamIndex = (sqlWithPlaceholders, startIndex) => {
@@ -107,6 +107,15 @@ const buildFilters = (req, alias = 't') => {
 
 export const getTmbTickets = async (req, res) => {
   try {
+    // Check if user has access to reports page
+    const { scopes } = req.userAccess;
+    if (scopes?.reports === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina Rapoarte' 
+      });
+    }
+
     const {
       page = 1,
       limit = 50,
@@ -195,7 +204,7 @@ export const getTmbTickets = async (req, res) => {
     // ============================================================================
     const access = req.userAccess;
     const isAll = access.accessLevel === 'ALL';
-    const allowedSectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+    const allowedSectorIds = Array.isArray(access.visibleSectorIds) ? access.visibleSectorIds : [];
     const requestedSectorUuid = req.requestedSectorUuid || null;
 
     let yearsWhere = '';

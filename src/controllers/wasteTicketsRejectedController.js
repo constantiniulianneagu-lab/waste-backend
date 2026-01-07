@@ -40,7 +40,7 @@ const buildSectorScope = (req, alias = 't') => {
   if (!access) throw new Error('Missing req.userAccess (resolveUserAccess not applied)');
 
   const isAll = access.accessLevel === 'ALL';
-  const sectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+  const visibleSectorIds = Array.isArray(access.visibleSectorIds) ? access.visibleSectorIds : [];
   const requestedSectorUuid = req.requestedSectorUuid || null;
 
   let sectorWhere = '';
@@ -51,7 +51,7 @@ const buildSectorScope = (req, alias = 't') => {
     sectorParams.push(requestedSectorUuid);
   } else if (!isAll) {
     sectorWhere = `AND ${alias}.sector_id = ANY(${{}})`;
-    sectorParams.push(sectorIds);
+    sectorParams.push(visibleSectorIds);
   }
 
   return { sectorWhere, sectorParams, requestedSectorUuid };
@@ -143,6 +143,15 @@ const buildListFilters = (req, alias = 't') => {
 // ----------------------------------------------------------------------------
 export const getAllRejectedTickets = async (req, res) => {
   try {
+    // Check if user has access to TMB page
+    const { scopes } = req.userAccess;
+    if (scopes?.tmb === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina TMB' 
+      });
+    }
+
     const { page = 1, limit = 50, sort_by = 'ticket_date', sort_dir = 'desc' } = req.query;
 
     const pageNum = clampInt(page, 1, 1000000, 1);
@@ -244,6 +253,15 @@ export const getAllRejectedTickets = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const getRejectedTicketById = async (req, res) => {
   try {
+    // Check if user has access to TMB page
+    const { scopes } = req.userAccess;
+    if (scopes?.tmb === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina TMB' 
+      });
+    }
+
     const { id } = req.params;
     const ticketId = parseInt(String(id), 10);
 
@@ -310,6 +328,15 @@ export const getRejectedTicketById = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const getRejectedStats = async (req, res) => {
   try {
+    // Check if user has access to TMB page
+    const { scopes } = req.userAccess;
+    if (scopes?.tmb === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina TMB' 
+      });
+    }
+
     const f = buildListFilters(req, 't');
 
     const summarySql = `
@@ -385,6 +412,15 @@ export const getRejectedStats = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const createRejectedTicket = async (req, res) => {
   try {
+    // Check permission
+    const { canCreateData } = req.userAccess;
+    if (!canCreateData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să creați înregistrări' 
+      });
+    }
+
     const {
       ticket_number,
       ticket_date,
@@ -462,6 +498,15 @@ export const createRejectedTicket = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const updateRejectedTicket = async (req, res) => {
   try {
+    // Check permission
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să editați înregistrări' 
+      });
+    }
+
     const { id } = req.params;
     const ticketId = parseInt(String(id), 10);
     if (Number.isNaN(ticketId)) {
@@ -533,6 +578,15 @@ export const updateRejectedTicket = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const deleteRejectedTicket = async (req, res) => {
   try {
+    // Check permission
+    const { canDeleteData } = req.userAccess;
+    if (!canDeleteData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să ștergeți înregistrări' 
+      });
+    }
+
     const { id } = req.params;
     const ticketId = parseInt(String(id), 10);
     if (Number.isNaN(ticketId)) {

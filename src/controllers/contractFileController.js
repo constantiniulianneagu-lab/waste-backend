@@ -71,6 +71,15 @@ const getContractTypeConfig = (contractType) => {
 
 export const uploadContractFile = async (req, res) => {
   try {
+    // Check permission
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să încărcați fișiere' 
+      });
+    }
+
     const { contractType, contractId } = req.params;
     const file = req.file;
     
@@ -175,6 +184,15 @@ export const uploadContractFile = async (req, res) => {
 
 export const deleteContractFile = async (req, res) => {
   try {
+    // Check permission
+    const { canDeleteData } = req.userAccess;
+    if (!canDeleteData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să ștergeți fișiere' 
+      });
+    }
+
     const { contractType, contractId } = req.params;
     
     // Get contract type configuration
@@ -264,6 +282,15 @@ export const deleteContractFile = async (req, res) => {
 
 export const getContractFileInfo = async (req, res) => {
   try {
+    // Check if user has access to contracts page
+    const { scopes } = req.userAccess;
+    if (scopes?.contracts === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați contractele' 
+      });
+    }
+
     const { contractType, contractId } = req.params;
     
     // Get contract type configuration
