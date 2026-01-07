@@ -8,7 +8,7 @@ import pool from '../config/database.js';
  */
 export const exportLandfillDashboard = async (req, res) => {
   try {
-    const { year, from, to, sectorId } = req.query;
+    const { year, from, to, sector_id } = req.query;
     const { visibleSectorIds = [], role } = req.userAccess || {};
     
     // Safe user name
@@ -18,7 +18,7 @@ export const exportLandfillDashboard = async (req, res) => {
     const userRole = req.user?.role || 'UNKNOWN';
 
     // Fetch dashboard data
-    const stats = await fetchDashboardData(from, to, sectorId, visibleSectorIds);
+    const stats = await fetchDashboardData(from, to, sector_id, visibleSectorIds);
 
     // Create PDF - A4 size
     const doc = new PDFDocument({ 
@@ -55,33 +55,36 @@ export const exportLandfillDashboard = async (req, res) => {
     const summary = stats.summary;
     doc.fontSize(10).font('Helvetica');
     doc.text(`Total bilete: ${summary.total_tickets || 0}`, 40);
-    doc.text(`Total tone: ${summary.total_tons || 0}`, 40);
-    doc.text(`Tone acceptate: ${summary.accepted_tons || 0}`, 40);
-    doc.text(`Rata acceptare: ${summary.acceptance_rate || 0}%`, 40);
+    doc.text(`Total tone: ${parseFloat(summary.total_tons || 0).toFixed(2)}`, 40);
+    doc.text(`Medie per bilet: ${parseFloat(summary.avg_weight_per_ticket || 0).toFixed(2)} tone`, 40);
     
     doc.moveDown(1);
 
     // SECTOARE
-    doc.fontSize(12).font('Helvetica-Bold')
-       .text('DISTRIBUTIE PE SECTOARE', 40, doc.y);
-    doc.moveDown(0.5);
-    
-    stats.bySector.forEach(sector => {
-      doc.fontSize(9).font('Helvetica')
-         .text(`Sector ${sector.sector_number}: ${sector.tons} tone`, 40);
-    });
+    if (stats.bySector.length > 0) {
+      doc.fontSize(12).font('Helvetica-Bold')
+         .text('DISTRIBUTIE PE SECTOARE', 40, doc.y);
+      doc.moveDown(0.5);
+      
+      stats.bySector.forEach(sector => {
+        doc.fontSize(9).font('Helvetica')
+           .text(`Sector ${sector.sector_number}: ${parseFloat(sector.tons || 0).toFixed(2)} tone`, 40);
+      });
 
-    doc.moveDown(1);
+      doc.moveDown(1);
+    }
 
     // TOP OPERATORI
-    doc.fontSize(12).font('Helvetica-Bold')
-       .text('TOP 5 OPERATORI', 40, doc.y);
-    doc.moveDown(0.5);
-    
-    stats.topOperators.forEach((op, i) => {
-      doc.fontSize(9).font('Helvetica')
-         .text(`${i + 1}. ${op.name}: ${op.tons} tone`, 40);
-    });
+    if (stats.topOperators.length > 0) {
+      doc.fontSize(12).font('Helvetica-Bold')
+         .text('TOP 5 OPERATORI', 40, doc.y);
+      doc.moveDown(0.5);
+      
+      stats.topOperators.forEach((op, i) => {
+        doc.fontSize(9).font('Helvetica')
+           .text(`${i + 1}. ${op.name}: ${parseFloat(op.tons || 0).toFixed(2)} tone`, 40);
+      });
+    }
 
     // FOOTER
     doc.fontSize(8).font('Helvetica')
@@ -90,60 +93,60 @@ export const exportLandfillDashboard = async (req, res) => {
     doc.end();
 
   } catch (error) {
-    console.error('Export PDF error:', error);
+    console.error('💥 [EXPORT] Export PDF error:', error);
+    console.error('💥 [EXPORT] Error stack:', error.stack);
+    
     if (!res.headersSent) {
       res.status(500).json({ 
         success: false, 
-        message: 'Eroare la generarea raportului PDF' 
+        message: 'Eroare la generarea raportului PDF',
+        error: error.message
       });
     }
   }
 };
 
-// DATA FETCHING
+// DATA FETCHING - USING EXACT SAME QUERIES AS DASHBOARD
 async function fetchDashboardData(from, to, sectorId, visibleSectorIds) {
-  let whereClause = 'WHERE deleted_at IS NULL';
-  const params = [];
-  
-  if (from) {
-    params.push(from);
-    whereClause += ` AND ticket_date >= $${params.length}`;
-  }
-  
-  if (to) {
-    params.push(to);
-    whereClause += ` AND ticket_date <= $${params.length}`;
-  }
+  // Build WHERE clause like dashboardLandfillController
+  let sectorWhere = '';
+  let params = [from || '2024-01-01', to || new Date().toISOString().split('T')[0]];
   
   if (sectorId) {
     params.push(sectorId);
-    whereClause += ` AND sector_id = $${params.length}`;
+    sectorWhere = `AND wtl.sector_id = $${params.length}`;
   } else if (visibleSectorIds && visibleSectorIds.length > 0) {
     params.push(visibleSectorIds);
-    whereClause += ` AND sector_id = ANY($${params.length})`;
+    sectorWhere = `AND wtl.sector_id = ANY($${params.length})`;
   }
 
-  // Summary stats
+  // SUMMARY STATS - exact same as dashboardLandfillController
   const summaryQuery = `
-    SELECT 
+    SELECT
       COUNT(*) as total_tickets,
-      COALESCE(SUM(delivered_quantity), 0) as total_tons,
-      COALESCE(SUM(accepted_quantity), 0) as accepted_tons,
-      ROUND(AVG(CASE WHEN delivered_quantity > 0 THEN accepted_quantity::numeric / delivered_quantity * 100 ELSE 0 END), 1) as acceptance_rate
-    FROM landfill_tickets
-    ${whereClause}
+      COALESCE(SUM(wtl.net_weight_tons), 0) as total_tons,
+      COALESCE(AVG(wtl.net_weight_tons), 0) as avg_weight_per_ticket
+    FROM waste_tickets_landfill wtl
+    WHERE wtl.deleted_at IS NULL
+      AND wtl.ticket_date >= $1
+      AND wtl.ticket_date <= $2
+      ${sectorWhere}
   `;
   
   const summaryResult = await pool.query(summaryQuery, params);
   const summary = summaryResult.rows[0];
 
-  // By sector
+  // BY SECTOR
   const sectorQuery = `
     SELECT 
       s.sector_number,
-      COALESCE(SUM(lt.accepted_quantity), 0) as tons
+      COALESCE(SUM(wtl.net_weight_tons), 0) as tons
     FROM sectors s
-    LEFT JOIN landfill_tickets lt ON s.id = lt.sector_id ${whereClause.replace('WHERE', 'AND')}
+    LEFT JOIN waste_tickets_landfill wtl ON s.id = wtl.sector_id 
+      AND wtl.deleted_at IS NULL
+      AND wtl.ticket_date >= $1
+      AND wtl.ticket_date <= $2
+      ${sectorWhere.replace('wtl.sector_id', 's.id')}
     WHERE s.deleted_at IS NULL
     GROUP BY s.sector_number
     ORDER BY s.sector_number
@@ -151,15 +154,21 @@ async function fetchDashboardData(from, to, sectorId, visibleSectorIds) {
   
   const sectorResult = await pool.query(sectorQuery, params);
 
-  // Top operators
+  // TOP OPERATORS - using supplier_id
   const operatorQuery = `
     SELECT 
       i.name,
-      COALESCE(SUM(lt.accepted_quantity), 0) as tons
+      COALESCE(SUM(wtl.net_weight_tons), 0) as tons
     FROM institutions i
-    LEFT JOIN landfill_tickets lt ON i.id = lt.collection_operator_id ${whereClause.replace('WHERE', 'AND')}
+    LEFT JOIN waste_tickets_landfill wtl ON i.id = wtl.supplier_id
+      AND wtl.deleted_at IS NULL
+      AND wtl.ticket_date >= $1
+      AND wtl.ticket_date <= $2
+      ${sectorWhere}
     WHERE i.deleted_at IS NULL
+      AND i.type = 'COLECTARE'
     GROUP BY i.name
+    HAVING SUM(wtl.net_weight_tons) > 0
     ORDER BY tons DESC
     LIMIT 5
   `;
