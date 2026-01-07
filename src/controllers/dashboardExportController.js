@@ -1,21 +1,51 @@
 // src/controllers/dashboardExportController.js
+/**
+ * ============================================================================
+ * DASHBOARD EXPORT CONTROLLER - LANDFILL (DEPOZITARE) - 1 PAGE A4 LANDSCAPE
+ * ============================================================================
+ *
+ * ✅ Layout (as requested):
+ * - Header WITHOUT green background
+ * - Title in green + green separator line
+ * - Period in RO format (dd.mm.yyyy)
+ * - Right: ADIGIDMB logo + SAMD text
+ *
+ * Row 1: KPI cards (Total tone / Tichete / Medie / Zile)
+ * Row 2: LEFT Monthly deposited (Line chart) | RIGHT Waste codes table Top 8
+ * Row 3: LEFT Sectors table | RIGHT Top 5 operators table
+ *
+ * Footer: Left standard text | Right "Generat de: user + date-time"
+ *
+ * ✅ Uses SAME data as /stats (reuses dashboardLandfillController.getStats)
+ * ✅ Diacritics OK with Inter TTF fonts
+ *
+ * Required assets:
+ * - src/assets/fonts/Inter-Regular.ttf
+ * - src/assets/fonts/Inter-Bold.ttf
+ * - src/assets/branding/adigidmb.png
+ */
+
 import PDFDocument from "pdfkit";
 import path from "path";
 import { fileURLToPath } from "url";
+import fs from "fs";
 import { createCanvas } from "canvas";
 import Chart from "chart.js/auto";
 
 import dashboardLandfillController from "./dashboardLandfillController.js";
 
-/**
- * Export Dashboard Landfill - ONE PAGE, REAL DATA (same as /stats)
- * - reuses dashboardLandfillController.getStats => same RBAC, same filters, same sector mapping
- * - 1 page guaranteed (layout calculated)
- * - diacritics OK with TTF font
- */
+const formatDateRO = (iso) => {
+  if (!iso) return "-";
+  const [y, m, d] = String(iso).split("-");
+  if (!y || !m || !d) return String(iso);
+  return `${d}.${m}.${y}`;
+};
+
+const safeText = (v) => (v === null || v === undefined ? "" : String(v));
+
 export const exportLandfillDashboard = async (req, res) => {
   try {
-    // 1) Get SAME payload as /stats
+    // 1) Capture SAME payload as /stats (RBAC + filters + sector mapping identical)
     const payload = await captureGetStats(req);
 
     if (!payload?.success) {
@@ -25,18 +55,25 @@ export const exportLandfillDashboard = async (req, res) => {
     const data = payload.data || {};
     const filters = payload.filters_applied || {};
 
-    // 2) Build “export model” from your real data
     const summary = data.summary || {};
     const perSector = Array.isArray(data.per_sector) ? data.per_sector : [];
     const topOperators = Array.isArray(data.top_operators) ? data.top_operators : [];
+    const monthlyEvolution = Array.isArray(data.monthly_evolution) ? data.monthly_evolution : [];
+    const wasteCodes = Array.isArray(data.waste_categories) ? data.waste_categories : [];
 
-    // 3) Create PDF (A4 landscape)
+    const userName =
+      [req.user?.firstName, req.user?.lastName].filter(Boolean).join(" ") ||
+      [req.user?.first_name, req.user?.last_name].filter(Boolean).join(" ") ||
+      "Utilizator";
+    const generatedAt = new Date().toLocaleString("ro-RO");
+
+    // 2) PDF setup
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
       margin: 28,
       info: {
-        Title: "Raport Depozitare",
+        Title: "Raport Depozitare Deșeuri",
         Author: "SAMD",
       },
     });
@@ -46,113 +83,151 @@ export const exportLandfillDashboard = async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     doc.pipe(res);
 
-    // 4) Fonts (diacritics)
+    // 3) Fonts (diacritics)
     const { fontRegular, fontBold } = getFonts();
-    doc.registerFont("Inter", fontRegular);
-    doc.registerFont("InterBold", fontBold);
+    if (!fs.existsSync(fontRegular) || !fs.existsSync(fontBold)) {
+      // Don't fail hard; but diacritics might be broken without fonts
+      console.warn("[EXPORT] Missing Inter fonts in src/assets/fonts. Diacritics may render incorrectly.");
+    } else {
+      doc.registerFont("Inter", fontRegular);
+      doc.registerFont("InterBold", fontBold);
+    }
 
-    // Helpers
+    // Defaults
     const pageW = doc.page.width;
     const pageH = doc.page.height;
-    const M = doc.page.margins.left; // same on all sides in your config
+    const M = doc.page.margins.left; // same on all sides
     const contentW = pageW - M * 2;
 
-    const userName = [req.user?.firstName, req.user?.lastName].filter(Boolean).join(" ") || "Utilizator";
-    const generatedAt = new Date().toLocaleString("ro-RO");
+    // Choose fonts if available; else fallback to Helvetica
+    const FONT_REG = fs.existsSync(fontRegular) ? "Inter" : "Helvetica";
+    const FONT_BOLD = fs.existsSync(fontBold) ? "InterBold" : "Helvetica-Bold";
 
     // =========================
-    // HEADER
+    // HEADER (NO GREEN BG)
     // =========================
-    const headerH = 72;
+    const headerY = M;
+    const headerH = 58;
+
+    const locationText =
+      filters.sector_id && filters.sector_id !== "all"
+        ? `București / Sector ${filters.sector_id}`
+        : "București / Sectoarele 1–6";
+
+    const title = `RAPORT DEPOZITARE DEȘEURI – ${locationText}`;
+    const periodText = `Perioada ${formatDateRO(filters.from)} – ${formatDateRO(filters.to)}`;
+
+    // Title (green)
+    doc.fillColor("#10b981").font(FONT_BOLD).fontSize(18).text(title, M, headerY, {
+      width: contentW - 140,
+    });
+
+    // Period (gray)
+    doc.fillColor("#334155").font(FONT_REG).fontSize(10.5).text(periodText, M, headerY + 24, {
+      width: contentW - 140,
+    });
+
+    // Right: logo + SAMD text
+    const logoSize = 42;
+    const logoX = pageW - M - logoSize;
+    const logoY = headerY + 4;
+
+    const logoPath = getLogoPath();
+    if (logoPath && fs.existsSync(logoPath)) {
+      try {
+        doc.image(logoPath, logoX, logoY, { width: logoSize, height: logoSize });
+      } catch {
+        // ignore
+      }
+    }
+
+    doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(10).text("SAMD", pageW - M - 120, headerY + 2, {
+      width: 70,
+      align: "right",
+    });
+
+    doc.fillColor("#64748b").font(FONT_REG).fontSize(8.5).text(
+      "Sistem Avansat de Monitorizare a Deșeurilor",
+      pageW - M - 240,
+      headerY + 16,
+      { width: 190, align: "right" }
+    );
+
+    // Green separator line
     doc.save();
-    doc.rect(0, 0, pageW, headerH).fill("#10b981");
+    doc
+      .moveTo(M, headerY + headerH)
+      .lineTo(pageW - M, headerY + headerH)
+      .lineWidth(1.5)
+      .strokeColor("#10b981")
+      .stroke();
     doc.restore();
 
-    doc.font("InterBold").fontSize(20).fillColor("#ffffff")
-      .text("RAPORT DEPOZITARE DEȘEURI", M, 18, { width: contentW });
-
-    doc.font("Inter").fontSize(10).fillColor("#ffffff")
-      .text(`Perioada: ${filters.from || "-"} → ${filters.to || "-"}`, M, 42, { width: contentW });
-
-    doc.font("Inter").fontSize(10).fillColor("#ffffff")
-      .text(`Generat de: ${userName} · ${generatedAt}`, M, 56, { width: contentW, align: "right" });
-
-    doc.fillColor("#111827");
-
     // =========================
-    // KPI CARDS (4)
+    // ROW 1: KPI CARDS (4)
     // =========================
-    const cardsY = headerH + 16;
+    const cardsY = headerY + headerH + 14;
     const cardH = 72;
     const cardGap = 12;
     const cardW = (contentW - cardGap * 3) / 4;
 
     const kpis = [
-      { title: "TOTAL TONE", value: summary.total_tons_formatted || "0.00", sub: "tone depozitate", color: "#10b981" },
-      { title: "TOTAL TICHETE", value: (summary.total_tickets || 0).toLocaleString("ro-RO"), sub: "înregistrări", color: "#3b82f6" },
-      { title: "MEDIE / TICHET", value: Number(summary.avg_weight_per_ticket || 0).toFixed(2), sub: "tone", color: "#f59e0b" },
+      { title: "TOTAL DEȘEURI", value: summary.total_tons_formatted || "0.00", sub: "tone depozitate", color: "#10b981" },
+      { title: "TICHETE", value: (summary.total_tickets || 0).toLocaleString("ro-RO"), sub: "înregistrări", color: "#3b82f6" },
+      { title: "MEDIE TICHET", value: Number(summary.avg_weight_per_ticket || 0).toFixed(2), sub: "tone / tichet", color: "#f59e0b" },
       { title: "ZILE", value: String(summary.date_range?.days || 0), sub: "zile analizate", color: "#8b5cf6" },
     ];
 
     kpis.forEach((k, i) => {
       const x = M + i * (cardW + cardGap);
-      drawKpiCard(doc, x, cardsY, cardW, cardH, k);
+      drawKpiCard(doc, x, cardsY, cardW, cardH, k, FONT_REG, FONT_BOLD);
     });
 
     // =========================
-    // CHARTS (2) - ONE ROW
+    // ROW 2: LEFT monthly chart | RIGHT waste codes table (Top 8)
     // =========================
-    const chartsY = cardsY + cardH + 16;
-    const chartH = 210;
-    const leftW = Math.floor(contentW * 0.42);
-    const rightW = contentW - leftW - 12;
+    const row2Y = cardsY + cardH + 14;
+    const boxH2 = 185;
+    const leftW2 = Math.floor(contentW * 0.62);
+    const rightW2 = contentW - leftW2 - 12;
 
-    // Build chart data from your REAL stats:
-    // Pie: per_sector (tone)
-    const pieData = perSector.map(s => ({
-      label: `S${s.sector_number}`,
-      value: Number(s.total_tons || 0),
-      color: s.color || "#10b981",
-    }));
+    // Left monthly line chart
+    const monthlyPng = await makeMonthlyLine(monthlyEvolution);
+    drawBoxTitle(doc, M, row2Y, leftW2, boxH2, "Cantități depozitate lunar (tone)", FONT_REG, FONT_BOLD);
+    doc.image(monthlyPng, M + 10, row2Y + 28, { width: leftW2 - 20, height: boxH2 - 38 });
 
-    // Bar: top_operators (tone)
-    const barData = topOperators.slice(0, 5).map(o => ({
-      label: o.institution_name || "—",
-      value: Number(o.total_tons || 0),
-    }));
-
-    if (pieData.length) {
-      const piePng = await makePieChart(pieData);
-      doc.image(piePng, M, chartsY, { width: leftW, height: chartH });
-      doc.font("InterBold").fontSize(11).fillColor("#111827")
-        .text("Distribuție pe sectoare (tone)", M, chartsY + chartH + 6, { width: leftW });
-    }
-
-    if (barData.length) {
-      const barPng = await makeHorizontalBar(barData);
-      doc.image(barPng, M + leftW + 12, chartsY, { width: rightW, height: chartH });
-      doc.font("InterBold").fontSize(11).fillColor("#111827")
-        .text("Top 5 operatori (tone)", M + leftW + 12, chartsY + chartH + 6, { width: rightW });
-    }
+    // Right waste codes table
+    const wasteTop = wasteCodes.slice(0, 8);
+    drawWasteCodesTable(doc, M + leftW2 + 12, row2Y, rightW2, boxH2, wasteTop, FONT_REG, FONT_BOLD);
 
     // =========================
-    // TABLE (compact) - keep 1 page
+    // ROW 3: LEFT sectors table | RIGHT top 5 operators
     // =========================
-    const tableY = chartsY + chartH + 30;
-    const footerH = 22;
-    const maxTableH = pageH - M - footerH - tableY;
+    const row3Y = row2Y + boxH2 + 12;
+    const boxH3 = 140;
+    const leftW3 = Math.floor(contentW * 0.52);
+    const rightW3 = contentW - leftW3 - 12;
 
-    drawSectorMiniTable(doc, M, tableY, contentW, Math.max(80, maxTableH), perSector, Number(summary.total_tons || 0));
+    drawSectorsTable(doc, M, row3Y, leftW3, boxH3, perSector, Number(summary.total_tons || 0), FONT_REG, FONT_BOLD);
+    drawTopOperatorsTable(doc, M + leftW3 + 12, row3Y, rightW3, boxH3, topOperators.slice(0, 5), FONT_REG, FONT_BOLD);
 
     // =========================
-    // FOOTER (always inside page)
+    // FOOTER
     // =========================
     const footerY = pageH - M - 14;
-    doc.font("Inter").fontSize(8.5).fillColor("#64748b")
-      .text("Raport generat automat din SAMD · reflectă filtrele aplicate la momentul exportului.", M, footerY, {
-        width: contentW,
-        align: "left",
-      });
+    doc.font(FONT_REG).fontSize(8.5).fillColor("#64748b").text(
+      "Raport generat automat din SAMD · reflectă filtrele aplicate la momentul exportului.",
+      M,
+      footerY,
+      { width: contentW, align: "left" }
+    );
+
+    doc.font(FONT_REG).fontSize(8.5).fillColor("#64748b").text(
+      `Generat de: ${userName} · ${generatedAt}`,
+      M,
+      footerY,
+      { width: contentW, align: "right" }
+    );
 
     doc.end();
   } catch (error) {
@@ -167,21 +242,30 @@ export const exportLandfillDashboard = async (req, res) => {
   }
 };
 
+// =============================================================================
+// Capture getStats response (no SQL duplication)
+// =============================================================================
 async function captureGetStats(req) {
   return new Promise((resolve, reject) => {
     const fakeRes = {
-      status(code) { this.statusCode = code; return this; },
-      json(payload) { resolve(payload); },
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        resolve(payload);
+      },
     };
     dashboardLandfillController.getStats(req, fakeRes).catch(reject);
   });
 }
 
+// =============================================================================
+// Paths: fonts + logo
+// =============================================================================
 function getFonts() {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
-
-  // src/controllers -> src/assets/fonts
   const base = path.resolve(__dirname, "../assets/fonts");
   return {
     fontRegular: path.join(base, "Inter-Regular.ttf"),
@@ -189,9 +273,19 @@ function getFonts() {
   };
 }
 
-function drawKpiCard(doc, x, y, w, h, { title, value, sub, color }) {
-  // Card
+function getLogoPath() {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  return path.resolve(__dirname, "../assets/branding/adigidmb.png");
+}
+
+// =============================================================================
+// UI helpers
+// =============================================================================
+function drawKpiCard(doc, x, y, w, h, { title, value, sub, color }, FONT_REG, FONT_BOLD) {
   doc.save();
+
+  // Card box
   doc.roundedRect(x, y, w, h, 12).fill("#ffffff");
   doc.roundedRect(x, y, w, h, 12).stroke("#e5e7eb");
 
@@ -199,118 +293,164 @@ function drawKpiCard(doc, x, y, w, h, { title, value, sub, color }) {
   doc.rect(x, y, 5, h).fill(color);
 
   // Text
-  doc.fillColor("#64748b").font("Inter").fontSize(9)
-    .text(title, x + 14, y + 12, { width: w - 20 });
+  doc.fillColor("#64748b").font(FONT_REG).fontSize(9).text(title, x + 14, y + 12, { width: w - 20 });
 
-  doc.fillColor("#0f172a").font("InterBold").fontSize(18)
-    .text(String(value), x + 14, y + 28, { width: w - 20 });
+  doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(18).text(safeText(value), x + 14, y + 28, {
+    width: w - 20,
+  });
 
-  doc.fillColor("#94a3b8").font("Inter").fontSize(9)
-    .text(sub, x + 14, y + 54, { width: w - 20 });
+  doc.fillColor("#94a3b8").font(FONT_REG).fontSize(9).text(sub, x + 14, y + 54, { width: w - 20 });
 
   doc.restore();
 }
 
-async function makePieChart(items) {
-  const canvas = createCanvas(520, 360);
-  const ctx = canvas.getContext("2d");
-
-  new Chart(ctx, {
-    type: "doughnut",
-    data: {
-      labels: items.map(i => i.label),
-      datasets: [{
-        data: items.map(i => i.value),
-        backgroundColor: items.map(i => i.color),
-        borderWidth: 2,
-        borderColor: "#ffffff",
-      }],
-    },
-    options: {
-      responsive: false,
-      cutout: "62%",
-      plugins: {
-        legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } },
-      },
-    },
-  });
-
-  return canvas.toBuffer("image/png");
-}
-
-async function makeHorizontalBar(items) {
-  const canvas = createCanvas(780, 360);
-  const ctx = canvas.getContext("2d");
-
-  const labels = items.map(i => (i.label.length > 28 ? i.label.slice(0, 25) + "..." : i.label));
-
-  new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [{
-        data: items.map(i => i.value),
-        backgroundColor: "#10b981",
-        borderWidth: 1,
-      }],
-    },
-    options: {
-      responsive: false,
-      indexAxis: "y",
-      plugins: { legend: { display: false } },
-      scales: { x: { beginAtZero: true } },
-    },
-  });
-
-  return canvas.toBuffer("image/png");
-}
-
-function drawSectorMiniTable(doc, x, y, w, h, sectors, totalTons) {
-  const rows = [...sectors].sort((a, b) => (b.total_tons || 0) - (a.total_tons || 0)).slice(0, 6);
-  const rowH = 18;
-
-  // Header
+function drawBoxTitle(doc, x, y, w, h, title, FONT_REG, FONT_BOLD) {
   doc.save();
   doc.roundedRect(x, y, w, h, 12).fill("#ffffff");
   doc.roundedRect(x, y, w, h, 12).stroke("#e5e7eb");
 
-  doc.rect(x, y, w, 24).fill("#f8fafc");
-  doc.font("InterBold").fontSize(10).fillColor("#334155")
-    .text("Top sectoare (după tone)", x + 12, y + 7, { width: w - 24 });
+  doc.font(FONT_BOLD).fontSize(10).fillColor("#334155").text(title, x + 10, y + 8, { width: w - 20 });
 
-  // Columns
-  const col1 = x + 12;
-  const col2 = x + Math.floor(w * 0.55);
-  const col3 = x + Math.floor(w * 0.75);
-  const col4 = x + w - 12;
+  doc
+    .moveTo(x + 10, y + 24)
+    .lineTo(x + w - 10, y + 24)
+    .lineWidth(1)
+    .strokeColor("#e5e7eb")
+    .stroke();
 
-  doc.font("InterBold").fontSize(9).fillColor("#64748b");
-  doc.text("Sector", col1, y + 30);
-  doc.text("Tichete", col2, y + 30, { width: 80, align: "right" });
-  doc.text("Tone", col3, y + 30, { width: 80, align: "right" });
-  doc.text("%", col4 - 30, y + 30, { width: 30, align: "right" });
+  doc.restore();
+}
 
-  // Rows
-  let cy = y + 46;
-  doc.font("Inter").fontSize(9).fillColor("#0f172a");
+function drawWasteCodesTable(doc, x, y, w, h, rows, FONT_REG, FONT_BOLD) {
+  drawBoxTitle(doc, x, y, w, h, "Coduri deșeu depozitate (Top 8)", FONT_REG, FONT_BOLD);
 
+  const startY = y + 32;
+  const col1 = x + 10;
+  const col2 = x + Math.floor(w * 0.62);
+  const col3 = x + w - 10;
+
+  doc.font(FONT_BOLD).fontSize(9).fillColor("#64748b");
+  doc.text("Cod", col1, startY);
+  doc.text("Tichete", col2, startY, { width: 70, align: "right" });
+  doc.text("Tone", col3 - 70, startY, { width: 70, align: "right" });
+
+  let cy = startY + 14;
+  const rowH = 18;
+
+  doc.font(FONT_REG).fontSize(9).fillColor("#0f172a");
   rows.forEach((r, idx) => {
-    const tons = Number(r.total_tons || 0);
-    const pct = totalTons > 0 ? ((tons / totalTons) * 100).toFixed(1) : "0.0";
+    if (idx % 2 === 1) doc.rect(x + 1, cy - 2, w - 2, rowH).fill("#f8fafc");
 
-    if (idx % 2 === 1) {
-      doc.rect(x + 1, cy - 2, w - 2, rowH).fill("#fafafa");
-    }
+    const code = r.waste_code || "—";
+    const tickets = Number(r.ticket_count || 0).toLocaleString("ro-RO");
+    const tons = r.total_tons_formatted || "0.00";
 
-    doc.fillColor("#0f172a").font("InterBold").text(`S${r.sector_number}`, col1, cy, { width: 60 });
-    doc.fillColor("#64748b").font("Inter").text(r.sector_name || "", col1 + 34, cy, { width: 220 });
-
-    doc.fillColor("#0f172a").text(String((r.total_tickets || 0).toLocaleString("ro-RO")), col2, cy, { width: 80, align: "right" });
-    doc.fillColor("#0f172a").text(String(r.total_tons_formatted || tons.toFixed(2)), col3, cy, { width: 80, align: "right" });
-    doc.fillColor("#0f172a").text(`${pct}%`, col4 - 30, cy, { width: 30, align: "right" });
+    doc.fillColor("#0f172a").font(FONT_BOLD).text(code, col1, cy);
+    doc.fillColor("#0f172a").font(FONT_REG).text(tickets, col2, cy, { width: 70, align: "right" });
+    doc.fillColor("#0f172a").font(FONT_REG).text(tons, col3 - 70, cy, { width: 70, align: "right" });
 
     cy += rowH;
   });
+}
 
-  doc.restore();
+function drawSectorsTable(doc, x, y, w, h, sectors, totalTons, FONT_REG, FONT_BOLD) {
+  drawBoxTitle(doc, x, y, w, h, "Sectoare", FONT_REG, FONT_BOLD);
+
+  const rows = [...sectors].sort((a, b) => (b.total_tons || 0) - (a.total_tons || 0)).slice(0, 6);
+  const startY = y + 32;
+  const col1 = x + 10;
+  const col2 = x + Math.floor(w * 0.62);
+  const col3 = x + w - 10;
+
+  doc.font(FONT_BOLD).fontSize(9).fillColor("#64748b");
+  doc.text("Sector", col1, startY);
+  doc.text("Tichete", col2, startY, { width: 70, align: "right" });
+  doc.text("Tone", col3 - 70, startY, { width: 70, align: "right" });
+
+  let cy = startY + 14;
+  const rowH = 18;
+
+  rows.forEach((r, idx) => {
+    if (idx % 2 === 1) doc.rect(x + 1, cy - 2, w - 2, rowH).fill("#f8fafc");
+
+    const sectorLabel = `S${r.sector_number}`;
+    const tickets = Number(r.total_tickets || 0).toLocaleString("ro-RO");
+    const tons = r.total_tons_formatted || "0.00";
+
+    doc.fillColor("#0f172a").font(FONT_BOLD).text(sectorLabel, col1, cy);
+    doc.fillColor("#0f172a").font(FONT_REG).text(tickets, col2, cy, { width: 70, align: "right" });
+    doc.fillColor("#0f172a").font(FONT_REG).text(tons, col3 - 70, cy, { width: 70, align: "right" });
+
+    cy += rowH;
+  });
+}
+
+function drawTopOperatorsTable(doc, x, y, w, h, ops, FONT_REG, FONT_BOLD) {
+  drawBoxTitle(doc, x, y, w, h, "Top 5 operatori", FONT_REG, FONT_BOLD);
+
+  const startY = y + 32;
+  const col1 = x + 10;
+  const col2 = x + Math.floor(w * 0.74);
+  const col3 = x + w - 10;
+
+  doc.font(FONT_BOLD).fontSize(9).fillColor("#64748b");
+  doc.text("Operator", col1, startY);
+  doc.text("Sectoare", col2, startY, { width: 80, align: "right" });
+  doc.text("Tone", col3 - 70, startY, { width: 70, align: "right" });
+
+  let cy = startY + 14;
+  const rowH = 18;
+
+  ops.forEach((r, idx) => {
+    if (idx % 2 === 1) doc.rect(x + 1, cy - 2, w - 2, rowH).fill("#f8fafc");
+
+    const name = safeText(r.institution_name || "—");
+    const sectors =
+      safeText(r.sector_numbers_display) ||
+      (Array.isArray(r.sector_numbers) ? r.sector_numbers.join(", ") : "") ||
+      "—";
+    const tons = safeText(r.total_tons_formatted || "0.00");
+
+    const shortName = name.length > 30 ? name.slice(0, 27) + "…" : name;
+
+    doc.fillColor("#0f172a").font(FONT_BOLD).text(shortName, col1, cy, { width: col2 - col1 - 6 });
+    doc.fillColor("#0f172a").font(FONT_REG).text(sectors, col2, cy, { width: 80, align: "right" });
+    doc.fillColor("#0f172a").font(FONT_REG).text(tons, col3 - 70, cy, { width: 70, align: "right" });
+
+    cy += rowH;
+  });
+}
+
+// =============================================================================
+// Chart: Monthly line
+// =============================================================================
+async function makeMonthlyLine(monthlyEvolution) {
+  const canvas = createCanvas(920, 360);
+  const ctx = canvas.getContext("2d");
+
+  const labels = monthlyEvolution.map((m) => m.month_name || m.month_label || "");
+  const values = monthlyEvolution.map((m) => Number(m.total_tons || 0));
+
+  new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          data: values,
+          borderWidth: 3,
+          pointRadius: 2,
+          tension: 0.35,
+          borderColor: "#10b981",
+        },
+      ],
+    },
+    options: {
+      responsive: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true } },
+    },
+  });
+
+  return canvas.toBuffer("image/png");
 }
