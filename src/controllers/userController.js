@@ -314,15 +314,6 @@ export const getUserById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Utilizator negăsit' });
     }
 
-    // Check permission - only PLATFORM_ADMIN can create users
-    const { canCreateData } = req.userAccess;
-    if (!canCreateData) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Nu aveți permisiune să creați utilizatori' 
-      });
-    }
-
     res.json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('Get user error:', error);
@@ -442,14 +433,6 @@ const _createUserInternal = async (req, res, data) => {
       message: 'Utilizator creat cu succes',
       data: { user: newUser },
     });
-    // Check permission - only PLATFORM_ADMIN can update users
-    const { canEditData } = req.userAccess;
-    if (!canEditData) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Nu aveți permisiune să editați utilizatori' 
-      });
-    }
 
   } catch (e) {
     await client.query('ROLLBACK');
@@ -568,15 +551,6 @@ const _updateUserInternal = async (req, res, userId, data) => {
     return res.json({
       success: true,
       message: 'Utilizator actualizat cu succes',
-    // Check permission - only PLATFORM_ADMIN can delete users
-    const { canDeleteData } = req.userAccess;
-    if (!canDeleteData) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Nu aveți permisiune să ștergeți utilizatori' 
-      });
-    }
-
     });
   } catch (e) {
     await client.query('ROLLBACK');
