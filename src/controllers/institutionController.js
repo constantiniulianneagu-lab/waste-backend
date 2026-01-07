@@ -306,6 +306,8 @@ export const getInstitutionById = async (req, res) => {
 
 
 // CREATE INSTITUTION - păstrăm așa cum e (nu schimbăm)
+export const createInstitution = async (req, res) => {
+  try {
     // Check permission - only PLATFORM_ADMIN can create institutions
     const { canCreateData } = req.userAccess;
     if (!canCreateData) {
@@ -315,8 +317,6 @@ export const getInstitutionById = async (req, res) => {
       });
     }
 
-export const createInstitution = async (req, res) => {
-  try {
     const { name, type, sector, contactEmail } = req.body;
 
     // Validare
@@ -362,6 +362,9 @@ export const createInstitution = async (req, res) => {
   }
 };
 
+// UPDATE INSTITUTION - păstrăm așa cum e (nu schimbăm)
+export const updateInstitution = async (req, res) => {
+  try {
     // Check permission - only PLATFORM_ADMIN can update institutions
     const { canEditData } = req.userAccess;
     if (!canEditData) {
@@ -371,9 +374,6 @@ export const createInstitution = async (req, res) => {
       });
     }
 
-// UPDATE INSTITUTION - păstrăm așa cum e (nu schimbăm)
-export const updateInstitution = async (req, res) => {
-  try {
     const { id } = req.params;
     const { name, type, sector, contactEmail, isActive } = req.body;
 
@@ -461,6 +461,11 @@ export const updateInstitution = async (req, res) => {
     });
   }
 };
+
+
+// DELETE INSTITUTION - păstrăm așa cum e (nu schimbăm)
+export const deleteInstitution = async (req, res) => {
+  try {
     // Check permission - only PLATFORM_ADMIN can delete institutions
     const { canDeleteData } = req.userAccess;
     if (!canDeleteData) {
@@ -470,10 +475,6 @@ export const updateInstitution = async (req, res) => {
       });
     }
 
-
-// DELETE INSTITUTION - păstrăm așa cum e (nu schimbăm)
-export const deleteInstitution = async (req, res) => {
-  try {
     const { id } = req.params;
 
     // Verifică dacă instituția există
@@ -551,6 +552,12 @@ export const getInstitutionStats = async (req, res) => {
 
 // GET INSTITUTION CONTRACTS - SIMPLIFIED (returns empty, use specific endpoints)
 // Frontend trebuie să folosească endpoint-uri specifice:
+// - /api/institutions/:id/tmb-contracts
+// - /api/institutions/:id/waste-contracts
+// - /api/institutions/:id/sorting-contracts
+// - /api/institutions/:id/disposal-contracts
+export const getInstitutionContracts = async (req, res) => {
+  try {
     // Check if user has access to institutions page
     const { scopes } = req.userAccess;
     if (scopes?.institutions === 'NONE') {
@@ -560,12 +567,6 @@ export const getInstitutionStats = async (req, res) => {
       });
     }
 
-// - /api/institutions/:id/tmb-contracts
-// - /api/institutions/:id/waste-contracts
-// - /api/institutions/:id/sorting-contracts
-// - /api/institutions/:id/disposal-contracts
-export const getInstitutionContracts = async (req, res) => {
-  try {
     const { id } = req.params;
     
     // Verifică dacă instituția există
