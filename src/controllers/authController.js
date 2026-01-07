@@ -111,10 +111,22 @@ export const login = async (req, res) => {
 
     // Calculate userAccess for this user
     const mockReq = { user: { id: user.id, role: user.role } };
-    const mockRes = {};
+    const mockRes = {
+      status: (code) => ({
+        json: (data) => {
+          throw new Error(`Mock res.status(${code}) called: ${JSON.stringify(data)}`);
+        }
+      })
+    };
     const mockNext = () => {};
     
-    await resolveUserAccess(mockReq, mockRes, mockNext);
+    try {
+      await resolveUserAccess(mockReq, mockRes, mockNext);
+    } catch (err) {
+      // If resolveUserAccess throws error, userAccess won't be set
+      console.error('[Login] Error calculating userAccess:', err.message);
+    }
+    
     const userAccess = mockReq.userAccess;
 
     // Returnează user info + tokens + userAccess
@@ -264,10 +276,21 @@ export const getCurrentUser = async (req, res) => {
 
     // Calculate userAccess
     const mockReq = { user: { id: user.id, role: user.role } };
-    const mockRes = {};
+    const mockRes = {
+      status: (code) => ({
+        json: (data) => {
+          throw new Error(`Mock res.status(${code}) called: ${JSON.stringify(data)}`);
+        }
+      })
+    };
     const mockNext = () => {};
     
-    await resolveUserAccess(mockReq, mockRes, mockNext);
+    try {
+      await resolveUserAccess(mockReq, mockRes, mockNext);
+    } catch (err) {
+      console.error('[getCurrentUser] Error calculating userAccess:', err.message);
+    }
+    
     const userAccess = mockReq.userAccess;
 
     // Găsește instituțiile userului

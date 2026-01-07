@@ -1,69 +1,50 @@
 // src/middleware/resolveUserAccess.js
 // ============================================================================
-// resolveUserAccess middleware - VERSIUNE SIMPLIFICATĂ 2.0
-// ============================================================================
-// Calculează scope-ul de vizibilitate o singură dată și îl atașează la req.userAccess
-//
-// LOGICA SIMPLIFICATĂ:
-// 1. User → Role (din users.role)
-// 2. User → Institution (din user_institutions)
-// 3. Institution → Sectors (din institution_sectors)
-// 4. Rolul + Instituția determină automat toate permisiunile
-//
-// NU MAI FOLOSIM: user_permissions (păstrat pentru backwards compatibility)
+// resolveUserAccess middleware
+// - Computes visibility scope ONCE and attaches it to req.userAccess
+// - Adds BOTH:
+//   - sectorIdsAll: all Bucharest sectors (1..6)
+//   - institutionSectorIds: sectors mapped to the user's institution (if any)
+// - This lets you implement your requirements correctly:
+//   * Landfill + TMB pages: ADMIN_INSTITUTION = FULL access (use sectorIdsAll)
+//   * Reports: ADMIN_INSTITUTION PMB = ALL, Sector city hall = only its sectors (use institutionSectorIds)
 // ============================================================================
 
-import pool from '../config/database.js';
-import { ROLES, getPageScope, isPMBInstitution } from '../constants/roles.js';
+import pool from "../config/database.js";
+import { ROLES } from "../constants/roles.js";
 
-export const resolveUserAccess = async (req, res, next) => {
-  try {
-    if (!req.user?.id || !req.user?.role) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Neautentificat' 
-      });
-    }
+// ============================================================================
+// PURE FUNCTION: Calculate userAccess without Express dependencies
+// ============================================================================
+export const calculateUserAccess = async (userId, role) => {
+  // Helper: fetch ALL sectors (București 1..6)
+  const allSectorsQ = await pool.query(
+    `SELECT id, sector_number
+     FROM sectors
+     WHERE is_active = true AND deleted_at IS NULL
+     ORDER BY sector_number`
+  );
+  const sectorIdsAll = allSectorsQ.rows.map((r) => r.id);
 
-    const userId = req.user.id;
-    const role = req.user.role;
+  // Helper: fetch user's institution (optional for some roles)
+  const instQ = await pool.query(
+    `SELECT i.id, i.name, i.type, i.short_name
+     FROM user_institutions ui
+     JOIN institutions i ON ui.institution_id = i.id
+     WHERE ui.user_id = $1
+     LIMIT 1`,
+    [userId]
+  );
 
-    // ----------------------------------------------------------------------------
-    // STEP 1: Fetch ALL sectors (București 1-6)
-    // ----------------------------------------------------------------------------
-    const allSectorsQuery = await pool.query(
-      `SELECT id, sector_number, sector_name
-       FROM sectors
-       WHERE is_active = true AND deleted_at IS NULL
-       ORDER BY sector_number`
-    );
-    const allSectors = allSectorsQuery.rows;
-    const sectorIdsAll = allSectors.map((s) => s.id);
+  const institutionId = instQ.rows[0]?.id ?? null;
+  const institutionName = instQ.rows[0]?.name ?? null;
+  const institutionType = instQ.rows[0]?.type ?? null;
 
-    // ----------------------------------------------------------------------------
-    // STEP 2: Fetch user's institution (if exists)
-    // ----------------------------------------------------------------------------
-    const institutionQuery = await pool.query(
-      `SELECT i.id, i.name, i.type, i.short_name, i.sector
-       FROM user_institutions ui
-       JOIN institutions i ON ui.institution_id = i.id
-       WHERE ui.user_id = $1
-       LIMIT 1`,
-      [userId]
-    );
-
-    const institution = institutionQuery.rows[0] || null;
-    const institutionId = institution?.id || null;
-    const institutionName = institution?.name || null;
-    const institutionType = institution?.type || null;
-
-    // ----------------------------------------------------------------------------
-    // STEP 3: Fetch sectors mapped to institution
-    // ----------------------------------------------------------------------------
-    let institutionSectorIds = [];
-    if (institutionId) {
-      const sectorsQuery = await pool.query(
-        `SELECT s.id, s.sector_number, s.sector_name
+  // Helper: fetch sectors mapped to institution (if institution exists)
+  let institutionSectorIds = [];
+  if (institutionId) {
+      const sectorsQ = await pool.query(
+        `SELECT s.id, s.sector_number
          FROM institution_sectors ins
          JOIN sectors s ON ins.sector_id = s.id
          WHERE ins.institution_id = $1
@@ -72,223 +53,163 @@ export const resolveUserAccess = async (req, res, next) => {
          ORDER BY s.sector_number`,
         [institutionId]
       );
-      institutionSectorIds = sectorsQuery.rows.map((s) => s.id);
+      institutionSectorIds = sectorsQ.rows.map((r) => r.id);
     }
 
-    // Detectăm dacă instituția este PMB (are toate cele 6 sectoare)
-    const isPMB = isPMBInstitution(institutionSectorIds);
+    // PMB detection (best effort):
+    // - If institution has all 6 sectors mapped => PMB-like access for sector-scoped pages
+    // - IMPORTANT: This does NOT affect LANDFILL/TMB for ADMIN_INSTITUTION (they must be FULL)
+    const isPMB = institutionSectorIds.length === 6;
 
-    // ----------------------------------------------------------------------------
-    // STEP 4: Build userAccess object based on role
-    // ----------------------------------------------------------------------------
-
-    // === PLATFORM_ADMIN ===
+    // 1) PLATFORM_ADMIN => ALL sectors, can edit
     if (role === ROLES.PLATFORM_ADMIN) {
       req.userAccess = {
         role,
         userId,
-        accessLevel: 'ALL',
-        
-        // Sector data
+        accessLevel: "ALL",
         sectorIdsAll,
+        sectorIds: sectorIdsAll, // backward compatible
         institutionSectorIds: sectorIdsAll,
-        visibleSectorIds: sectorIdsAll, // pentru backwards compatibility
-        
-        // Institution data
-        institutionId: null, // PLATFORM_ADMIN nu este legat de o instituție specifică
-        institutionName: 'ADIGIDMB',
-        institutionType: 'ASSOCIATION',
+        visibleSectorIds: sectorIdsAll,
+        institutionId: institutionId || null,
+        institutionName: institutionName || "ADIGIDMB",
+        institutionType: institutionType || "ASSOCIATION",
         isPMB: false,
-        
-        // Permissions
-        canEdit: true,
-        canCreate: true,
-        canDelete: true,
-        canExport: true,
-        
-        // Per-page scopes (explicit pentru claritate)
+        canEditData: true,
+        canCreateData: true,
+        canDeleteData: true,
+        canExportData: true,
+
+        // Per-page scopes (explicit, so requirements are clear)
         scopes: {
-          landfill: 'ALL',
-          tmb: 'ALL',
-          reports: 'ALL',
-          sectors: 'ALL',
-          profileContracts: 'ALL',
-          users: 'ALL',
-          institutions: 'ALL',
+          landfill: "ALL",
+          tmb: "ALL",
+          reports: "ALL",
+          sectors: "ALL",
+          profileContracts: "ALL",
+          institutions: "ALL",
+          users: "ALL",
         },
       };
       return next();
     }
 
-    // === REGULATOR_VIEWER ===
+    // 2) REGULATOR_VIEWER => ALL sectors, no edit, NO reports & NO profile contracts section (per requirements)
     if (role === ROLES.REGULATOR_VIEWER) {
       req.userAccess = {
         role,
         userId,
-        accessLevel: 'ALL',
-        
-        // Sector data - vede toate sectoarele
+        accessLevel: "ALL",
         sectorIdsAll,
+        sectorIds: sectorIdsAll, // backward compatible
         institutionSectorIds: sectorIdsAll,
-        visibleSectorIds: sectorIdsAll,
-        
-        // Institution data
+        visibleSectorIds: sectorIdsAll, // for filtering queries
         institutionId,
-        institutionName: institutionName || 'Autoritate Publică',
+        institutionName: institutionName ?? "Autoritate Publică",
         institutionType,
         isPMB: false,
-        
-        // Permissions - doar read-only
-        canEdit: false,
-        canCreate: false,
-        canDelete: false,
-        canExport: true,
-        
-        // Per-page scopes
+        canEditData: false,
+        canCreateData: false,
+        canDeleteData: false,
+        canExportData: true,
         scopes: {
-          landfill: 'ALL',           // ✅ Vede toate sectoarele
-          tmb: 'ALL',                // ✅ Vede toate sectoarele
-          reports: 'NONE',           // ❌ Nu vede pagina Rapoarte
-          sectors: 'ALL',            // ✅ Vede toate sectoarele (conform cerințelor actualizate)
-          profileContracts: 'NONE',  // ❌ Nu vede secțiunea Contracte din profil
-          users: 'NONE',             // ❌ Nu vede pagina Utilizatori
-          institutions: 'NONE',      // ❌ Nu vede pagina Instituții
+          landfill: "ALL",          // ✅ All sectors, read-only
+          tmb: "ALL",               // ✅ All sectors, read-only
+          sectors: "ALL",           // ✅ All sectors, read-only (CORRECTED)
+          reports: "NONE",          // ✅ No access
+          institutions: "NONE",     // ✅ No access
+          users: "NONE",            // ✅ No access
+          profileContracts: "NONE", // ✅ Contract section hidden
         },
       };
       return next();
     }
 
-    // === INSTITUTION_ADMIN și EDITOR_INSTITUTION ===
-    // Aceste roluri TREBUIE să aibă o instituție asociată
-    if (role === ROLES.INSTITUTION_ADMIN || role === ROLES.EDITOR_INSTITUTION) {
+    // For roles that MUST have an institution
+    if (role === ROLES.ADMIN_INSTITUTION || role === ROLES.EDITOR_INSTITUTION) {
       if (!institutionId) {
-        return res.status(403).json({ 
-          success: false, 
-          message: 'Utilizator fără instituție asociată' 
-        });
+        return res.status(403).json({ success: false, message: "User fără instituție asociată" });
       }
 
-      // --- INSTITUTION_ADMIN (PMB) ---
-      if (role === ROLES.INSTITUTION_ADMIN) {
+      // ADMIN_INSTITUTION:
+      // - Landfill/TMB/Sectors: ALL sectors (read-only)
+      // - Reports/Contracts: ALL sectors (read-only)
+      // - NO access to Users or Institutions pages
+      if (role === ROLES.ADMIN_INSTITUTION) {
         req.userAccess = {
           role,
           userId,
-          accessLevel: 'ALL',
-          
-          // Sector data - INSTITUTION_ADMIN vede toate sectoarele
+          accessLevel: "ALL",
           sectorIdsAll,
-          institutionSectorIds,
-          visibleSectorIds: sectorIdsAll, // Vede toate pentru Landfill/TMB/Sectoare
-          
-          // Institution data
+          sectorIds: sectorIdsAll,
+          institutionSectorIds,        // Institution's mapped sectors (all 6 for PMB)
+          visibleSectorIds: sectorIdsAll, // Always see all sectors
           institutionId,
           institutionName,
           institutionType,
           isPMB,
-          
-          // Permissions - read-only (nu poate modifica)
-          canEdit: false,
-          canCreate: false,
-          canDelete: false,
-          canExport: true,
-          
-          // Per-page scopes
+          canEditData: false,
+          canCreateData: false,
+          canDeleteData: false,
+          canExportData: true,
+
           scopes: {
-            landfill: 'ALL',           // ✅ Vede toate sectoarele
-            tmb: 'ALL',                // ✅ Vede toate sectoarele
-            reports: 'ALL',            // ✅ Vede toate sectoarele (deoarece este PMB)
-            sectors: 'ALL',            // ✅ Vede toate sectoarele
-            profileContracts: 'ALL',   // ✅ Vede toate contractele
-            users: 'NONE',             // ❌ Nu vede pagina Utilizatori
-            institutions: 'NONE',      // ❌ Nu vede pagina Instituții
+            landfill: "ALL",         // ✅ All sectors, read-only
+            tmb: "ALL",              // ✅ All sectors, read-only
+            sectors: "ALL",          // ✅ All sectors, read-only
+            reports: "ALL",          // ✅ All sectors, read-only
+            profileContracts: "ALL", // ✅ All sectors, read-only
+            institutions: "NONE",    // ✅ No access (CORRECTED)
+            users: "NONE",           // ✅ No access (CORRECTED)
           },
         };
         return next();
       }
 
-      // --- EDITOR_INSTITUTION (Primării Sectoare) ---
+      // EDITOR_INSTITUTION:
+      // - Landfill/TMB: ALL sectors (read-only)
+      // - Reports/Sectors/Contracts: Only their sector (read-only)
+      // - NO access to Users or Institutions pages
       if (role === ROLES.EDITOR_INSTITUTION) {
-        // Determină ce sectoare vede:
-        // - Pentru Landfill/TMB: toate sectoarele
-        // - Pentru Rapoarte/Contracte/Sectoare: doar sectoarele sale
-        
         req.userAccess = {
           role,
           userId,
-          accessLevel: 'SECTOR',
-          
-          // Sector data
+          accessLevel: "SECTOR",
           sectorIdsAll,
+          sectorIds: institutionSectorIds, // Only their sector(s)
           institutionSectorIds,
-          visibleSectorIds: institutionSectorIds, // Doar sectoarele sale pentru filtrare
-          
-          // Institution data
+          visibleSectorIds: institutionSectorIds, // Filter by their sector
           institutionId,
           institutionName,
           institutionType,
-          isPMB,
-          
-          // Permissions - read-only
-          canEdit: false,
-          canCreate: false,
-          canDelete: false,
-          canExport: true,
-          
-          // Per-page scopes
+          isPMB: false, // EDITOR_INSTITUTION is always sector-level
+          canEditData: false,
+          canCreateData: false,
+          canDeleteData: false,
+          canExportData: true,
+
           scopes: {
-            landfill: 'ALL',           // ✅ Vede toate sectoarele
-            tmb: 'ALL',                // ✅ Vede toate sectoarele
-            reports: 'SECTOR',         // ⚠️ Vede doar sectorul său
-            sectors: 'SECTOR',         // ⚠️ Vede doar sectorul său
-            profileContracts: 'SECTOR',// ⚠️ Vede doar contractele sectorului său
-            users: 'NONE',             // ❌ Nu vede pagina Utilizatori
-            institutions: 'NONE',      // ❌ Nu vede pagina Instituții
+            landfill: "ALL",             // ✅ All sectors, read-only
+            tmb: "ALL",                  // ✅ All sectors, read-only
+            reports: "SECTOR",           // ✅ Only their sector, read-only
+            sectors: "SECTOR",           // ✅ Only their sector, read-only
+            profileContracts: "SECTOR",  // ✅ Only their sector, read-only
+            institutions: "NONE",        // ✅ No access
+            users: "NONE",               // ✅ No access
           },
         };
         return next();
       }
     }
 
-    // === UNKNOWN ROLE ===
-    return res.status(403).json({ 
-      success: false, 
-      message: `Rol necunoscut sau invalid: ${role}` 
-    });
-
+    // Unknown role
+    return res.status(403).json({ success: false, message: `Rol necunoscut: ${role}` });
   } catch (err) {
-    console.error('[resolveUserAccess] Error:', err);
-    return res.status(500).json({ 
-      success: false, 
-      message: 'Eroare la calculul permisiunilor de acces' 
-    });
+    console.error("resolveUserAccess error:", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Eroare la calculul accesului (resolveUserAccess)" });
   }
 };
 
-// ----------------------------------------------------------------------------
-// Helper: Verifică dacă utilizatorul are acces la un sector specific
-// ----------------------------------------------------------------------------
-export const hasAccessToSector = (userAccess, sectorId) => {
-  if (!userAccess || !sectorId) return false;
-  
-  // PLATFORM_ADMIN și cei cu accessLevel ALL au acces la orice sector
-  if (userAccess.accessLevel === 'ALL') return true;
-  
-  // Verifică dacă sectorul este în lista de sectoare vizibile
-  return userAccess.visibleSectorIds.includes(sectorId);
-};
-
-// ----------------------------------------------------------------------------
-// Helper: Verifică dacă utilizatorul poate edita date
-// ----------------------------------------------------------------------------
-export const canEditData = (userAccess) => {
-  return userAccess?.canEdit === true;
-};
-
-// ----------------------------------------------------------------------------
-// EXPORT
-// ----------------------------------------------------------------------------
-export default { 
-  resolveUserAccess,
-  hasAccessToSector,
-  canEditData,
-};
+export default { resolveUserAccess };
