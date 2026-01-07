@@ -2,6 +2,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import pool from '../config/database.js';
+import { resolveUserAccess } from '../middleware/resolveUserAccess.js';
 
 // Generate JWT tokens
 const generateTokens = (userId, email, role) => {
@@ -108,7 +109,15 @@ export const login = async (req, res) => {
 
     console.log('🎉 Login successful for user:', user.email);
 
-    // Returnează user info + tokens
+    // Calculate userAccess for this user
+    const mockReq = { user: { id: user.id, role: user.role } };
+    const mockRes = {};
+    const mockNext = () => {};
+    
+    await resolveUserAccess(mockReq, mockRes, mockNext);
+    const userAccess = mockReq.userAccess;
+
+    // Returnează user info + tokens + userAccess
     res.json({
       success: true,
       message: 'Login successful',
@@ -118,7 +127,8 @@ export const login = async (req, res) => {
           email: user.email,
           firstName: user.first_name,
           lastName: user.last_name,
-          role: user.role
+          role: user.role,
+          userAccess: userAccess // ✅ Add userAccess to response
         },
         accessToken,
         refreshToken
@@ -252,6 +262,14 @@ export const getCurrentUser = async (req, res) => {
 
     const user = result.rows[0];
 
+    // Calculate userAccess
+    const mockReq = { user: { id: user.id, role: user.role } };
+    const mockRes = {};
+    const mockNext = () => {};
+    
+    await resolveUserAccess(mockReq, mockRes, mockNext);
+    const userAccess = mockReq.userAccess;
+
     // Găsește instituțiile userului
     const institutionsResult = await pool.query(
       `SELECT i.id, i.name, i.type, i.sector
@@ -271,7 +289,8 @@ export const getCurrentUser = async (req, res) => {
         role: user.role,
         isActive: user.is_active,
         createdAt: user.created_at,
-        institutions: institutionsResult.rows
+        institutions: institutionsResult.rows,
+        userAccess: userAccess // ✅ Add userAccess
       }
     });
 
