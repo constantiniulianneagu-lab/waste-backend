@@ -81,6 +81,15 @@ const assertInstitutionAdminCanManageTarget = async (req, targetUserId) => {
 // GET ALL USERS
 export const getAllUsers = async (req, res) => {
   try {
+    // Check if user has access to users page - only PLATFORM_ADMIN
+    const { scopes } = req.userAccess;
+    if (scopes?.users === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați utilizatorii' 
+      });
+    }
+
     const { page = 1, limit = 500, role, search, institutionId, status } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
 
@@ -218,6 +227,15 @@ export const getAllUsers = async (req, res) => {
 // GET USER BY ID
 export const getUserById = async (req, res) => {
   try {
+    // Check if user has access to users page
+    const { scopes } = req.userAccess;
+    if (scopes?.users === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați utilizatorii' 
+      });
+    }
+
     const userId = Number(req.params.id);
 
     // If ADMIN_INSTITUTION -> only within own institution
@@ -294,6 +312,15 @@ export const getUserById = async (req, res) => {
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Utilizator negăsit' });
+    }
+
+    // Check permission - only PLATFORM_ADMIN can create users
+    const { canCreateData } = req.userAccess;
+    if (!canCreateData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să creați utilizatori' 
+      });
     }
 
     res.json({ success: true, data: result.rows[0] });
@@ -415,6 +442,15 @@ const _createUserInternal = async (req, res, data) => {
       message: 'Utilizator creat cu succes',
       data: { user: newUser },
     });
+    // Check permission - only PLATFORM_ADMIN can update users
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să editați utilizatori' 
+      });
+    }
+
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
@@ -532,6 +568,15 @@ const _updateUserInternal = async (req, res, userId, data) => {
     return res.json({
       success: true,
       message: 'Utilizator actualizat cu succes',
+    // Check permission - only PLATFORM_ADMIN can delete users
+    const { canDeleteData } = req.userAccess;
+    if (!canDeleteData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să ștergeți utilizatori' 
+      });
+    }
+
     });
   } catch (e) {
     await client.query('ROLLBACK');
@@ -552,6 +597,15 @@ export const deleteUser = async (req, res) => {
         return res.status(check.status).json({ success: false, message: check.message });
       }
     }
+    // Check if user has access to users page
+    const { scopes } = req.userAccess;
+    if (scopes?.users === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați utilizatorii' 
+      });
+    }
+
 
     const result = await pool.query(
       `UPDATE users SET deleted_at = CURRENT_TIMESTAMP, is_active = false, updated_at = CURRENT_TIMESTAMP
@@ -1493,4 +1547,3 @@ export const getProfileOperators = async (req, res) => {
     });
   }
 };
-

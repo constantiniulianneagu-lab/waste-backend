@@ -79,6 +79,15 @@ const applySectorScope = ({
 
 export const getTmbStats = async (req, res) => {
   try {
+    // Check if user has access to TMB page
+    const { scopes } = req.userAccess;
+    if (scopes?.tmb === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina TMB' 
+      });
+    }
+
     const { start_date, end_date, sector_id, year } = req.query;
 
     // ----------------------------------------------------------------------
@@ -93,7 +102,7 @@ export const getTmbStats = async (req, res) => {
     }
 
     const isAll = access.accessLevel === 'ALL';
-    const allowedSectorUuids = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+    const allowedSectorUuids = Array.isArray(access.visibleSectorIds) ? access.visibleSectorIds : [];
     if (!isAll && allowedSectorUuids.length === 0) {
       return res.status(403).json({ success: false, message: 'Access denied: no sectors assigned' });
     }
@@ -599,6 +608,15 @@ export const getTmbStats = async (req, res) => {
 
 export const getOutputDetails = async (req, res) => {
   try {
+    // Check if user has access to TMB page
+    const { scopes } = req.userAccess;
+    if (scopes?.tmb === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina TMB' 
+      });
+    }
+
     const { output_type, start_date, end_date, sector_id, year } = req.query;
 
     const access = req.userAccess;
@@ -607,7 +625,7 @@ export const getOutputDetails = async (req, res) => {
     }
 
     const isAll = access.accessLevel === 'ALL';
-    const allowedSectorUuids = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+    const allowedSectorUuids = Array.isArray(access.visibleSectorIds) ? access.visibleSectorIds : [];
     if (!isAll && allowedSectorUuids.length === 0) {
       return res.status(403).json({ success: false, message: 'Access denied: no sectors assigned' });
     }

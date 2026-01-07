@@ -16,6 +16,15 @@ import pool from '../config/database.js';
 
 export const getWasteOperatorContracts = async (req, res) => {
   try {
+    // Check if user has access to contracts page
+    const { scopes } = req.userAccess;
+    if (scopes?.contracts === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați contractele' 
+      });
+    }
+
     const { institutionId } = req.params;
     
     // 1. Verifică că instituția există și e WASTE_OPERATOR
@@ -144,6 +153,15 @@ export const getWasteOperatorContracts = async (req, res) => {
 
 export const getWasteOperatorContractById = async (req, res) => {
   try {
+    // Check if user has access to contracts page
+    const { scopes } = req.userAccess;
+    if (scopes?.contracts === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați contractele' 
+      });
+    }
+
     const { contractId } = req.params;
     
     const result = await pool.query(
@@ -215,6 +233,15 @@ export const createWasteOperatorContract = async (req, res) => {
   const client = await pool.connect();
   
   try {
+    // Check permission
+    const { canCreateData } = req.userAccess;
+    if (!canCreateData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să creați contracte' 
+      });
+    }
+
     await client.query('BEGIN');
     
     const {
@@ -325,6 +352,15 @@ export const updateWasteOperatorContract = async (req, res) => {
   const client = await pool.connect();
   
   try {
+    // Check permission
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să editați contracte' 
+      });
+    }
+
     await client.query('BEGIN');
     
     const { contractId } = req.params;
@@ -453,6 +489,15 @@ export const updateWasteOperatorContract = async (req, res) => {
 
 export const deleteWasteOperatorContract = async (req, res) => {
   try {
+    // Check permission
+    const { canDeleteData } = req.userAccess;
+    if (!canDeleteData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să ștergeți contracte' 
+      });
+    }
+
     const { contractId } = req.params;
     
     const result = await pool.query(
@@ -487,6 +532,15 @@ export const deleteWasteOperatorContract = async (req, res) => {
 
 export const createWasteOperatorAmendment = async (req, res) => {
   try {
+    // Check permission
+    const { canCreateData } = req.userAccess;
+    if (!canCreateData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să creați amendamente' 
+      });
+    }
+
     const { contractId } = req.params;
     const {
       amendment_number,
@@ -557,6 +611,15 @@ export const createWasteOperatorAmendment = async (req, res) => {
 
 export const deleteWasteOperatorAmendment = async (req, res) => {
   try {
+    // Check permission
+    const { canDeleteData } = req.userAccess;
+    if (!canDeleteData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să ștergeți amendamente' 
+      });
+    }
+
     const { amendmentId } = req.params;
     
     const result = await pool.query(

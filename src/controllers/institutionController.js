@@ -5,6 +5,15 @@ import pool from '../config/database.js';
 // GET ALL INSTITUTIONS (with sectors) + SCOPE FILTERING
 export const getAllInstitutions = async (req, res) => {
   try {
+    // Check if user has access to institutions page - only PLATFORM_ADMIN
+    const { scopes } = req.userAccess;
+    if (scopes?.institutions === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați instituțiile' 
+      });
+    }
+
     const { limit = 1000, type, search } = req.query;
 
     const access = req.userAccess; // setat de resolveUserAccess
@@ -178,6 +187,15 @@ export const getAllInstitutions = async (req, res) => {
 
 // GET SINGLE INSTITUTION + SCOPE CHECK
 export const getInstitutionById = async (req, res) => {
+    // Check if user has access to institutions page
+    const { scopes } = req.userAccess;
+    if (scopes?.institutions === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați instituțiile' 
+      });
+    }
+
   try {
     const { id } = req.params;
 
@@ -288,6 +306,15 @@ export const getInstitutionById = async (req, res) => {
 
 
 // CREATE INSTITUTION - păstrăm așa cum e (nu schimbăm)
+    // Check permission - only PLATFORM_ADMIN can create institutions
+    const { canCreateData } = req.userAccess;
+    if (!canCreateData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să creați instituții' 
+      });
+    }
+
 export const createInstitution = async (req, res) => {
   try {
     const { name, type, sector, contactEmail } = req.body;
@@ -334,6 +361,15 @@ export const createInstitution = async (req, res) => {
     });
   }
 };
+
+    // Check permission - only PLATFORM_ADMIN can update institutions
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să editați instituții' 
+      });
+    }
 
 // UPDATE INSTITUTION - păstrăm așa cum e (nu schimbăm)
 export const updateInstitution = async (req, res) => {
@@ -425,6 +461,15 @@ export const updateInstitution = async (req, res) => {
     });
   }
 };
+    // Check permission - only PLATFORM_ADMIN can delete institutions
+    const { canDeleteData } = req.userAccess;
+    if (!canDeleteData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să ștergeți instituții' 
+      });
+    }
+
 
 // DELETE INSTITUTION - păstrăm așa cum e (nu schimbăm)
 export const deleteInstitution = async (req, res) => {
@@ -461,6 +506,15 @@ export const deleteInstitution = async (req, res) => {
       message: 'Eroare la ștergerea instituției'
     });
   }
+    // Check if user has access to institutions page
+    const { scopes } = req.userAccess;
+    if (scopes?.institutions === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați instituțiile' 
+      });
+    }
+
 };
 
 // GET INSTITUTION STATISTICS - păstrăm așa cum e (nu schimbăm)
@@ -497,6 +551,15 @@ export const getInstitutionStats = async (req, res) => {
 
 // GET INSTITUTION CONTRACTS - SIMPLIFIED (returns empty, use specific endpoints)
 // Frontend trebuie să folosească endpoint-uri specifice:
+    // Check if user has access to institutions page
+    const { scopes } = req.userAccess;
+    if (scopes?.institutions === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați instituțiile' 
+      });
+    }
+
 // - /api/institutions/:id/tmb-contracts
 // - /api/institutions/:id/waste-contracts
 // - /api/institutions/:id/sorting-contracts

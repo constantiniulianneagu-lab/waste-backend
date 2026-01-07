@@ -40,7 +40,7 @@ const buildSectorScope = (req, alias = 't') => {
   if (!access) throw new Error('Missing req.userAccess (resolveUserAccess not applied)');
 
   const isAll = access.accessLevel === 'ALL';
-  const sectorIds = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+  const visibleSectorIds = Array.isArray(access.visibleSectorIds) ? access.visibleSectorIds : [];
   const requestedSectorUuid = req.requestedSectorUuid || null;
 
   let sectorWhere = '';
@@ -51,7 +51,7 @@ const buildSectorScope = (req, alias = 't') => {
     sectorParams.push(requestedSectorUuid);
   } else if (!isAll) {
     sectorWhere = `AND ${alias}.sector_id = ANY(${{}})`;
-    sectorParams.push(sectorIds);
+    sectorParams.push(visibleSectorIds);
   }
 
   return { sectorWhere, sectorParams, requestedSectorUuid };
@@ -143,6 +143,15 @@ const buildListFilters = (req, alias = 't') => {
 // ----------------------------------------------------------------------------
 export const getAllDisposalTickets = async (req, res) => {
   try {
+    // Check if user has access to disposal page
+    const { scopes } = req.userAccess;
+    if (scopes?.landfill === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina Depozitare' 
+      });
+    }
+
     const { page = 1, limit = 50, sort_by = 'ticket_date', sort_dir = 'desc' } = req.query;
 
     const pageNum = clampInt(page, 1, 1000000, 1);
@@ -248,6 +257,15 @@ export const getAllDisposalTickets = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const getDisposalTicketById = async (req, res) => {
   try {
+    // Check if user has access to disposal page
+    const { scopes } = req.userAccess;
+    if (scopes?.landfill === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina Depozitare' 
+      });
+    }
+
     const { id } = req.params;
     const ticketId = parseInt(String(id), 10);
 
@@ -317,6 +335,15 @@ export const getDisposalTicketById = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const getDisposalStats = async (req, res) => {
   try {
+    // Check if user has access to disposal page
+    const { scopes } = req.userAccess;
+    if (scopes?.landfill === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina Depozitare' 
+      });
+    }
+
     const f = buildListFilters(req, 't');
 
     const summarySql = `
@@ -402,6 +429,15 @@ export const getDisposalStats = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const createDisposalTicket = async (req, res) => {
   try {
+    // Check permission
+    const { canCreateData } = req.userAccess;
+    if (!canCreateData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să creați bilete' 
+      });
+    }
+
     const {
       ticket_number,
       ticket_date,
@@ -486,6 +522,15 @@ export const createDisposalTicket = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const updateDisposalTicket = async (req, res) => {
   try {
+    // Check permission
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să editați bilete' 
+      });
+    }
+
     const { id } = req.params;
     const ticketId = parseInt(String(id), 10);
     if (Number.isNaN(ticketId)) {
@@ -577,6 +622,15 @@ export const updateDisposalTicket = async (req, res) => {
 // ----------------------------------------------------------------------------
 export const deleteDisposalTicket = async (req, res) => {
   try {
+    // Check permission
+    const { canDeleteData } = req.userAccess;
+    if (!canDeleteData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să ștergeți bilete' 
+      });
+    }
+
     const { id } = req.params;
     const ticketId = parseInt(String(id), 10);
     if (Number.isNaN(ticketId)) {

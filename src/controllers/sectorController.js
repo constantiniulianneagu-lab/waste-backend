@@ -8,6 +8,15 @@ import pool from '../config/database.js';
 // GET ALL SECTORS (cu instituții asociate) + SCOPE FILTERING
 export const getAllSectors = async (req, res) => {
   try {
+    // Check if user has access to sectors page
+    const { scopes } = req.userAccess;
+    if (scopes?.sectors === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați sectoarele' 
+      });
+    }
+
     const { includeInstitutions = 'true' } = req.query;
 
     const access = req.userAccess;
@@ -18,9 +27,9 @@ export const getAllSectors = async (req, res) => {
     const params = [];
     let whereExtra = '';
 
-    // Dacă nu e ALL, filtrăm doar la sectorIds
+    // Dacă nu e ALL, filtrăm doar la visibleSectorIds
     if (access.accessLevel !== 'ALL') {
-      params.push(access.sectorIds);
+      params.push(access.visibleSectorIds);
       whereExtra = ` AND s.id = ANY($1::uuid[]) `;
     }
 
@@ -105,6 +114,15 @@ export const getAllSectors = async (req, res) => {
 // GET SECTOR BY ID + SCOPE CHECK
 export const getSectorById = async (req, res) => {
   try {
+    // Check if user has access to sectors page
+    const { scopes } = req.userAccess;
+    if (scopes?.sectors === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați sectoarele' 
+      });
+    }
+
     const { id } = req.params;
 
     const access = req.userAccess;
@@ -112,7 +130,7 @@ export const getSectorById = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Missing req.userAccess' });
     }
 
-    if (access.accessLevel !== 'ALL' && !access.sectorIds.includes(id)) {
+    if (access.accessLevel !== 'ALL' && !access.visibleSectorIds.includes(id)) {
       return res.status(403).json({
         success: false,
         message: 'Nu aveți acces la acest sector'
@@ -180,6 +198,14 @@ export const updateSector = async (req, res) => {
   const client = await pool.connect();
   
   try {
+    // Check permission
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să editați sectoare' 
+      });
+    }
     const { id } = req.params;
     const { sector_name, description, area_km2, population } = req.body;
 
@@ -247,6 +273,14 @@ export const updateSectorInstitutions = async (req, res) => {
   const client = await pool.connect();
   
   try {
+    // Check permission
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să editați sectoare' 
+      });
+    }
     const { id } = req.params;
     const { institutionIds } = req.body; // Array of institution IDs
 
@@ -334,6 +368,14 @@ export const updateSectorInstitutions = async (req, res) => {
 // GET SECTOR STATISTICS
 export const getSectorStatistics = async (req, res) => {
   try {
+    // Check if user has access to sectors page
+    const { scopes } = req.userAccess;
+    if (scopes?.sectors === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați sectoarele' 
+      });
+    }
     const { id } = req.params;
 
     const statsQuery = `
@@ -383,6 +425,15 @@ export const getSectorStatistics = async (req, res) => {
 // GET INSTITUTIONS BY SECTOR
 export const getInstitutionsBySector = async (req, res) => {
   try {
+    // Check if user has access to sectors page
+    const { scopes } = req.userAccess;
+    if (scopes?.sectors === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați sectoarele' 
+      });
+    }
+
     const { id } = req.params;
     const { type } = req.query; // Optional: filter by institution type
 

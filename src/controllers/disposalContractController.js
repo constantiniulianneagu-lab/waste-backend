@@ -14,6 +14,15 @@ import pool from '../config/database.js';
  */
 export const getDisposalContracts = async (req, res) => {
   try {
+    // Check if user has access to contracts page
+    const { scopes } = req.userAccess;
+    if (scopes?.contracts === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați contractele' 
+      });
+    }
+
     const { institutionId } = req.params;
 
     const query = `
@@ -61,6 +70,15 @@ export const getDisposalContracts = async (req, res) => {
  */
 export const getDisposalContract = async (req, res) => {
   try {
+    // Check if user has access to contracts page
+    const { scopes } = req.userAccess;
+    if (scopes?.contracts === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați contractele' 
+      });
+    }
+
     const { institutionId, contractId } = req.params;
 
     const query = `
@@ -113,6 +131,15 @@ export const getDisposalContract = async (req, res) => {
  */
 export const createDisposalContract = async (req, res) => {
   try {
+    // Check permission
+    const { canCreateData } = req.userAccess;
+    if (!canCreateData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să creați contracte' 
+      });
+    }
+
     const { institutionId } = req.params;
     const {
       contract_number,
@@ -198,6 +225,15 @@ export const createDisposalContract = async (req, res) => {
  */
 export const updateDisposalContract = async (req, res) => {
   try {
+    // Check permission
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să editați contracte' 
+      });
+    }
+
     const { institutionId, contractId } = req.params;
     const {
       contract_number,
@@ -294,6 +330,15 @@ export const updateDisposalContract = async (req, res) => {
  */
 export const deleteDisposalContract = async (req, res) => {
   try {
+    // Check permission
+    const { canDeleteData } = req.userAccess;
+    if (!canDeleteData) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să ștergeți contracte' 
+      });
+    }
+
     const { institutionId, contractId } = req.params;
 
     const query = `

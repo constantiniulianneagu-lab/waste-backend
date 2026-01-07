@@ -75,6 +75,15 @@ export const getStats = async (req, res) => {
   }
 
   try {
+    // Check if user has access to landfill page
+    const { scopes } = req.userAccess;
+    if (scopes?.landfill === 'NONE') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Nu aveți permisiune să accesați pagina Depozitare' 
+      });
+    }
+
     const { year, from, to, sector_id } = req.query;
 
     // ----------------------------------------------------------------------
@@ -105,7 +114,7 @@ export const getStats = async (req, res) => {
     }
 
     const isAll = access.accessLevel === 'ALL';
-    const allowedSectorUuids = Array.isArray(access.sectorIds) ? access.sectorIds : [];
+    const allowedSectorUuids = Array.isArray(access.visibleSectorIds) ? access.visibleSectorIds : [];
 
     if (!isAll && allowedSectorUuids.length === 0) {
       return res.status(403).json({ success: false, message: 'Access denied: no sectors assigned' });
