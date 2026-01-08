@@ -141,19 +141,22 @@ const calculateCollection = async (sectorUUID, start_date, end_date) => {
   );
   
   // D. Get contract and cost
+  // NOTE: waste_collector_contracts NU are tariff direct - e în waste_collector_contract_codes
   const contractResult = await pool.query(
     `SELECT 
       wc.id as contract_id,
       wc.contract_number,
-      wc.tariff_per_ton,
-      i.name as operator_name
+      i.name as operator_name,
+      COALESCE(AVG(wccc.tariff), 0) as avg_tariff
     FROM waste_collector_contracts wc
     JOIN institutions i ON wc.institution_id = i.id
+    LEFT JOIN waste_collector_contract_codes wccc ON wccc.contract_id = wc.id AND wccc.deleted_at IS NULL
     WHERE wc.sector_id = $1
       AND wc.contract_date_start <= $3
       AND (wc.contract_date_end IS NULL OR wc.contract_date_end >= $2)
       AND wc.is_active = true
       AND wc.deleted_at IS NULL
+    GROUP BY wc.id, wc.contract_number, i.name
     ORDER BY wc.contract_date_start DESC
     LIMIT 1`,
     [sectorUUID, start_date, end_date]
@@ -165,7 +168,7 @@ const calculateCollection = async (sectorUUID, start_date, end_date) => {
   
   if (contractResult.rows.length > 0) {
     has_contract = true;
-    tariff_per_ton = Number(contractResult.rows[0].tariff_per_ton);
+    tariff_per_ton = Number(contractResult.rows[0].avg_tariff || 0);
     contract_info = {
       contract_number: contractResult.rows[0].contract_number,
       operator_name: contractResult.rows[0].operator_name,
@@ -241,18 +244,16 @@ const calculateSorting = async (sectorUUID, start_date, end_date) => {
   // C. Get contract and cost
   const contractResult = await pool.query(
     `SELECT 
-      soc.id as contract_id,
-      soc.contract_number,
-      soc.tariff_per_ton,
-      i.name as operator_name
-    FROM sorting_operator_contracts soc
-    JOIN institutions i ON soc.institution_id = i.id
-    WHERE soc.sector_id = $1
-      AND soc.contract_date_start <= $3
-      AND (soc.contract_date_end IS NULL OR soc.contract_date_end >= $2)
-      AND soc.is_active = true
-      AND soc.deleted_at IS NULL
-    ORDER BY soc.contract_date_start DESC
+      id as contract_id,
+      contract_number,
+      tariff_per_ton
+    FROM sorting_operator_contracts
+    WHERE sector_id = $1
+      AND contract_date_start <= $3
+      AND (contract_date_end IS NULL OR contract_date_end >= $2)
+      AND is_active = true
+      AND deleted_at IS NULL
+    ORDER BY contract_date_start DESC
     LIMIT 1`,
     [sectorUUID, start_date, end_date]
   );
@@ -263,10 +264,9 @@ const calculateSorting = async (sectorUUID, start_date, end_date) => {
   
   if (contractResult.rows.length > 0) {
     has_contract = true;
-    tariff_per_ton = Number(contractResult.rows[0].tariff_per_ton);
+    tariff_per_ton = Number(contractResult.rows[0].tariff_per_ton || 0);
     contract_info = {
       contract_number: contractResult.rows[0].contract_number,
-      operator_name: contractResult.rows[0].operator_name,
       tariff_per_ton: tariff_per_ton
     };
   }
@@ -393,18 +393,16 @@ const calculateTMB = async (sectorUUID, start_date, end_date) => {
   // E. Get contract and cost
   const contractResult = await pool.query(
     `SELECT 
-      tc.id as contract_id,
-      tc.contract_number,
-      tc.tariff_per_ton,
-      i.name as station_name
-    FROM tmb_contracts tc
-    JOIN institutions i ON tc.institution_id = i.id
-    WHERE tc.sector_id = $1
-      AND tc.contract_date_start <= $3
-      AND (tc.contract_date_end IS NULL OR tc.contract_date_end >= $2)
-      AND tc.is_active = true
-      AND tc.deleted_at IS NULL
-    ORDER BY tc.contract_date_start DESC
+      id as contract_id,
+      contract_number,
+      tariff_per_ton
+    FROM tmb_contracts
+    WHERE sector_id = $1
+      AND contract_date_start <= $3
+      AND (contract_date_end IS NULL OR contract_date_end >= $2)
+      AND is_active = true
+      AND deleted_at IS NULL
+    ORDER BY contract_date_start DESC
     LIMIT 1`,
     [sectorUUID, start_date, end_date]
   );
@@ -415,10 +413,9 @@ const calculateTMB = async (sectorUUID, start_date, end_date) => {
   
   if (contractResult.rows.length > 0) {
     has_contract = true;
-    tariff_per_ton = Number(contractResult.rows[0].tariff_per_ton);
+    tariff_per_ton = Number(contractResult.rows[0].tariff_per_ton || 0);
     contract_info = {
       contract_number: contractResult.rows[0].contract_number,
-      station_name: contractResult.rows[0].station_name,
       tariff_per_ton: tariff_per_ton
     };
   }
@@ -572,13 +569,11 @@ const calculateDisposal = async (sectorUUID, start_date, end_date) => {
     `SELECT 
       dc.id as contract_id,
       dc.contract_number,
-      dcs.tariff_per_ton,
-      dcs.cec_tax_per_ton,
-      dcs.total_per_ton,
-      i.name as facility_name
+      dcs.tariff,
+      dcs.cec,
+      (COALESCE(dcs.tariff, 0) + COALESCE(dcs.cec, 0)) as total_per_ton
     FROM disposal_contract_sectors dcs
     JOIN disposal_contracts dc ON dcs.contract_id = dc.id
-    JOIN institutions i ON dc.institution_id = i.id
     WHERE dcs.sector_id = $1
       AND dc.contract_date_start <= $3
       AND (dc.contract_date_end IS NULL OR dc.contract_date_end >= $2)
@@ -598,12 +593,11 @@ const calculateDisposal = async (sectorUUID, start_date, end_date) => {
   
   if (contractResult.rows.length > 0) {
     has_contract = true;
-    tariff_per_ton = Number(contractResult.rows[0].tariff_per_ton);
-    cec_tax_per_ton = Number(contractResult.rows[0].cec_tax_per_ton);
-    total_per_ton = Number(contractResult.rows[0].total_per_ton);
+    tariff_per_ton = Number(contractResult.rows[0].tariff || 0);
+    cec_tax_per_ton = Number(contractResult.rows[0].cec || 0);
+    total_per_ton = Number(contractResult.rows[0].total_per_ton || 0);
     contract_info = {
       contract_number: contractResult.rows[0].contract_number,
-      facility_name: contractResult.rows[0].facility_name,
       tariff_per_ton: tariff_per_ton,
       cec_tax_per_ton: cec_tax_per_ton,
       total_per_ton: total_per_ton
