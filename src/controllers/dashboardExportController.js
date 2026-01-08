@@ -4,20 +4,21 @@
  * DASHBOARD EXPORT CONTROLLER - LANDFILL (DEPOZITARE) - 1 PAGE A4 LANDSCAPE
  * ============================================================================
  *
+ * ✅ NO native deps (NO canvas / NO chart.js)  -> works everywhere
  * ✅ Corporate theme (ADIGIDMB):
- * Petrol Blue:   #003B5C (titles, strong accents, table headers)
- * Emerald Green: #2E7D32 (positive, charts)
- * Anthracite:    #2A2A2A (main text)
- * Light Gray:    #E6E6E6 (table background / subtle fills)
- * White:         #FFFFFF (space)
- * Table grid:    #DADADA
+ *   Petrol Blue:   #003B5C (titles, strong accents, table headers)
+ *   Emerald Green: #2E7D32 (positive, chart)
+ *   Anthracite:    #2A2A2A (main text)
+ *   Light Gray:    #E6E6E6 (table bg / grid)
+ *   White:         #FFFFFF
+ *   Table grid:    #DADADA
  *
  * ✅ Layout (1 page):
- * Header: title left, period line (bold label), logo right (ONLY logo), separator line
- * Row 1: 4 KPI cards with icons (simple Unicode icons)
- * Row 2: LEFT Monthly bar chart | RIGHT Waste codes table (Top 8) + description small gray
+ * Header: title left, Period line (bold label + ":"), logo right only, petrol separator line
+ * Row 1: 4 KPI cards with minimal “outline-ish” unicode icons
+ * Row 2: LEFT Monthly bar chart (drawn with PDFKit) | RIGHT Waste codes table (Top 8 + tiny description)
  * Row 3: LEFT "Distribuția pe sectoare" table | RIGHT "Top 5 operatori" table
- * Footer: thin gray line + ℹ︎ + text left, right "Generat la data: dd.mm.yyyy, ora HH:mm:ss" (RO tz)
+ * Footer: thin gray line + ℹ︎ left text; RIGHT "Generat la data: dd.mm.yyyy, ora HH:mm:ss" (RO time)
  *
  * ✅ Uses SAME data as /stats (reuses dashboardLandfillController.getStats)
  * ✅ Diacritics OK with Inter TTF fonts
@@ -32,8 +33,6 @@ import PDFDocument from "pdfkit";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
-import { createCanvas } from "canvas";
-import Chart from "chart.js/auto";
 
 import dashboardLandfillController from "./dashboardLandfillController.js";
 
@@ -47,7 +46,6 @@ const COLORS = {
   lightGray: "#E6E6E6",
   white: "#FFFFFF",
   grid: "#DADADA",
-  muted: "#64748b",
   soft: "#F7F7F7",
 };
 
@@ -61,8 +59,8 @@ const formatDateRO = (iso) => {
   return `${d}.${m}.${y}`;
 };
 
-const formatDateTimeROWithSeconds = (d) => {
-  const formatted = new Intl.DateTimeFormat("ro-RO", {
+const formatDateTimeROWithSeconds = (d) =>
+  new Intl.DateTimeFormat("ro-RO", {
     timeZone: "Europe/Bucharest",
     day: "2-digit",
     month: "2-digit",
@@ -72,10 +70,6 @@ const formatDateTimeROWithSeconds = (d) => {
     second: "2-digit",
     hour12: false,
   }).format(d);
-
-  // ro-RO Intl may return "08.01.2026, 02:08:56" already — keep it.
-  return formatted;
-};
 
 const safeText = (v) => (v === null || v === undefined ? "" : String(v));
 
@@ -99,11 +93,6 @@ export const exportLandfillDashboard = async (req, res) => {
     const topOperators = Array.isArray(data.top_operators) ? data.top_operators : [];
     const monthlyEvolution = Array.isArray(data.monthly_evolution) ? data.monthly_evolution : [];
     const wasteCodes = Array.isArray(data.waste_categories) ? data.waste_categories : [];
-
-    // Logged user name
-    const first = req.user?.firstName || req.user?.first_name || "";
-    const last = req.user?.lastName || req.user?.last_name || "";
-    const userName = [first, last].filter(Boolean).join(" ").trim();
 
     const generatedAt = formatDateTimeROWithSeconds(new Date());
 
@@ -161,7 +150,7 @@ export const exportLandfillDashboard = async (req, res) => {
         const logoW = 140; // wide logo: keep proportional
         const logoX = pageW - M - logoW;
         const logoY = headerY + 4;
-        doc.image(logoPath, logoX, logoY, { width: logoW }); // no height => proportional
+        doc.image(logoPath, logoX, logoY, { width: logoW }); // proportional
       } catch {
         // ignore
       }
@@ -247,12 +236,20 @@ export const exportLandfillDashboard = async (req, res) => {
     const leftW2 = Math.floor(contentW * 0.62);
     const rightW2 = contentW - leftW2 - 12;
 
-    // Left: monthly bar chart (rounded thin bars)
-    const monthlyPng = await makeMonthlyBar(monthlyEvolution);
+    // Left: monthly bar chart (drawn with PDFKit)
     drawBoxTitle(doc, M, row2Y, leftW2, boxH2, "Cantități depozitate lunar (tone)", FONT_REG, FONT_BOLD);
-    doc.image(monthlyPng, M + 10, row2Y + 28, { width: leftW2 - 20, height: boxH2 - 38 });
+    drawMonthlyBarChart(
+      doc,
+      M + 10,
+      row2Y + 28,
+      leftW2 - 20,
+      boxH2 - 38,
+      monthlyEvolution,
+      FONT_REG,
+      FONT_BOLD
+    );
 
-    // Right: waste codes table (Top 8) with small gray description
+    // Right: waste codes table (Top 8)
     const wasteTop = wasteCodes.slice(0, 8);
     drawWasteCodesTable(doc, M + leftW2 + 12, row2Y, rightW2, boxH2, wasteTop, FONT_REG, FONT_BOLD);
 
@@ -268,11 +265,10 @@ export const exportLandfillDashboard = async (req, res) => {
     drawTopOperatorsTable(doc, M + leftW3 + 12, row3Y, rightW3, boxH3, topOperators.slice(0, 5), FONT_REG, FONT_BOLD);
 
     // =========================
-    // FOOTER (corporate)
+    // FOOTER (corporate, date only)
     // =========================
     const footerY = pageH - M - 18;
 
-    // thin line
     doc.save();
     doc
       .moveTo(M, footerY - 6)
@@ -282,23 +278,21 @@ export const exportLandfillDashboard = async (req, res) => {
       .stroke();
     doc.restore();
 
-    // left: info icon + text
-    doc.font(FONT_REG).fontSize(8.5).fillColor(COLORS.anthracite)
-      .text("ℹ︎", M, footerY, { continued: true });
+    doc.font(FONT_REG).fontSize(8.5).fillColor(COLORS.anthracite).text("ℹ︎", M, footerY, { continued: true });
 
-    doc.font(FONT_REG).fontSize(8.5).fillColor(COLORS.anthracite)
+    doc
+      .font(FONT_REG)
+      .fontSize(8.5)
+      .fillColor(COLORS.anthracite)
       .text(" Raport generat automat din SAMD · Reflectă filtrele aplicate la momentul exportului.", {
         continued: false,
       });
 
-    // right: generated at
-    const rightText = `Generat la data: ${generatedAt}`;
-    doc.font(FONT_REG).fontSize(8.5).fillColor(COLORS.anthracite)
-      .text(rightText, M, footerY, { width: contentW, align: "right" });
-
-    // optional: include user name on right (requested earlier)
-    // If you want BOTH user + datetime, uncomment below and comment the line above:
-    // const rightText = `Generat de: ${userName || "—"} · ${generatedAt}`;
+    doc
+      .font(FONT_REG)
+      .fontSize(8.5)
+      .fillColor(COLORS.anthracite)
+      .text(`Generat la data: ${generatedAt}`, M, footerY, { width: contentW, align: "right" });
 
     doc.end();
   } catch (error) {
@@ -358,7 +352,7 @@ function drawKpiCard(doc, x, y, w, h, kpi, FONT_REG, FONT_BOLD) {
 
   doc.save();
 
-  // subtle shadow mimic: draw a light rect behind
+  // subtle shadow mimic
   doc.roundedRect(x + 2, y + 2, w, h, 14).fillOpacity(0.10).fill("#000000");
   doc.fillOpacity(1);
 
@@ -366,7 +360,7 @@ function drawKpiCard(doc, x, y, w, h, kpi, FONT_REG, FONT_BOLD) {
   doc.roundedRect(x, y, w, h, 14).fill(COLORS.white);
   doc.roundedRect(x, y, w, h, 14).stroke(COLORS.grid);
 
-  // icon circle (outline-ish)
+  // icon circle
   const r = 16;
   const cx = x + 20;
   const cy = y + 22;
@@ -397,11 +391,10 @@ function drawBoxTitle(doc, x, y, w, h, title, FONT_REG, FONT_BOLD) {
   doc.roundedRect(x, y, w, h, 12).fill(COLORS.white);
   doc.roundedRect(x, y, w, h, 12).stroke(COLORS.grid);
 
-  // title
-  doc.font(FONT_BOLD).fontSize(10).fillColor(COLORS.petrol)
-    .text(title, x + 10, y + 8, { width: w - 20 });
+  doc.font(FONT_BOLD).fontSize(10).fillColor(COLORS.petrol).text(title, x + 10, y + 8, {
+    width: w - 20,
+  });
 
-  // separator line
   doc
     .moveTo(x + 10, y + 24)
     .lineTo(x + w - 10, y + 24)
@@ -413,7 +406,6 @@ function drawBoxTitle(doc, x, y, w, h, title, FONT_REG, FONT_BOLD) {
 }
 
 function drawTableHeader(doc, x, y, w, h, cols, FONT_BOLD) {
-  // Petrol header with white text
   doc.save();
   doc.rect(x, y, w, h).fill(COLORS.petrol);
   doc.font(FONT_BOLD).fontSize(9).fillColor(COLORS.white);
@@ -432,10 +424,10 @@ function drawWasteCodesTable(doc, x, y, w, h, rows, FONT_REG, FONT_BOLD) {
   const tableY = y + 32;
   const tableW = w - 20;
 
-  // column widths
-  const tonsW = 86;
+  // column widths tuned to avoid overlap
+  const tonsW = 92;
   const ticketsW = 82;
-  const codeW = tableW - ticketsW - tonsW - 10; // 10 = internal gap
+  const codeW = tableW - ticketsW - tonsW - 10;
 
   const cols = [
     { text: "Cod", x: tableX, w: codeW, align: "left" },
@@ -443,10 +435,8 @@ function drawWasteCodesTable(doc, x, y, w, h, rows, FONT_REG, FONT_BOLD) {
     { text: "Cantitate (t)", x: tableX + codeW + 5 + ticketsW + 5, w: tonsW, align: "right" },
   ];
 
-  // header
   drawTableHeader(doc, tableX, tableY, tableW, 22, cols, FONT_BOLD);
 
-  // rows zebra
   let cy = tableY + 22;
   const rowH = 22;
 
@@ -460,24 +450,33 @@ function drawWasteCodesTable(doc, x, y, w, h, rows, FONT_REG, FONT_BOLD) {
     const tickets = Number(r.ticket_count || 0).toLocaleString("ro-RO");
     const tons = r.total_tons_formatted || "0.00";
 
-    // left icon (simple)
     const icon = "♻︎";
 
-    // Code + tiny desc
-    doc.fillColor(COLORS.anthracite).font(FONT_BOLD).fontSize(9)
+    // code
+    doc
+      .fillColor(COLORS.anthracite)
+      .font(FONT_BOLD)
+      .fontSize(9)
       .text(`${icon} ${code}`, tableX + 6, cy + 4, { width: codeW - 8, ellipsis: true });
 
+    // tiny description
     if (desc) {
-      doc.fillColor("#9aa4b2").font(FONT_REG).fontSize(7.2)
+      doc
+        .fillColor("#9aa4b2")
+        .font(FONT_REG)
+        .fontSize(7.2)
         .text(desc, tableX + 20, cy + 13, { width: codeW - 24, ellipsis: true });
     }
 
-    // numbers
-    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9)
-      .text(tickets, cols[1].x, cy + 6, { width: cols[1].w, align: "right" });
+    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9).text(tickets, cols[1].x, cy + 6, {
+      width: cols[1].w,
+      align: "right",
+    });
 
-    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9)
-      .text(tons, cols[2].x, cy + 6, { width: cols[2].w, align: "right" });
+    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9).text(tons, cols[2].x, cy + 6, {
+      width: cols[2].w,
+      align: "right",
+    });
 
     cy += rowH;
   });
@@ -516,14 +515,21 @@ function drawSectorsTable(doc, x, y, w, h, sectors, FONT_REG, FONT_BOLD) {
     const tickets = Number(r.total_tickets || 0).toLocaleString("ro-RO");
     const tons = r.total_tons_formatted || "0.00";
 
-    doc.fillColor(COLORS.anthracite).font(FONT_BOLD).fontSize(9)
+    doc
+      .fillColor(COLORS.anthracite)
+      .font(FONT_BOLD)
+      .fontSize(9)
       .text(sectorLabel, tableX + 6, cy + 4, { width: sectorW - 8, ellipsis: true });
 
-    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9)
-      .text(tickets, cols[1].x, cy + 4, { width: cols[1].w, align: "right" });
+    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9).text(tickets, cols[1].x, cy + 4, {
+      width: cols[1].w,
+      align: "right",
+    });
 
-    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9)
-      .text(tons, cols[2].x, cy + 4, { width: cols[2].w, align: "right" });
+    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9).text(tons, cols[2].x, cy + 4, {
+      width: cols[2].w,
+      align: "right",
+    });
 
     cy += rowH;
   });
@@ -563,61 +569,85 @@ function drawTopOperatorsTable(doc, x, y, w, h, ops, FONT_REG, FONT_BOLD) {
       "—";
     const tons = safeText(r.total_tons_formatted || "0.00");
 
-    doc.fillColor(COLORS.anthracite).font(FONT_BOLD).fontSize(9)
+    doc
+      .fillColor(COLORS.anthracite)
+      .font(FONT_BOLD)
+      .fontSize(9)
       .text(`🏢 ${name}`, tableX + 6, cy + 4, { width: opW - 8, ellipsis: true });
 
-    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9)
-      .text(sectors, cols[1].x, cy + 4, { width: cols[1].w, align: "right" });
+    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9).text(sectors, cols[1].x, cy + 4, {
+      width: cols[1].w,
+      align: "right",
+    });
 
-    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9)
-      .text(tons, cols[2].x, cy + 4, { width: cols[2].w, align: "right" });
+    doc.fillColor(COLORS.anthracite).font(FONT_REG).fontSize(9).text(tons, cols[2].x, cy + 4, {
+      width: cols[2].w,
+      align: "right",
+    });
 
     cy += rowH;
   });
 }
 
-// =============================================================================
-// Chart: Monthly BAR (rounded thin bars, emerald, light grid)
-// =============================================================================
-async function makeMonthlyBar(monthlyEvolution) {
-  const canvas = createCanvas(920, 360);
-  const ctx = canvas.getContext("2d");
+/**
+ * Monthly BAR chart drawn directly in PDF (no canvas).
+ * - thin rounded emerald bars
+ * - light gray grid
+ */
+function drawMonthlyBarChart(doc, x, y, w, h, monthlyEvolution, FONT_REG, FONT_BOLD) {
+  const padL = 34;
+  const padR = 10;
+  const padT = 10;
+  const padB = 18;
 
-  const labels = monthlyEvolution.map((m) => m.month_name || m.month_label || "");
-  const values = monthlyEvolution.map((m) => Number(m.total_tons || 0));
+  const chartX = x + padL;
+  const chartY = y + padT;
+  const chartW = w - padL - padR;
+  const chartH = h - padT - padB;
 
-  new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [
-        {
-          data: values,
-          backgroundColor: COLORS.emerald,
-          borderRadius: 6,
-          barThickness: 10,
-          maxBarThickness: 12,
-          categoryPercentage: 0.8,
-          barPercentage: 0.8,
-        },
-      ],
-    },
-    options: {
-      responsive: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: {
-          grid: { display: false },
-          ticks: { maxRotation: 0, autoSkip: true },
-        },
-        y: {
-          beginAtZero: true,
-          grid: { display: true, color: COLORS.lightGray },
-          ticks: { precision: 0 },
-        },
-      },
-    },
-  });
+  const values = (monthlyEvolution || []).map((m) => Number(m.total_tons || 0));
+  const labels = (monthlyEvolution || []).map((m) => safeText(m.month_name || m.month_label || ""));
 
-  return canvas.toBuffer("image/png");
+  const max = Math.max(1, ...values);
+
+  // grid
+  doc.save();
+  doc.lineWidth(0.5).strokeColor(COLORS.lightGray);
+  const gridLines = 4;
+  for (let i = 0; i <= gridLines; i++) {
+    const gy = chartY + (chartH * i) / gridLines;
+    doc.moveTo(chartX, gy).lineTo(chartX + chartW, gy).stroke();
+  }
+  doc.restore();
+
+  // y labels (0 and max)
+  doc.fillColor("#6b7280").font(FONT_REG).fontSize(7);
+  doc.text("0", x + 6, chartY + chartH - 4, { width: padL - 10, align: "left" });
+  doc.text(max.toLocaleString("ro-RO"), x + 6, chartY - 3, { width: padL - 10, align: "left" });
+
+  const n = Math.max(1, values.length);
+  const gap = 6;
+  const barW = Math.max(6, Math.floor((chartW - gap * (n - 1)) / n));
+  let bx = chartX;
+
+  for (let i = 0; i < n; i++) {
+    const v = values[i] || 0;
+    const bh = Math.round((v / max) * chartH);
+    const by = chartY + chartH - bh;
+
+    doc.save();
+    doc.fillColor(COLORS.emerald);
+    doc.roundedRect(bx, by, barW, bh, 4).fill();
+    doc.restore();
+
+    // x label every 2 (or all if few)
+    if (labels[i] && (i % 2 === 0 || n <= 8)) {
+      doc.fillColor("#6b7280").font(FONT_REG).fontSize(7);
+      // if label is like "Ian 2025", keep first token to avoid crowding
+      const short = labels[i].split(" ")[0];
+      doc.text(short, bx - 2, chartY + chartH + 3, { width: barW + 4, align: "center" });
+    }
+
+    bx += barW + gap;
+  }
 }
