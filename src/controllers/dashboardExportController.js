@@ -1,18 +1,12 @@
 // src/controllers/dashboardExportController.js
 /**
  * ============================================================================
- * DASHBOARD EXPORT CONTROLLER - LANDFILL (DEPOZITARE) - MODERN SAMSUNG STYLE
+ * DASHBOARD EXPORT CONTROLLER - LANDFILL (DEPOZITARE) - 1 PAGE A4 LANDSCAPE
  * ============================================================================
- * ✅ Modern, premium design inspired by Samsung's clean aesthetic
- * ✅ Bold typography, generous spacing, gradient accents
+ * ✅ UI-matched style (cards + area chart + light tables, like your app)
  * ✅ NO native deps (NO canvas / NO chart.js)
- *
- * Style: Premium, minimalist with bold visual hierarchy
- * - Header: Large bold title with gradient accent bar
- * - Floating cards with subtle shadows and rounded corners
- * - Modern color palette: deep blues, vibrant accents
- * - Clean sans-serif typography with varied weights
- * - Sophisticated data visualization
+ * ✅ Romanian diacritics via Inter fonts (if present)
+ * ✅ Filename: Raport_depozitare_YYYYMMDD_HHMMSS.pdf (Europe/Bucharest)
  * ============================================================================
  */
 
@@ -23,34 +17,37 @@ import fs from "fs";
 import dashboardLandfillController from "./dashboardLandfillController.js";
 
 // =====================
-// MODERN THEME (Samsung-inspired)
+// THEME - match app vibe (emerald + clean neutrals)
 // =====================
 const COLORS = {
-  primary: "#0066FF",      // vibrant blue
-  primaryDark: "#0052CC",  // deeper blue
-  accent: "#00D4AA",       // teal accent
-  purple: "#7B61FF",       // premium purple
-  orange: "#FF6B35",       // warm orange
-  text: "#1A1A1A",         // near black
-  textSoft: "#666666",     // medium gray
-  textLight: "#999999",    // light gray
-  bg: "#F8F9FA",           // soft background
-  bgCard: "#FFFFFF",       // pure white cards
-  border: "#E8E8E8",       // subtle borders
-  gridLight: "#F0F0F0",    // very light grid
+  green: "#10B981",        // emerald
+  greenDark: "#059669",
+  greenSoftFill: "#D1FAE5", // area fill base
+  text: "#0F172A",         // slate-900
+  text2: "#475569",        // slate-600
+  text3: "#94A3B8",        // slate-400
+  border: "#E2E8F0",       // slate-200
+  bgAlt: "#F8FAFC",        // slate-50
+  white: "#FFFFFF",
+  shadow: "#000000",
+  blue: "#3B82F6",
+  amber: "#F59E0B",
+  purple: "#7C3AED",
 };
 
 // =====================
 // FORMATTERS
 // =====================
-const formatDateRO = (iso) => {
+const safeText = (v) => (v === null || v === undefined ? "" : String(v));
+
+const isoToRO = (iso) => {
   if (!iso) return "-";
   const [y, m, d] = String(iso).split("-");
   if (!y || !m || !d) return String(iso);
   return `${d}.${m}.${y}`;
 };
 
-const formatDateTimeROWithSeconds = (d) =>
+const roDateTime = (d) =>
   new Intl.DateTimeFormat("ro-RO", {
     timeZone: "Europe/Bucharest",
     day: "2-digit",
@@ -62,7 +59,28 @@ const formatDateTimeROWithSeconds = (d) =>
     hour12: false,
   }).format(d);
 
-const safeText = (v) => (v === null || v === undefined ? "" : String(v));
+// YYYYMMDD_HHMMSS in Europe/Bucharest
+const bucharestTimestamp = (d) => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+
+  const get = (t) => parts.find((p) => p.type === t)?.value || "00";
+  const YYYY = get("year");
+  const MM = get("month");
+  const DD = get("day");
+  const HH = get("hour");
+  const mm = get("minute");
+  const ss = get("second");
+  return `${YYYY}${MM}${DD}_${HH}${mm}${ss}`;
+};
 
 const ellipsisOneLine = (doc, text, maxWidth, fontName, fontSize) => {
   const s = safeText(text).trim();
@@ -95,39 +113,32 @@ export const exportLandfillDashboard = async (req, res) => {
 
     const data = payload.data || {};
     const filters = payload.filters_applied || {};
+
     const summary = data.summary || {};
     const perSector = Array.isArray(data.per_sector) ? data.per_sector : [];
     const topOperators = Array.isArray(data.top_operators) ? data.top_operators : [];
     const monthlyEvolution = Array.isArray(data.monthly_evolution) ? data.monthly_evolution : [];
     const wasteCodes = Array.isArray(data.waste_categories) ? data.waste_categories : [];
 
-    const generatedAt = formatDateTimeROWithSeconds(new Date());
+    const now = new Date();
+    const generatedAt = roDateTime(now);
 
+    // PDF
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
-      margin: 32,
-      info: { Title: "Raport Depozitare Deșeuri - Modern", Author: "ADIGIDMB / SAMD" },
+      margin: 28,
+      info: { Title: "Raport Depozitare Deșeuri", Author: "ADIGIDMB / SAMD" },
     });
 
-    const now = new Date();
-    const timestamp = new Intl.DateTimeFormat("ro-RO", {
-      timeZone: "Europe/Bucharest",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).format(now).replace(/[.:]/g, "-").replace(/[, ]/g, "_");
-    
-    const filename = `Raport_depozitare_${timestamp}.pdf`;
+    // Filename: Raport_depozitare_YYYYMMDD_HHMMSS.pdf
+    const ts = bucharestTimestamp(now);
+    const filename = `Raport_depozitare_${ts}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     doc.pipe(res);
 
-    // Fonts
+    // Fonts (diacritics)
     const { fontRegular, fontBold } = getFonts();
     if (fs.existsSync(fontRegular) && fs.existsSync(fontBold)) {
       doc.registerFont("Inter", fontRegular);
@@ -136,147 +147,148 @@ export const exportLandfillDashboard = async (req, res) => {
     const FONT_REG = fs.existsSync(fontRegular) ? "Inter" : "Helvetica";
     const FONT_BOLD = fs.existsSync(fontBold) ? "InterBold" : "Helvetica-Bold";
 
+    // Page metrics
     const pageW = doc.page.width;
     const pageH = doc.page.height;
     const M = doc.page.margins.left;
     const contentW = pageW - M * 2;
 
     // =========================
-    // MODERN HEADER with gradient accent
+    // HEADER (match your screenshot)
     // =========================
     const headerY = M;
-    const headerH = 72;
+    const headerH = 46;
 
-    // Background card for header
-    drawModernCard(doc, M, headerY, contentW, headerH, 20);
+    const locationText =
+      filters.sector_id && filters.sector_id !== "all" ? `Sector ${filters.sector_id}` : "București";
 
-    // Gradient accent bar at top
-    drawGradientBar(doc, M, headerY, contentW, 6, 20);
-
-    // Logo (right, floating style)
+    // Logo right (inside its own invisible box)
     const logoPath = getLogoPath();
-    const logoW = 140;
-    const logoX = pageW - M - logoW - 16;
-    const logoY = headerY + 18;
+    const logoW = 150;
+    const logoBoxW = 170;
+    const logoBoxH = headerH;
+    const logoBoxX = pageW - M - logoBoxW;
+    const logoBoxY = headerY;
+
     if (logoPath && fs.existsSync(logoPath)) {
       try {
-        doc.image(logoPath, logoX, logoY, { width: logoW });
+        // center logo within logo box
+        const imgW = logoW;
+        const imgX = logoBoxX + (logoBoxW - imgW) / 2;
+        const imgY = logoBoxY + 9; // visually centered
+        doc.image(logoPath, imgX, imgY, { width: imgW });
       } catch {}
     }
 
-    // Title - large and bold
-    const titleY = headerY + 16;
-    doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(24).text("Raport Depozitare Deșeuri", M + 20, titleY, {
-      width: contentW - logoW - 60,
+    // Title
+    doc
+      .fillColor(COLORS.greenDark)
+      .font(FONT_BOLD)
+      .fontSize(16)
+      .text("RAPORT DEPOZITARE DEȘEURI", M, headerY + 4, { width: contentW - logoBoxW - 10 });
+
+    // Meta line (same row: location + period)
+    const metaY = headerY + 24;
+    doc.fillColor(COLORS.text2).font(FONT_REG).fontSize(10);
+
+    const leftMetaW = contentW - logoBoxW - 10;
+    const meta = `Locație: ${locationText}   •   `;
+    doc.text(meta, M, metaY, { width: leftMetaW, continued: true });
+
+    doc.fillColor(COLORS.text).font(FONT_BOLD).text("Perioada:", { continued: true });
+    doc.fillColor(COLORS.text2).font(FONT_REG).text(` ${isoToRO(filters.from)} – ${isoToRO(filters.to)}`, {
+      continued: false,
     });
 
-    // Subtitle with location and period
-    const locationText = filters.sector_id && filters.sector_id !== "all" 
-      ? `Sector ${filters.sector_id}` 
-      : "București";
-    
-    const subtitleY = titleY + 30;
-    doc.fillColor(COLORS.textSoft).font(FONT_REG).fontSize(11).text(locationText, M + 20, subtitleY, {
-      continued: true,
-    });
-    doc.fillColor(COLORS.textLight).font(FONT_REG).fontSize(11).text("  •  ", { continued: true });
-    doc.fillColor(COLORS.textSoft).font(FONT_REG).fontSize(11).text(
-      `${formatDateRO(filters.from)} – ${formatDateRO(filters.to)}`,
-      { continued: false }
-    );
+    // green divider line
+    doc.save();
+    doc
+      .moveTo(M, headerY + headerH)
+      .lineTo(pageW - M, headerY + headerH)
+      .lineWidth(2)
+      .strokeColor(COLORS.green)
+      .stroke();
+    doc.restore();
 
     // =========================
-    // KPI CARDS - Modern floating style
+    // KPI CARDS - match app cards style
     // =========================
-    const cardsY = headerY + headerH + 20;
-    const cardH = 88;
-    const cardGap = 16;
+    const cardsY = headerY + headerH + 12;
+    const cardH = 72;
+    const cardGap = 12;
     const cardW = (contentW - cardGap * 3) / 4;
 
     const kpis = [
-      { 
-        title: "Total Deșeuri", 
-        value: summary.total_tons_formatted || "0.00", 
-        sub: "tone depozitate", 
-        gradient: [COLORS.primary, COLORS.primaryDark],
-        icon: "●"
-      },
-      { 
-        title: "Tichete", 
-        value: (summary.total_tickets || 0).toLocaleString("ro-RO"), 
-        sub: "înregistrări", 
-        gradient: [COLORS.accent, "#00B894"],
-        icon: "◆"
-      },
-      { 
-        title: "Medie Tichet", 
-        value: Number(summary.avg_weight_per_ticket || 0).toFixed(2), 
-        sub: "tone / tichet", 
-        gradient: [COLORS.orange, "#FF5722"],
-        icon: "▲"
-      },
-      { 
-        title: "Perioadă", 
-        value: String(summary.date_range?.days || 0), 
-        sub: "zile analizate", 
-        gradient: [COLORS.purple, "#6B46C1"],
-        icon: "■"
-      },
+      { title: "TOTAL DEȘEURI", value: summary.total_tons_formatted || "0,00", sub: "tone depozitate", accent: COLORS.green, icon: "♻︎" },
+      { title: "TOTAL TICHETE", value: (summary.total_tickets || 0).toLocaleString("ro-RO"), sub: "înregistrări", accent: COLORS.blue, icon: "🗂︎" },
+      { title: "MEDIE PER TICHET", value: Number(summary.avg_weight_per_ticket || 0).toFixed(2), sub: "tone / tichet", accent: COLORS.amber, icon: "⚖︎" },
+      { title: "PERIOADA", value: String(summary.date_range?.days || 0), sub: "zile analizate", accent: COLORS.purple, icon: "📅" },
     ];
 
     kpis.forEach((k, i) => {
       const x = M + i * (cardW + cardGap);
-      drawModernKpiCard(doc, x, cardsY, cardW, cardH, k, FONT_REG, FONT_BOLD);
+      drawKpiCard(doc, x, cardsY, cardW, cardH, k, FONT_REG, FONT_BOLD);
     });
 
     // =========================
-    // DATA SECTION
+    // ROW 2: area chart (left) + waste codes table (right)
     // =========================
-    const dataY = cardsY + cardH + 20;
-    const sectionH = 220;
-    
-    // Monthly Evolution - Full width, prominent
-    drawModernPanel(doc, M, dataY, contentW, sectionH, "Evoluție Lunară", FONT_REG, FONT_BOLD);
-    drawModernLineChart(doc, M, dataY, contentW, sectionH, monthlyEvolution, FONT_REG, FONT_BOLD);
+    const row2Y = cardsY + cardH + 12;
+    const row2H = 190;
+    const leftW2 = Math.floor(contentW * 0.62);
+    const rightW2 = contentW - leftW2 - 12;
 
-    // =========================
-    // BOTTOM ROW - 3 columns
-    // =========================
-    const bottomY = dataY + sectionH + 16;
-    const bottomH = 200;
-    const col1W = Math.floor(contentW * 0.35);
-    const col2W = Math.floor(contentW * 0.32);
-    const col3W = contentW - col1W - col2W - 32;
+    // Left: area chart panel
+    drawPanel(doc, M, row2Y, leftW2, row2H, FONT_REG, FONT_BOLD);
+    drawAreaChart(doc, M, row2Y, leftW2, row2H, monthlyEvolution, FONT_REG, FONT_BOLD);
 
-    // Waste Codes
-    drawModernPanel(doc, M, bottomY, col1W, bottomH, "Tipuri Deșeuri", FONT_REG, FONT_BOLD);
-    drawModernWasteTable(doc, M, bottomY, col1W, bottomH, wasteCodes.slice(0, 6), FONT_REG, FONT_BOLD);
-
-    // Sectors
-    drawModernPanel(doc, M + col1W + 16, bottomY, col2W, bottomH, "Sectoare", FONT_REG, FONT_BOLD);
-    drawModernSectorsTable(doc, M + col1W + 16, bottomY, col2W, bottomH, perSector, FONT_REG, FONT_BOLD);
-
-    // Operators
-    drawModernPanel(doc, M + col1W + col2W + 32, bottomY, col3W, bottomH, "Top Operatori", FONT_REG, FONT_BOLD);
-    drawModernOperatorsTable(doc, M + col1W + col2W + 32, bottomY, col3W, bottomH, topOperators.slice(0, 5), FONT_REG, FONT_BOLD);
+    // Right: waste codes table panel (Top 8) — no big title, just label
+    drawPanel(doc, M + leftW2 + 12, row2Y, rightW2, row2H, FONT_REG, FONT_BOLD);
+    drawCornerLabel(doc, M + leftW2 + 12, row2Y, "CODURI DEȘEU (TOP 8)", FONT_REG);
+    drawWasteCodesTable(doc, M + leftW2 + 12, row2Y, rightW2, row2H, wasteCodes.slice(0, 8), FONT_REG, FONT_BOLD);
 
     // =========================
-    // MODERN FOOTER
+    // ROW 3: sectors (left) + top operators (right)
+    // =========================
+    const row3Y = row2Y + row2H + 10;
+    const row3H = 140;
+    const leftW3 = Math.floor(contentW * 0.52);
+    const rightW3 = contentW - leftW3 - 12;
+
+    drawPanel(doc, M, row3Y, leftW3, row3H, FONT_REG, FONT_BOLD);
+    drawCornerLabel(doc, M, row3Y, "SECTOARE", FONT_REG);
+    drawSectorsTable(doc, M, row3Y, leftW3, row3H, perSector, FONT_REG, FONT_BOLD);
+
+    drawPanel(doc, M + leftW3 + 12, row3Y, rightW3, row3H, FONT_REG, FONT_BOLD);
+    drawCornerLabel(doc, M + leftW3 + 12, row3Y, "TOP 5 OPERATORI", FONT_REG);
+    drawOperatorsTable(doc, M + leftW3 + 12, row3Y, rightW3, row3H, topOperators.slice(0, 5), FONT_REG, FONT_BOLD);
+
+    // =========================
+    // FOOTER
     // =========================
     const footerY = pageH - M - 16;
-    
-    doc.fillColor(COLORS.textLight).font(FONT_REG).fontSize(8).text(
-      "Raport generat automat · SAMD",
+
+    doc.save();
+    doc
+      .moveTo(M, footerY - 6)
+      .lineTo(pageW - M, footerY - 6)
+      .lineWidth(1)
+      .strokeColor(COLORS.border)
+      .stroke();
+    doc.restore();
+
+    doc.fillColor(COLORS.text3).font(FONT_REG).fontSize(8.5).text(
+      "ℹ︎ Raport generat automat din SAMD · Reflectă filtrele aplicate la momentul exportului.",
       M,
       footerY,
-      { width: contentW / 2, align: "left" }
+      { width: contentW * 0.7, align: "left" }
     );
 
-    doc.fillColor(COLORS.textLight).font(FONT_REG).fontSize(8).text(
-      `Generat: ${generatedAt}`,
-      M + contentW / 2,
+    doc.fillColor(COLORS.text3).font(FONT_REG).fontSize(8.5).text(
+      `Generat la data: ${generatedAt}`,
+      M,
       footerY,
-      { width: contentW / 2, align: "right" }
+      { width: contentW, align: "right" }
     );
 
     doc.end();
@@ -289,7 +301,7 @@ export const exportLandfillDashboard = async (req, res) => {
 };
 
 // =============================================================================
-// Helper Functions
+// Capture getStats response (no SQL duplication)
 // =============================================================================
 async function captureGetStats(req) {
   return new Promise((resolve, reject) => {
@@ -306,6 +318,9 @@ async function captureGetStats(req) {
   });
 }
 
+// =============================================================================
+// Paths
+// =============================================================================
 function getFonts() {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -323,101 +338,14 @@ function getLogoPath() {
 }
 
 // =============================================================================
-// Modern Drawing Helpers
+// UI drawing primitives (rounded cards + soft shadow)
 // =============================================================================
-
-function drawModernCard(doc, x, y, w, h, r = 18) {
-  // Shadow
+function drawCard(doc, x, y, w, h, r = 16) {
   doc.save();
-  doc.roundedRect(x + 2, y + 3, w, h, r).fillOpacity(0.06).fill("#000000");
+  doc.roundedRect(x + 1.5, y + 2.5, w, h, r).fillOpacity(0.06).fill(COLORS.shadow);
   doc.fillOpacity(1);
-  
-  // Card
-  doc.roundedRect(x, y, w, h, r).fill(COLORS.bgCard);
-  doc.roundedRect(x, y, w, h, r).lineWidth(0.5).stroke(COLORS.border);
-  doc.restore();
-}
-
-function drawGradientBar(doc, x, y, w, h, r) {
-  // Simulate gradient with overlapping rectangles
-  const steps = 20;
-  const stepW = w / steps;
-  
-  for (let i = 0; i < steps; i++) {
-    const ratio = i / steps;
-    const color = interpolateColor(COLORS.primary, COLORS.accent, ratio);
-    doc.rect(x + i * stepW, y, stepW + 1, h).fill(color);
-  }
-  
-  // Smooth corners
-  doc.roundedRect(x, y, w, h, r).clip();
-}
-
-function interpolateColor(color1, color2, ratio) {
-  const c1 = parseInt(color1.slice(1), 16);
-  const c2 = parseInt(color2.slice(1), 16);
-  
-  const r1 = (c1 >> 16) & 255;
-  const g1 = (c1 >> 8) & 255;
-  const b1 = c1 & 255;
-  
-  const r2 = (c2 >> 16) & 255;
-  const g2 = (c2 >> 8) & 255;
-  const b2 = c2 & 255;
-  
-  const r = Math.round(r1 + (r2 - r1) * ratio);
-  const g = Math.round(g1 + (g2 - g1) * ratio);
-  const b = Math.round(b1 + (b2 - b1) * ratio);
-  
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-}
-
-function drawModernKpiCard(doc, x, y, w, h, kpi, FONT_REG, FONT_BOLD) {
-  drawModernCard(doc, x, y, w, h, 16);
-
-  // Gradient accent top
-  const accentH = 4;
-  for (let i = 0; i < w; i++) {
-    const ratio = i / w;
-    const color = interpolateColor(kpi.gradient[0], kpi.gradient[1], ratio);
-    doc.rect(x + i, y, 1, accentH).fill(color);
-  }
-
-  // Icon with gradient color
-  doc.fillColor(kpi.gradient[0]).font(FONT_BOLD).fontSize(20).text(kpi.icon, x + 16, y + 16);
-
-  // Title
-  doc.fillColor(COLORS.textLight).font(FONT_REG).fontSize(9).text(kpi.title.toUpperCase(), x + 16, y + 20, {
-    width: w - 32,
-  });
-
-  // Value - large and prominent
-  doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(26).text(safeText(kpi.value), x + 16, y + 36, {
-    width: w - 32,
-  });
-
-  // Subtitle
-  doc.fillColor(COLORS.textSoft).font(FONT_REG).fontSize(9).text(kpi.sub, x + 16, y + 66, {
-    width: w - 32,
-  });
-}
-
-function drawModernPanel(doc, x, y, w, h, title, FONT_REG, FONT_BOLD) {
-  drawModernCard(doc, x, y, w, h, 18);
-
-  // Title with colored dot
-  doc.fillColor(COLORS.primary).font(FONT_BOLD).fontSize(8).text("●", x + 16, y + 16);
-  doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(12).text(title, x + 26, y + 14, {
-    width: w - 42,
-  });
-
-  // Subtle divider
-  doc.save();
-  doc.moveTo(x + 16, y + 36)
-    .lineTo(x + w - 16, y + 36)
-    .lineWidth(1)
-    .strokeColor(COLORS.gridLight)
-    .stroke();
+  doc.roundedRect(x, y, w, h, r).fill(COLORS.white);
+  doc.roundedRect(x, y, w, h, r).lineWidth(1).stroke(COLORS.border);
   doc.restore();
 }
 
@@ -425,240 +353,303 @@ function beginClip(doc, x, y, w, h, r) {
   doc.save();
   doc.roundedRect(x, y, w, h, r).clip();
 }
-
 function endClip(doc) {
   doc.restore();
 }
 
-// =============================================================================
-// Modern Tables
-// =============================================================================
-
-function drawModernWasteTable(doc, x, y, w, h, rows, FONT_REG, FONT_BOLD) {
+function drawPanel(doc, x, y, w, h) {
+  drawCard(doc, x, y, w, h, 18);
+  // inner clip so tables never overflow rounded corners
   beginClip(doc, x, y, w, h, 18);
-
-  const tableX = x + 16;
-  const tableY = y + 44;
-  const tableW = w - 32;
-
-  let cy = tableY;
-  const rowH = 24;
-
-  rows.forEach((r, idx) => {
-    // Alternating background
-    if (idx % 2 === 1) {
-      doc.rect(tableX - 8, cy - 2, tableW + 16, rowH).fill(COLORS.bg);
-    }
-
-    const code = r.waste_code || "—";
-    const tons = r.total_tons_formatted || "0.00";
-
-    // Code with colored circle
-    const circleColor = idx % 3 === 0 ? COLORS.primary : idx % 3 === 1 ? COLORS.accent : COLORS.orange;
-    doc.circle(tableX, cy + 6, 3).fill(circleColor);
-    
-    doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(10).text(code, tableX + 10, cy, {
-      width: tableW - 60,
-    });
-
-    // Tons on right
-    doc.fillColor(COLORS.textSoft).font(FONT_REG).fontSize(10).text(tons, tableX + tableW - 50, cy, {
-      width: 50,
-      align: "right",
-    });
-
-    // Description below (tiny)
-    if (r.waste_description) {
-      const desc = ellipsisOneLine(doc, r.waste_description, tableW - 10, FONT_REG, 7);
-      doc.fillColor(COLORS.textLight).font(FONT_REG).fontSize(7).text(desc, tableX + 10, cy + 12, {
-        width: tableW - 10,
-      });
-    }
-
-    cy += rowH;
-  });
-
-  endClip(doc);
+  // release will be handled by table/chart functions (they call endClip)
 }
 
-function drawModernSectorsTable(doc, x, y, w, h, sectors, FONT_REG, FONT_BOLD) {
-  beginClip(doc, x, y, w, h, 18);
-
-  const rows = [...sectors].sort((a, b) => (b.total_tons || 0) - (a.total_tons || 0)).slice(0, 6);
-
-  const tableX = x + 16;
-  const tableY = y + 44;
-  const tableW = w - 32;
-
-  let cy = tableY;
-  const rowH = 24;
-
-  rows.forEach((r, idx) => {
-    if (idx % 2 === 1) {
-      doc.rect(tableX - 8, cy - 2, tableW + 16, rowH).fill(COLORS.bg);
-    }
-
-    // Sector badge
-    doc.roundedRect(tableX, cy + 2, 32, 16, 8).fill(COLORS.primary);
-    doc.fillColor("#FFFFFF").font(FONT_BOLD).fontSize(9).text(`S${r.sector_number}`, tableX, cy + 6, {
-      width: 32,
-      align: "center",
-    });
-
-    // Tons
-    const tons = r.total_tons_formatted || "0.00";
-    doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(11).text(tons, tableX + 40, cy + 4, {
-      width: tableW - 50,
-    });
-
-    cy += rowH;
-  });
-
-  endClip(doc);
-}
-
-function drawModernOperatorsTable(doc, x, y, w, h, ops, FONT_REG, FONT_BOLD) {
-  beginClip(doc, x, y, w, h, 18);
-
-  const tableX = x + 16;
-  const tableY = y + 44;
-  const tableW = w - 32;
-
-  let cy = tableY;
-  const rowH = 28;
-
-  ops.forEach((r, idx) => {
-    if (idx % 2 === 1) {
-      doc.rect(tableX - 8, cy - 2, tableW + 16, rowH).fill(COLORS.bg);
-    }
-
-    // Rank badge
-    const rankColors = [COLORS.primary, COLORS.accent, COLORS.purple, COLORS.orange, COLORS.textSoft];
-    doc.circle(tableX + 8, cy + 10, 8).fill(rankColors[idx] || COLORS.textSoft);
-    doc.fillColor("#FFFFFF").font(FONT_BOLD).fontSize(9).text(String(idx + 1), tableX + 5, cy + 6, {
-      width: 6,
-      align: "center",
-    });
-
-    // Operator name
-    const name = ellipsisOneLine(doc, r.institution_name || "—", tableW - 70, FONT_BOLD, 9);
-    doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(9).text(name, tableX + 24, cy + 2, {
-      width: tableW - 94,
-    });
-
-    // Tons
-    const tons = r.total_tons_formatted || "0.00";
-    doc.fillColor(COLORS.textSoft).font(FONT_REG).fontSize(9).text(tons, tableX + tableW - 70, cy + 2, {
-      width: 70,
-      align: "right",
-    });
-
-    // Sectors below
-    const sectors = safeText(r.sector_numbers_display || (Array.isArray(r.sector_numbers) ? r.sector_numbers.join(", ") : "—"));
-    doc.fillColor(COLORS.textLight).font(FONT_REG).fontSize(7).text(`Sectoare: ${sectors}`, tableX + 24, cy + 14, {
-      width: tableW - 24,
-    });
-
-    cy += rowH;
-  });
-
-  endClip(doc);
+function drawCornerLabel(doc, x, y, label, FONT_REG) {
+  doc.fillColor(COLORS.text3).font(FONT_REG).fontSize(9);
+  doc.text(label, x + 14, y + 10, { width: 260 });
+  // thin divider line under label
+  doc.save();
+  doc
+    .moveTo(x + 14, y + 26)
+    .lineTo(x + 14 + 260, y + 26)
+    .lineWidth(1)
+    .strokeColor(COLORS.border)
+    .stroke();
+  doc.restore();
 }
 
 // =============================================================================
-// Modern Line Chart
+// KPI card (like UI)
 // =============================================================================
+function drawKpiCard(doc, x, y, w, h, kpi, FONT_REG, FONT_BOLD) {
+  drawCard(doc, x, y, w, h, 16);
 
-function drawModernLineChart(doc, x, y, w, h, monthlyEvolution, FONT_REG, FONT_BOLD) {
-  const padL = 60;
-  const padR = 20;
-  const padT = 54;
-  const padB = 32;
+  // left accent bar
+  doc.save();
+  doc.roundedRect(x, y, 5, h, 16).fill(kpi.accent);
+  doc.restore();
+
+  // title
+  doc.fillColor(COLORS.text3).font(FONT_REG).fontSize(9).text(kpi.title, x + 14, y + 10, { width: w - 28 });
+
+  // value
+  doc.fillColor(kpi.accent).font(FONT_BOLD).fontSize(20).text(safeText(kpi.value), x + 14, y + 28, { width: w - 70 });
+
+  // subtitle
+  doc.fillColor(COLORS.text3).font(FONT_REG).fontSize(9).text(kpi.sub, x + 14, y + 52, { width: w - 28 });
+
+  // icon badge (right)
+  const badge = 34;
+  const bx = x + w - badge - 14;
+  const by = y + 18;
+
+  doc.save();
+  doc.roundedRect(bx, by, badge, badge, 12).fillOpacity(0.12).fill(kpi.accent);
+  doc.fillOpacity(1);
+  doc.fillColor(kpi.accent).font(FONT_BOLD).fontSize(16).text(kpi.icon, bx, by + 8, { width: badge, align: "center" });
+  doc.restore();
+}
+
+// =============================================================================
+// Area chart (line + soft fill) - months Ian..Dec
+// =============================================================================
+function drawAreaChart(doc, x, y, w, h, monthlyEvolution, FONT_REG, FONT_BOLD) {
+  // label (like chart title in UI)
+  doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(10.5).text("Evoluție lunară a cantităților depozitate", x + 14, y + 10);
+  doc.fillColor(COLORS.text3).font(FONT_REG).fontSize(8.5).text("Cantități nete (tone) pe luni", x + 14, y + 26);
+
+  const padL = 48;
+  const padR = 14;
+  const padT = 46;
+  const padB = 26;
 
   const chartX = x + padL;
   const chartY = y + padT;
   const chartW = w - padL - padR;
   const chartH = h - padT - padB;
 
-  const monthsRO = ["Ian", "Feb", "Mar", "Apr", "Mai", "Iun", "Iul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthsRO = ["Ian","Feb","Mar","Apr","Mai","Iun","Iul","Aug","Sep","Oct","Nov","Dec"];
+
   const byMonth = new Map();
   monthlyEvolution.forEach((m) => {
     const mm = Number(m.month);
     if (mm >= 1 && mm <= 12) byMonth.set(mm, Number(m.total_tons || 0));
   });
   const values = monthsRO.map((_, i) => byMonth.get(i + 1) ?? 0);
-
   const max = Math.max(1, ...values);
-  const step = max / 4;
 
-  // Grid lines - subtle
+  // Grid (light dotted feel)
   doc.save();
-  doc.lineWidth(0.5).strokeColor(COLORS.gridLight);
-  for (let i = 0; i <= 4; i++) {
-    const gy = chartY + (chartH * i) / 4;
+  doc.lineWidth(0.6).strokeColor(COLORS.border);
+  const gridLines = 4;
+  for (let i = 0; i <= gridLines; i++) {
+    const gy = chartY + (chartH * i) / gridLines;
     doc.moveTo(chartX, gy).lineTo(chartX + chartW, gy).stroke();
   }
   doc.restore();
 
-  // Y-axis labels - modern style
-  doc.fillColor(COLORS.textLight).font(FONT_REG).fontSize(8);
-  for (let i = 0; i <= 4; i++) {
-    const val = max - step * i;
-    const gy = chartY + (chartH * i) / 4;
-    doc.text(Math.round(val).toLocaleString("ro-RO"), x + 16, gy - 4, {
-      width: padL - 24,
-      align: "right",
-    });
-  }
+  // Y labels (0, max)
+  doc.fillColor(COLORS.text3).font(FONT_REG).fontSize(7.5);
+  doc.text("0", x + 10, chartY + chartH - 3, { width: padL - 16, align: "right" });
+  doc.text(max.toLocaleString("ro-RO"), x + 10, chartY - 4, { width: padL - 16, align: "right" });
 
-  // X-axis labels
+  // X labels all months
   const n = 12;
   const stepX = chartW / (n - 1);
-  doc.fillColor(COLORS.textSoft).font(FONT_REG).fontSize(9);
+  doc.fillColor(COLORS.text3).font(FONT_REG).fontSize(7.5);
   for (let i = 0; i < n; i++) {
     const lx = chartX + stepX * i;
-    doc.text(monthsRO[i], lx - 15, chartY + chartH + 12, {
-      width: 30,
-      align: "center",
-    });
+    doc.text(monthsRO[i], lx - 10, chartY + chartH + 8, { width: 20, align: "center" });
   }
 
-  // Calculate points
+  // points
   const pts = values.map((v, i) => ({
     x: chartX + stepX * i,
     y: chartY + chartH - (v / max) * chartH,
   }));
 
-  // Gradient fill area
+  // area fill
   doc.save();
   doc.moveTo(pts[0].x, chartY + chartH);
   pts.forEach((p) => doc.lineTo(p.x, p.y));
   doc.lineTo(pts[pts.length - 1].x, chartY + chartH);
   doc.closePath();
-  doc.fillOpacity(0.1).fill(COLORS.primary);
+  doc.fillOpacity(0.20).fill(COLORS.greenSoftFill);
   doc.fillOpacity(1);
   doc.restore();
 
-  // Line with gradient effect (simulate with multiple segments)
+  // line
   doc.save();
-  doc.lineWidth(3).lineJoin("round").lineCap("round");
-  for (let i = 0; i < pts.length - 1; i++) {
-    const ratio = i / (pts.length - 1);
-    const color = interpolateColor(COLORS.primary, COLORS.accent, ratio);
-    doc.strokeColor(color);
-    doc.moveTo(pts[i].x, pts[i].y).lineTo(pts[i + 1].x, pts[i + 1].y).stroke();
+  doc.lineWidth(2);
+  doc.strokeColor(COLORS.green);
+  for (let i = 0; i < pts.length; i++) {
+    if (i === 0) doc.moveTo(pts[i].x, pts[i].y);
+    else doc.lineTo(pts[i].x, pts[i].y);
   }
+  doc.stroke();
+
+  // dots
+  doc.fillColor(COLORS.white);
+  doc.strokeColor(COLORS.green);
+  pts.forEach((p) => doc.circle(p.x, p.y, 2.4).fillAndStroke());
   doc.restore();
 
-  // Dots with shadow
+  endClip(doc); // closes panel clip
+}
+
+// =============================================================================
+// Tables (modern light, aligned columns, no overlaps)
+// =============================================================================
+function drawWasteCodesTable(doc, x, y, w, h, rows, FONT_REG, FONT_BOLD) {
+  const innerX = x + 14;
+  const startY = y + 34;
+  const innerW = w - 28;
+
+  // columns: Code | Tickets | Tons
+  const tonsW = 78;
+  const ticketsW = 76;
+  const codeW = innerW - ticketsW - tonsW - 10;
+
+  // header row (light)
+  doc.fillColor(COLORS.text3).font(FONT_BOLD).fontSize(8.5);
+  doc.text("Cod", innerX, startY, { width: codeW });
+  doc.text("Tichete", innerX + codeW + 5, startY, { width: ticketsW, align: "right" });
+  doc.text("Tone", innerX + codeW + 5 + ticketsW + 5, startY, { width: tonsW, align: "right" });
+
   doc.save();
-  pts.forEach((p) => {
-    // Shadow
-    doc.circle(p.x + 1, p.y + 1, 5).fillOpacity(0.2).fill("#000000");
-    doc.fillOpacity(1);
-    // Dot
-    doc.circle(p.x, p.y, 5).fill(COLORS.bgCard);
-    doc.circle(p.x, p.y, 5).lineWidth(2.5).stroke(COLORS.primary);
-  });
+  doc
+    .moveTo(innerX, startY + 14)
+    .lineTo(innerX + innerW, startY + 14)
+    .lineWidth(1)
+    .strokeColor(COLORS.border)
+    .stroke();
   doc.restore();
+
+  let cy = startY + 18;
+  const rowH = 18;
+
+  rows.forEach((r, idx) => {
+    const bg = idx % 2 === 0 ? COLORS.white : COLORS.bgAlt;
+    doc.rect(innerX - 6, cy - 1, innerW + 12, rowH).fill(bg);
+
+    const code = r.waste_code || "—";
+    const desc = r.waste_description || "";
+    const tickets = Number(r.ticket_count || 0).toLocaleString("ro-RO");
+    const tons = r.total_tons_formatted || "0,00";
+
+    // small dot icon
+    doc.circle(innerX - 2, cy + 6, 2.2).fill(COLORS.green);
+
+    doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(9).text(code, innerX + 6, cy + 2, { width: codeW - 6 });
+
+    if (desc) {
+      const clipped = ellipsisOneLine(doc, desc, codeW - 6, FONT_REG, 7);
+      doc.fillColor(COLORS.text3).font(FONT_REG).fontSize(7).text(clipped, innerX + 6, cy + 11, { width: codeW - 6 });
+    }
+
+    doc.fillColor(COLORS.text).font(FONT_REG).fontSize(9).text(tickets, innerX + codeW + 5, cy + 2, { width: ticketsW, align: "right" });
+    doc.fillColor(COLORS.text).font(FONT_REG).fontSize(9).text(tons, innerX + codeW + 5 + ticketsW + 5, cy + 2, { width: tonsW, align: "right" });
+
+    cy += rowH;
+  });
+
+  endClip(doc);
+}
+
+function drawSectorsTable(doc, x, y, w, h, sectors, FONT_REG, FONT_BOLD) {
+  const rows = [...sectors].sort((a, b) => (b.total_tons || 0) - (a.total_tons || 0)).slice(0, 6);
+
+  const innerX = x + 14;
+  const startY = y + 34;
+  const innerW = w - 28;
+
+  const tonsW = 88;
+  const ticketsW = 78;
+  const sectorW = innerW - ticketsW - tonsW - 10;
+
+  doc.fillColor(COLORS.text3).font(FONT_BOLD).fontSize(8.5);
+  doc.text("Sector", innerX, startY, { width: sectorW });
+  doc.text("Tichete", innerX + sectorW + 5, startY, { width: ticketsW, align: "right" });
+  doc.text("Tone", innerX + sectorW + 5 + ticketsW + 5, startY, { width: tonsW, align: "right" });
+
+  doc.save();
+  doc
+    .moveTo(innerX, startY + 14)
+    .lineTo(innerX + innerW, startY + 14)
+    .lineWidth(1)
+    .strokeColor(COLORS.border)
+    .stroke();
+  doc.restore();
+
+  let cy = startY + 18;
+  const rowH = 18;
+
+  rows.forEach((r, idx) => {
+    const bg = idx % 2 === 0 ? COLORS.white : COLORS.bgAlt;
+    doc.rect(innerX - 6, cy - 1, innerW + 12, rowH).fill(bg);
+
+    doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(9).text(`S${r.sector_number}`, innerX, cy + 2, { width: sectorW });
+
+    doc.fillColor(COLORS.text).font(FONT_REG).fontSize(9).text(
+      Number(r.total_tickets || 0).toLocaleString("ro-RO"),
+      innerX + sectorW + 5,
+      cy + 2,
+      { width: ticketsW, align: "right" }
+    );
+
+    doc.fillColor(COLORS.text).font(FONT_REG).fontSize(9).text(
+      r.total_tons_formatted || "0,00",
+      innerX + sectorW + 5 + ticketsW + 5,
+      cy + 2,
+      { width: tonsW, align: "right" }
+    );
+
+    cy += rowH;
+  });
+
+  endClip(doc);
+}
+
+function drawOperatorsTable(doc, x, y, w, h, ops, FONT_REG, FONT_BOLD) {
+  const innerX = x + 14;
+  const startY = y + 34;
+  const innerW = w - 28;
+
+  const tonsW = 88;
+  const sectorsW = 70;
+  const nameW = innerW - sectorsW - tonsW - 10;
+
+  doc.fillColor(COLORS.text3).font(FONT_BOLD).fontSize(8.5);
+  doc.text("Operator", innerX, startY, { width: nameW });
+  doc.text("Sectoare", innerX + nameW + 5, startY, { width: sectorsW, align: "right" });
+  doc.text("Tone", innerX + nameW + 5 + sectorsW + 5, startY, { width: tonsW, align: "right" });
+
+  doc.save();
+  doc
+    .moveTo(innerX, startY + 14)
+    .lineTo(innerX + innerW, startY + 14)
+    .lineWidth(1)
+    .strokeColor(COLORS.border)
+    .stroke();
+  doc.restore();
+
+  let cy = startY + 18;
+  const rowH = 18;
+
+  ops.forEach((r, idx) => {
+    const bg = idx % 2 === 0 ? COLORS.white : COLORS.bgAlt;
+    doc.rect(innerX - 6, cy - 1, innerW + 12, rowH).fill(bg);
+
+    const name = ellipsisOneLine(doc, r.institution_name || "—", nameW, FONT_BOLD, 9);
+    const sectors = safeText(r.sector_numbers_display || (Array.isArray(r.sector_numbers) ? r.sector_numbers.join(", ") : "—"));
+    const tons = safeText(r.total_tons_formatted || "0,00");
+
+    doc.fillColor(COLORS.text).font(FONT_BOLD).fontSize(9).text(name, innerX, cy + 2, { width: nameW });
+    doc.fillColor(COLORS.text).font(FONT_REG).fontSize(9).text(sectors, innerX + nameW + 5, cy + 2, { width: sectorsW, align: "right" });
+    doc.fillColor(COLORS.text).font(FONT_REG).fontSize(9).text(tons, innerX + nameW + 5 + sectorsW + 5, cy + 2, { width: tonsW, align: "right" });
+
+    cy += rowH;
+  });
+
+  endClip(doc);
 }
