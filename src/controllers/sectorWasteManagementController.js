@@ -242,34 +242,10 @@ const calculateSorting = async (sectorUUID, start_date, end_date) => {
   );
   
   // C. Get contract and cost
-  const contractResult = await pool.query(
-    `SELECT 
-      id as contract_id,
-      contract_number,
-      tariff_per_ton
-    FROM sorting_operator_contracts
-    WHERE sector_id = $1
-      AND contract_date_start <= $3
-      AND (contract_date_end IS NULL OR contract_date_end >= $2)
-      AND is_active = true
-      AND deleted_at IS NULL
-    ORDER BY contract_date_start DESC
-    LIMIT 1`,
-    [sectorUUID, start_date, end_date]
-  );
-  
+  // TEMPORAR: Dezactivat pentru debug
   let tariff_per_ton = 0;
   let contract_info = null;
   let has_contract = false;
-  
-  if (contractResult.rows.length > 0) {
-    has_contract = true;
-    tariff_per_ton = Number(contractResult.rows[0].tariff_per_ton || 0);
-    contract_info = {
-      contract_number: contractResult.rows[0].contract_number,
-      tariff_per_ton: tariff_per_ton
-    };
-  }
   
   const total_cost = total_sent * tariff_per_ton;
   const cost_per_ton = tariff_per_ton;
@@ -391,34 +367,10 @@ const calculateTMB = async (sectorUUID, start_date, end_date) => {
   );
   
   // E. Get contract and cost
-  const contractResult = await pool.query(
-    `SELECT 
-      id as contract_id,
-      contract_number,
-      tariff_per_ton
-    FROM tmb_contracts
-    WHERE sector_id = $1
-      AND contract_date_start <= $3
-      AND (contract_date_end IS NULL OR contract_date_end >= $2)
-      AND is_active = true
-      AND deleted_at IS NULL
-    ORDER BY contract_date_start DESC
-    LIMIT 1`,
-    [sectorUUID, start_date, end_date]
-  );
-  
+  // TEMPORAR: Dezactivat pentru debug
   let tariff_per_ton = 0;
   let contract_info = null;
   let has_contract = false;
-  
-  if (contractResult.rows.length > 0) {
-    has_contract = true;
-    tariff_per_ton = Number(contractResult.rows[0].tariff_per_ton || 0);
-    contract_info = {
-      contract_number: contractResult.rows[0].contract_number,
-      tariff_per_ton: tariff_per_ton
-    };
-  }
   
   const total_cost = total_input * tariff_per_ton;
   const cost_per_ton = tariff_per_ton;
@@ -565,6 +517,15 @@ const calculateDisposal = async (sectorUUID, start_date, end_date) => {
   );
   
   // E. Get contract and cost
+  // TEMPORAR: Dezactivat pentru debug - schema DB necunoscută
+  let tariff_per_ton = 0;
+  let cec_tax_per_ton = 0;
+  let total_per_ton = 0;
+  let contract_info = null;
+  let has_contract = false;
+  
+  // TODO: Re-enable când știm schema exactă
+  /*
   const contractResult = await pool.query(
     `SELECT 
       dc.id as contract_id,
@@ -585,12 +546,6 @@ const calculateDisposal = async (sectorUUID, start_date, end_date) => {
     [sectorUUID, start_date, end_date]
   );
   
-  let tariff_per_ton = 0;
-  let cec_tax_per_ton = 0;
-  let total_per_ton = 0;
-  let contract_info = null;
-  let has_contract = false;
-  
   if (contractResult.rows.length > 0) {
     has_contract = true;
     tariff_per_ton = Number(contractResult.rows[0].tariff || 0);
@@ -603,6 +558,7 @@ const calculateDisposal = async (sectorUUID, start_date, end_date) => {
       total_per_ton: total_per_ton
     };
   }
+  */
   
   const total_cost = total_disposal * total_per_ton;
   const cost_per_ton = total_per_ton;
