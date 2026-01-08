@@ -4,25 +4,17 @@
  * DASHBOARD EXPORT CONTROLLER - LANDFILL (DEPOZITARE) - 1 PAGE A4 LANDSCAPE
  * ============================================================================
  *
- * ✅ Layout (as requested):
- * - Header WITHOUT green background
- * - Title in green + green separator line
- * - Period in RO format (dd.mm.yyyy)
- * - Right: ADIGIDMB logo + SAMD text
- *
- * Row 1: KPI cards (Total tone / Tichete / Medie / Zile)
- * Row 2: LEFT Monthly deposited (Line chart) | RIGHT Waste codes table Top 8
- * Row 3: LEFT Sectors table | RIGHT Top 5 operators table
- *
- * Footer: Left standard text | Right "Generat de: user + date-time"
+ * ✅ Updates (per your request):
+ * - Title: "RAPORT DEPOZITARE DEȘEURI – București" OR "… – Sector X"
+ * - Period: **BOLD** + followed by ":"  (ex: "Perioada: 01.01.2025 – 31.12.2025")
+ * - Header right: ONLY LOGO (no SAMD text)
+ * - Waste codes table: columns fixed (no overlap) + add waste description in small light gray
+ * - Row 3 left title: "Distribuția pe sectoare" + label "Sector 1" not "S1"
+ * - Row 3 right: fix columns spacing (no overlap)
+ * - Footer right: "Generat de: <logged user>" (no "Utilizator") + RO timezone + seconds
  *
  * ✅ Uses SAME data as /stats (reuses dashboardLandfillController.getStats)
  * ✅ Diacritics OK with Inter TTF fonts
- *
- * Required assets:
- * - src/assets/fonts/Inter-Regular.ttf
- * - src/assets/fonts/Inter-Bold.ttf
- * - src/assets/branding/adigidmb.png
  */
 
 import PDFDocument from "pdfkit";
@@ -39,6 +31,19 @@ const formatDateRO = (iso) => {
   const [y, m, d] = String(iso).split("-");
   if (!y || !m || !d) return String(iso);
   return `${d}.${m}.${y}`;
+};
+
+const formatDateTimeROWithSeconds = (d) => {
+  return new Intl.DateTimeFormat("ro-RO", {
+    timeZone: "Europe/Bucharest",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(d);
 };
 
 const safeText = (v) => (v === null || v === undefined ? "" : String(v));
@@ -61,21 +66,24 @@ export const exportLandfillDashboard = async (req, res) => {
     const monthlyEvolution = Array.isArray(data.monthly_evolution) ? data.monthly_evolution : [];
     const wasteCodes = Array.isArray(data.waste_categories) ? data.waste_categories : [];
 
-    const userName =
-      [req.user?.firstName, req.user?.lastName].filter(Boolean).join(" ") ||
-      [req.user?.first_name, req.user?.last_name].filter(Boolean).join(" ") ||
-      "Utilizator";
-    const generatedAt = new Date().toLocaleString("ro-RO");
+    // Logged user name (no "Utilizator" placeholder in footer)
+    const first =
+      req.user?.firstName ||
+      req.user?.first_name ||
+      "";
+    const last =
+      req.user?.lastName ||
+      req.user?.last_name ||
+      "";
+    const userName = [first, last].filter(Boolean).join(" ").trim();
+    const generatedAt = formatDateTimeROWithSeconds(new Date());
 
     // 2) PDF setup
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
       margin: 28,
-      info: {
-        Title: "Raport Depozitare Deșeuri",
-        Author: "SAMD",
-      },
+      info: { Title: "Raport Depozitare Deșeuri", Author: "SAMD" },
     });
 
     const filename = `raport-depozitare-${filters.from || "start"}-${filters.to || "end"}.pdf`;
@@ -85,52 +93,44 @@ export const exportLandfillDashboard = async (req, res) => {
 
     // 3) Fonts (diacritics)
     const { fontRegular, fontBold } = getFonts();
-    if (!fs.existsSync(fontRegular) || !fs.existsSync(fontBold)) {
-      // Don't fail hard; but diacritics might be broken without fonts
-      console.warn("[EXPORT] Missing Inter fonts in src/assets/fonts. Diacritics may render incorrectly.");
-    } else {
+    if (fs.existsSync(fontRegular) && fs.existsSync(fontBold)) {
       doc.registerFont("Inter", fontRegular);
       doc.registerFont("InterBold", fontBold);
+    } else {
+      console.warn("[EXPORT] Missing Inter fonts in src/assets/fonts. Diacritics may render incorrectly.");
     }
 
     // Defaults
     const pageW = doc.page.width;
     const pageH = doc.page.height;
-    const M = doc.page.margins.left; // same on all sides
+    const M = doc.page.margins.left;
     const contentW = pageW - M * 2;
 
-    // Choose fonts if available; else fallback to Helvetica
     const FONT_REG = fs.existsSync(fontRegular) ? "Inter" : "Helvetica";
     const FONT_BOLD = fs.existsSync(fontBold) ? "InterBold" : "Helvetica-Bold";
 
     // =========================
-    // HEADER (NO GREEN BG)
+    // HEADER (clean, no bg)
     // =========================
     const headerY = M;
-    const headerH = 58;
+    const headerH = 54;
 
+    // Title logic
     const locationText =
       filters.sector_id && filters.sector_id !== "all"
-        ? `București / Sector ${filters.sector_id}`
-        : "București / Sectoarele 1–6";
+        ? `Sector ${filters.sector_id}`
+        : "București";
 
     const title = `RAPORT DEPOZITARE DEȘEURI – ${locationText}`;
-    const periodText = `Perioada ${formatDateRO(filters.from)} – ${formatDateRO(filters.to)}`;
 
-    // Title (green)
-    doc.fillColor("#10b981").font(FONT_BOLD).fontSize(18).text(title, M, headerY, {
-      width: contentW - 140,
-    });
+    // Period (BOLD + :)
+    const periodLabel = "Perioada:";
+    const periodValue = `${formatDateRO(filters.from)} – ${formatDateRO(filters.to)}`;
 
-    // Period (gray)
-    doc.fillColor("#334155").font(FONT_REG).fontSize(10.5).text(periodText, M, headerY + 24, {
-      width: contentW - 140,
-    });
-
-    // Right: logo + SAMD text
-    const logoSize = 42;
+    // Logo right only
+    const logoSize = 44;
     const logoX = pageW - M - logoSize;
-    const logoY = headerY + 4;
+    const logoY = headerY + 2;
 
     const logoPath = getLogoPath();
     if (logoPath && fs.existsSync(logoPath)) {
@@ -141,17 +141,19 @@ export const exportLandfillDashboard = async (req, res) => {
       }
     }
 
-    doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(10).text("SAMD", pageW - M - 120, headerY + 2, {
-      width: 70,
-      align: "right",
+    // Title green
+    doc.fillColor("#10b981").font(FONT_BOLD).fontSize(18).text(title, M, headerY, {
+      width: contentW - (logoSize + 12),
     });
 
-    doc.fillColor("#64748b").font(FONT_REG).fontSize(8.5).text(
-      "Sistem Avansat de Monitorizare a Deșeurilor",
-      pageW - M - 240,
-      headerY + 16,
-      { width: 190, align: "right" }
-    );
+    // Period line with bold label + regular value
+    const periodY = headerY + 26;
+    doc.fillColor("#334155").font(FONT_BOLD).fontSize(10.5).text(periodLabel, M, periodY, {
+      continued: true,
+    });
+    doc.fillColor("#334155").font(FONT_REG).fontSize(10.5).text(` ${periodValue}`, {
+      continued: false,
+    });
 
     // Green separator line
     doc.save();
@@ -191,12 +193,12 @@ export const exportLandfillDashboard = async (req, res) => {
     const leftW2 = Math.floor(contentW * 0.62);
     const rightW2 = contentW - leftW2 - 12;
 
-    // Left monthly line chart
+    // Left: monthly line chart
     const monthlyPng = await makeMonthlyLine(monthlyEvolution);
     drawBoxTitle(doc, M, row2Y, leftW2, boxH2, "Cantități depozitate lunar (tone)", FONT_REG, FONT_BOLD);
     doc.image(monthlyPng, M + 10, row2Y + 28, { width: leftW2 - 20, height: boxH2 - 38 });
 
-    // Right waste codes table
+    // Right: waste codes table (Top 8)
     const wasteTop = wasteCodes.slice(0, 8);
     drawWasteCodesTable(doc, M + leftW2 + 12, row2Y, rightW2, boxH2, wasteTop, FONT_REG, FONT_BOLD);
 
@@ -208,13 +210,34 @@ export const exportLandfillDashboard = async (req, res) => {
     const leftW3 = Math.floor(contentW * 0.52);
     const rightW3 = contentW - leftW3 - 12;
 
-    drawSectorsTable(doc, M, row3Y, leftW3, boxH3, perSector, Number(summary.total_tons || 0), FONT_REG, FONT_BOLD);
-    drawTopOperatorsTable(doc, M + leftW3 + 12, row3Y, rightW3, boxH3, topOperators.slice(0, 5), FONT_REG, FONT_BOLD);
+    drawSectorsTable(
+      doc,
+      M,
+      row3Y,
+      leftW3,
+      boxH3,
+      perSector,
+      Number(summary.total_tons || 0),
+      FONT_REG,
+      FONT_BOLD
+    );
+
+    drawTopOperatorsTable(
+      doc,
+      M + leftW3 + 12,
+      row3Y,
+      rightW3,
+      boxH3,
+      topOperators.slice(0, 5),
+      FONT_REG,
+      FONT_BOLD
+    );
 
     // =========================
     // FOOTER
     // =========================
     const footerY = pageH - M - 14;
+
     doc.font(FONT_REG).fontSize(8.5).fillColor("#64748b").text(
       "Raport generat automat din SAMD · reflectă filtrele aplicate la momentul exportului.",
       M,
@@ -222,12 +245,11 @@ export const exportLandfillDashboard = async (req, res) => {
       { width: contentW, align: "left" }
     );
 
-    doc.font(FONT_REG).fontSize(8.5).fillColor("#64748b").text(
-      `Generat de: ${userName} · ${generatedAt}`,
-      M,
-      footerY,
-      { width: contentW, align: "right" }
-    );
+    const footerRight = `Generat de: ${userName || "—"} · ${generatedAt}`;
+    doc.font(FONT_REG).fontSize(8.5).fillColor("#64748b").text(footerRight, M, footerY, {
+      width: contentW,
+      align: "right",
+    });
 
     doc.end();
   } catch (error) {
@@ -285,14 +307,11 @@ function getLogoPath() {
 function drawKpiCard(doc, x, y, w, h, { title, value, sub, color }, FONT_REG, FONT_BOLD) {
   doc.save();
 
-  // Card box
   doc.roundedRect(x, y, w, h, 12).fill("#ffffff");
   doc.roundedRect(x, y, w, h, 12).stroke("#e5e7eb");
 
-  // Accent bar
   doc.rect(x, y, 5, h).fill(color);
 
-  // Text
   doc.fillColor("#64748b").font(FONT_REG).fontSize(9).text(title, x + 14, y + 12, { width: w - 20 });
 
   doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(18).text(safeText(value), x + 14, y + 28, {
@@ -324,48 +343,82 @@ function drawBoxTitle(doc, x, y, w, h, title, FONT_REG, FONT_BOLD) {
 function drawWasteCodesTable(doc, x, y, w, h, rows, FONT_REG, FONT_BOLD) {
   drawBoxTitle(doc, x, y, w, h, "Coduri deșeu depozitate (Top 8)", FONT_REG, FONT_BOLD);
 
+  // Columns tuned to avoid overlap in narrow table:
+  // code+desc on left, tickets in the middle-right, tons on far right
   const startY = y + 32;
-  const col1 = x + 10;
-  const col2 = x + Math.floor(w * 0.62);
-  const col3 = x + w - 10;
+  const leftX = x + 10;
+  const rightX = x + w - 10;
+
+  // numeric column widths
+  const tonsW = 78;
+  const ticketsW = 72;
+
+  const tonsX = rightX - tonsW;
+  const ticketsX = tonsX - 10 - ticketsW;
 
   doc.font(FONT_BOLD).fontSize(9).fillColor("#64748b");
-  doc.text("Cod", col1, startY);
-  doc.text("Tichete", col2, startY, { width: 70, align: "right" });
-  doc.text("Tone", col3 - 70, startY, { width: 70, align: "right" });
+  doc.text("Cod", leftX, startY);
+  doc.text("Tichete", ticketsX, startY, { width: ticketsW, align: "right" });
+  doc.text("Tone", tonsX, startY, { width: tonsW, align: "right" });
 
   let cy = startY + 14;
-  const rowH = 18;
+  const rowH = 20;
 
-  doc.font(FONT_REG).fontSize(9).fillColor("#0f172a");
   rows.forEach((r, idx) => {
     if (idx % 2 === 1) doc.rect(x + 1, cy - 2, w - 2, rowH).fill("#f8fafc");
 
     const code = r.waste_code || "—";
+    const desc = r.waste_description || ""; // available in your payload
     const tickets = Number(r.ticket_count || 0).toLocaleString("ro-RO");
     const tons = r.total_tons_formatted || "0.00";
 
-    doc.fillColor("#0f172a").font(FONT_BOLD).text(code, col1, cy);
-    doc.fillColor("#0f172a").font(FONT_REG).text(tickets, col2, cy, { width: 70, align: "right" });
-    doc.fillColor("#0f172a").font(FONT_REG).text(tons, col3 - 70, cy, { width: 70, align: "right" });
+    // Code (bold)
+    doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(9).text(code, leftX, cy, {
+      width: ticketsX - leftX - 8,
+      ellipsis: true,
+    });
+
+    // Description (tiny, light gray) under code
+    if (desc) {
+      doc.fillColor("#94a3b8").font(FONT_REG).fontSize(7.2).text(desc, leftX, cy + 10, {
+        width: ticketsX - leftX - 8,
+        ellipsis: true,
+      });
+    }
+
+    // Numbers
+    doc.fillColor("#0f172a").font(FONT_REG).fontSize(9).text(tickets, ticketsX, cy + 1, {
+      width: ticketsW,
+      align: "right",
+    });
+    doc.fillColor("#0f172a").font(FONT_REG).fontSize(9).text(tons, tonsX, cy + 1, {
+      width: tonsW,
+      align: "right",
+    });
 
     cy += rowH;
   });
 }
 
 function drawSectorsTable(doc, x, y, w, h, sectors, totalTons, FONT_REG, FONT_BOLD) {
-  drawBoxTitle(doc, x, y, w, h, "Sectoare", FONT_REG, FONT_BOLD);
+  drawBoxTitle(doc, x, y, w, h, "Distribuția pe sectoare", FONT_REG, FONT_BOLD);
 
   const rows = [...sectors].sort((a, b) => (b.total_tons || 0) - (a.total_tons || 0)).slice(0, 6);
   const startY = y + 32;
-  const col1 = x + 10;
-  const col2 = x + Math.floor(w * 0.62);
-  const col3 = x + w - 10;
+
+  const leftX = x + 10;
+  const rightX = x + w - 10;
+
+  const tonsW = 78;
+  const ticketsW = 72;
+
+  const tonsX = rightX - tonsW;
+  const ticketsX = tonsX - 10 - ticketsW;
 
   doc.font(FONT_BOLD).fontSize(9).fillColor("#64748b");
-  doc.text("Sector", col1, startY);
-  doc.text("Tichete", col2, startY, { width: 70, align: "right" });
-  doc.text("Tone", col3 - 70, startY, { width: 70, align: "right" });
+  doc.text("Sector", leftX, startY);
+  doc.text("Tichete", ticketsX, startY, { width: ticketsW, align: "right" });
+  doc.text("Tone", tonsX, startY, { width: tonsW, align: "right" });
 
   let cy = startY + 14;
   const rowH = 18;
@@ -373,13 +426,23 @@ function drawSectorsTable(doc, x, y, w, h, sectors, totalTons, FONT_REG, FONT_BO
   rows.forEach((r, idx) => {
     if (idx % 2 === 1) doc.rect(x + 1, cy - 2, w - 2, rowH).fill("#f8fafc");
 
-    const sectorLabel = `S${r.sector_number}`;
+    const sectorLabel = `Sector ${r.sector_number}`;
     const tickets = Number(r.total_tickets || 0).toLocaleString("ro-RO");
     const tons = r.total_tons_formatted || "0.00";
 
-    doc.fillColor("#0f172a").font(FONT_BOLD).text(sectorLabel, col1, cy);
-    doc.fillColor("#0f172a").font(FONT_REG).text(tickets, col2, cy, { width: 70, align: "right" });
-    doc.fillColor("#0f172a").font(FONT_REG).text(tons, col3 - 70, cy, { width: 70, align: "right" });
+    doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(9).text(sectorLabel, leftX, cy, {
+      width: ticketsX - leftX - 8,
+      ellipsis: true,
+    });
+
+    doc.fillColor("#0f172a").font(FONT_REG).fontSize(9).text(tickets, ticketsX, cy, {
+      width: ticketsW,
+      align: "right",
+    });
+    doc.fillColor("#0f172a").font(FONT_REG).fontSize(9).text(tons, tonsX, cy, {
+      width: tonsW,
+      align: "right",
+    });
 
     cy += rowH;
   });
@@ -389,14 +452,20 @@ function drawTopOperatorsTable(doc, x, y, w, h, ops, FONT_REG, FONT_BOLD) {
   drawBoxTitle(doc, x, y, w, h, "Top 5 operatori", FONT_REG, FONT_BOLD);
 
   const startY = y + 32;
-  const col1 = x + 10;
-  const col2 = x + Math.floor(w * 0.74);
-  const col3 = x + w - 10;
+
+  const leftX = x + 10;
+  const rightX = x + w - 10;
+
+  const tonsW = 78;
+  const sectorsW = 70;
+
+  const tonsX = rightX - tonsW;
+  const sectorsX = tonsX - 10 - sectorsW;
 
   doc.font(FONT_BOLD).fontSize(9).fillColor("#64748b");
-  doc.text("Operator", col1, startY);
-  doc.text("Sectoare", col2, startY, { width: 80, align: "right" });
-  doc.text("Tone", col3 - 70, startY, { width: 70, align: "right" });
+  doc.text("Operator", leftX, startY);
+  doc.text("Sectoare", sectorsX, startY, { width: sectorsW, align: "right" });
+  doc.text("Tone", tonsX, startY, { width: tonsW, align: "right" });
 
   let cy = startY + 14;
   const rowH = 18;
@@ -411,11 +480,20 @@ function drawTopOperatorsTable(doc, x, y, w, h, ops, FONT_REG, FONT_BOLD) {
       "—";
     const tons = safeText(r.total_tons_formatted || "0.00");
 
-    const shortName = name.length > 30 ? name.slice(0, 27) + "…" : name;
+    doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(9).text(name, leftX, cy, {
+      width: sectorsX - leftX - 8,
+      ellipsis: true,
+    });
 
-    doc.fillColor("#0f172a").font(FONT_BOLD).text(shortName, col1, cy, { width: col2 - col1 - 6 });
-    doc.fillColor("#0f172a").font(FONT_REG).text(sectors, col2, cy, { width: 80, align: "right" });
-    doc.fillColor("#0f172a").font(FONT_REG).text(tons, col3 - 70, cy, { width: 70, align: "right" });
+    doc.fillColor("#0f172a").font(FONT_REG).fontSize(9).text(sectors, sectorsX, cy, {
+      width: sectorsW,
+      align: "right",
+    });
+
+    doc.fillColor("#0f172a").font(FONT_REG).fontSize(9).text(tons, tonsX, cy, {
+      width: tonsW,
+      align: "right",
+    });
 
     cy += rowH;
   });
