@@ -289,10 +289,52 @@ export const getStats = async (req, res) => {
 
     const sectorRes = await db.query(sectorQuery, sectorParams);
 
+    // ========================================================================
+    // CALCULATE VARIATION vs LAST YEAR (SAME PERIOD)
+    // ========================================================================
+    // Pentru a calcula variația, trebuie să obținem datele din anul precedent pentru aceeași perioadă
+    const lastYearStartDate = new Date(startDate);
+    lastYearStartDate.setFullYear(lastYearStartDate.getFullYear() - 1);
+    const lastYearEndDate = new Date(endDate);
+    lastYearEndDate.setFullYear(lastYearEndDate.getFullYear() - 1);
+
+    const lastYearSectorQuery = `
+      SELECT 
+        s.id AS sector_id,
+        COALESCE(SUM(wtl.net_weight_tons), 0) AS total_tons
+      FROM sectors s
+      LEFT JOIN waste_tickets_landfill wtl 
+        ON s.id = wtl.sector_id 
+        AND wtl.deleted_at IS NULL
+        AND wtl.ticket_date >= $1 
+        AND wtl.ticket_date <= $2
+      WHERE s.deleted_at IS NULL
+        ${!isAll ? 'AND s.id = ANY($3)' : ''}
+      GROUP BY s.id
+    `;
+
+    const lastYearParams = !isAll
+      ? [isoDate(lastYearStartDate), isoDate(lastYearEndDate), allowedSectorUuids]
+      : [isoDate(lastYearStartDate), isoDate(lastYearEndDate)];
+
+    const lastYearSectorRes = await db.query(lastYearSectorQuery, lastYearParams);
+
     // Merge: toate sectoarele cu datele lor
     const perSector = allSectorsRes.rows.map(sector => {
       const data = sectorRes.rows.find(s => s.sector_id === sector.sector_id);
       const tons = Number(data?.total_tons || 0);
+      
+      // Get last year data
+      const lastYearData = lastYearSectorRes.rows.find(s => s.sector_id === sector.sector_id);
+      const lastYearTons = Number(lastYearData?.total_tons || 0);
+      
+      // Calculate variation percentage
+      let variation_pct = 0;
+      if (lastYearTons > 0) {
+        variation_pct = ((tons - lastYearTons) / lastYearTons) * 100;
+      } else if (tons > 0) {
+        variation_pct = 100; // Dacă anul trecut era 0 și acum avem date = +100%
+      }
       
       return {
         sector_id: sector.sector_id,
@@ -303,6 +345,8 @@ export const getStats = async (req, res) => {
         total_tons_formatted: formatTons(tons),
         percentage_of_total: totalTons > 0 ? Number(((tons / totalTons) * 100).toFixed(1)) : 0,
         color: getSectorColor(sector.sector_number),
+        variation_pct: Number(variation_pct.toFixed(1)),
+        last_year_tons: lastYearTons,
       };
     });
 
