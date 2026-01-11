@@ -592,7 +592,7 @@ export const updateLandfillTicket = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No fields to update' });
     }
 
-    // If weights change, recompute net based on final values
+    // If weights change, validate them (PostgreSQL will auto-recalculate net_weight_kg and net_weight_tons)
     if (grossProvided || tareProvided) {
       const existingRes = await pool.query(
         `SELECT gross_weight_kg, tare_weight_kg
@@ -619,8 +619,8 @@ export const updateLandfillTicket = async (req, res) => {
         return res.status(400).json({ success: false, message: 'net_weight_kg invalid (gross - tare must be > 0)' });
       }
 
-      setParts.push(`net_weight_kg = ${net}`);
-      setParts.push(`net_weight_tons = (${net}/1000.0)`);
+      // ✅ FIX: Don't manually set net_weight_kg and net_weight_tons
+      // PostgreSQL auto-calculates them as GENERATED COLUMNS
     }
 
     setParts.push(`updated_at = NOW()`);
