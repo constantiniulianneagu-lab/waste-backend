@@ -140,13 +140,14 @@ export const getLandfillReports = async (req, res) => {
 
     const {
       page = 1,
-      limit = 10,
+      limit,
+      per_page,
       sort_by = 'ticket_date',
       sort_dir = 'desc',
     } = req.query;
 
     const pageNum = clampInt(page, 1, 1000000, 1);
-    const limitNum = clampInt(limit, 1, 100000, 10); // ✅ Crescut de la 500 la 100000 pentru export
+    const limitNum = clampInt(limit || per_page, 1, 100000, 10); // ✅ Acceptă și limit și per_page
     const offset = (pageNum - 1) * limitNum;
 
     const filters = buildFilters(req, 't');
