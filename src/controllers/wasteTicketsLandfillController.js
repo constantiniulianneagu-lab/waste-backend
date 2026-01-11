@@ -486,6 +486,8 @@ export const createLandfillTicket = async (req, res) => {
 
     const createdBy = req.user?.id;
 
+    // ✅ FIX: Remove net_weight_kg and net_weight_tons from INSERT
+    // They are GENERATED COLUMNS and PostgreSQL calculates them automatically
     const insertSql = `
       INSERT INTO waste_tickets_landfill (
         ticket_number,
@@ -497,8 +499,6 @@ export const createLandfillTicket = async (req, res) => {
         vehicle_number,
         gross_weight_kg,
         tare_weight_kg,
-        net_weight_kg,
-        net_weight_tons,
         generator_type,
         operation_type,
         contract_type,
@@ -506,8 +506,10 @@ export const createLandfillTicket = async (req, res) => {
         created_at,
         updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8::numeric,$9::numeric,($8::numeric - $9::numeric),(($8::numeric - $9::numeric) / 1000.0),
-        $10,$11,$12,
+        $1, $2, $3, $4, $5, $6, $7,
+        $8::numeric,
+        $9::numeric,
+        $10, $11, $12,
         $13, NOW(), NOW()
       )
       RETURNING id
