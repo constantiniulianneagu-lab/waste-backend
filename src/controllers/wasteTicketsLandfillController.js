@@ -506,7 +506,7 @@ export const createLandfillTicket = async (req, res) => {
         created_at,
         updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,($8-$9),(($8-$9)/1000.0),
+        $1,$2,$3,$4,$5,$6,$7,$8::numeric,$9::numeric,($8::numeric - $9::numeric),(($8::numeric - $9::numeric) / 1000.0),
         $10,$11,$12,
         $13, NOW(), NOW()
       )
