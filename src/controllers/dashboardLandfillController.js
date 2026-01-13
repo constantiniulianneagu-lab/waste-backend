@@ -207,7 +207,7 @@ export const getStats = async (req, res) => {
     const totalTons = Number(summary.total_tons || 0);
 
     // ----------------------------------------------------------------------
-    // 6) WASTE CATEGORIES (Top 5)
+    // 6) WASTE CATEGORIES (TOATE)
     // ----------------------------------------------------------------------
     const categoriesQuery = `
       SELECT
@@ -224,7 +224,6 @@ export const getStats = async (req, res) => {
         ${sectorWhere}
       GROUP BY wc.code, wc.description, wc.category
       ORDER BY total_tons DESC
-      LIMIT 5
     `;
 
     const categoriesRes = await db.query(categoriesQuery, paramsBase);
