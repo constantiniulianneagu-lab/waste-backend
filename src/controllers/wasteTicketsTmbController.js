@@ -483,8 +483,8 @@ export const createTmbTicket = async (req, res) => {
       String(ticket_number).trim(),
       String(ticket_date),
       ticket_time ? String(ticket_time) : null,
-      parseInt(String(supplier_id), 10),
-      parseInt(String(operator_id), 10),
+      String(supplier_id),  // UUID, nu INT
+      String(operator_id),  // UUID, nu INT
       String(waste_code_id),
       String(sector_id),
       String(vehicle_number).trim(),
