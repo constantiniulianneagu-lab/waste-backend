@@ -242,6 +242,24 @@ export const getStats = async (req, res) => {
     });
 
     // ----------------------------------------------------------------------
+    // 6a) CALCULATE TREATED vs DIRECT WASTE (coduri 19 XX XX vs rest)
+    // ----------------------------------------------------------------------
+    let treatedWasteTons = 0;
+    let directWasteTons = 0;
+
+    wasteCategories.forEach((cat) => {
+      const code = cat.waste_code;
+      if (code.startsWith('19')) {
+        treatedWasteTons += cat.total_tons;
+      } else {
+        directWasteTons += cat.total_tons;
+      }
+    });
+
+    const treatedWastePercentage = totalTons > 0 ? Number(((treatedWasteTons / totalTons) * 100).toFixed(1)) : 0;
+    const directWastePercentage = totalTons > 0 ? Number(((directWasteTons / totalTons) * 100).toFixed(1)) : 0;
+
+    // ----------------------------------------------------------------------
     // 7) ✅ FIX #2: ALL SECTORS (pentru dropdown) + PER SECTOR DATA
     // ----------------------------------------------------------------------
     
@@ -565,6 +583,12 @@ export const getStats = async (req, res) => {
           total_tons_formatted: formatTons(totalTons),
           total_tickets: Number(summary.total_tickets || 0),
           avg_weight_per_ticket: Number(summary.avg_weight_per_ticket || 0),
+          treated_waste: treatedWasteTons,
+          treated_waste_formatted: formatTons(treatedWasteTons),
+          treated_waste_percentage: treatedWastePercentage,
+          direct_waste: directWasteTons,
+          direct_waste_formatted: formatTons(directWasteTons),
+          direct_waste_percentage: directWastePercentage,
           date_range: {
             from: startDate,
             to: endDate,
