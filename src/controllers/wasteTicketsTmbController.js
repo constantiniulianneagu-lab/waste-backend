@@ -469,12 +469,11 @@ export const createTmbTicket = async (req, res) => {
         vehicle_number,
         generator_type,
         net_weight_kg,
-        net_weight_tons,
         created_by,
         created_at,
         updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,($10/1000.0),$11, NOW(), NOW()
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW(), NOW()
       )
       RETURNING id
     `;
@@ -549,14 +548,8 @@ export const updateTmbTicket = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No fields to update' });
     }
 
-    // If net_weight_kg changes, recalc tons
-    if (req.body.net_weight_kg !== undefined) {
-      const kg = Number(req.body.net_weight_kg);
-      if (!Number.isFinite(kg) || kg < 0) {
-        return res.status(400).json({ success: false, message: 'net_weight_kg invalid' });
-      }
-      setParts.push(`net_weight_tons = ($${p - 1}/1000.0)`);
-    }
+    // If net_weight_kg changes, DB auto-recalcs net_weight_tons (GENERATED COLUMN)
+    // No manual calculation needed
 
     setParts.push(`updated_at = NOW()`);
 
