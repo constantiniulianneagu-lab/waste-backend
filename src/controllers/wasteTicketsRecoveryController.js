@@ -479,17 +479,12 @@ export const createRecoveryTicket = async (req, res) => {
         vehicle_number,
         delivered_quantity_kg,
         accepted_quantity_kg,
-        delivered_quantity_tons,
-        accepted_quantity_tons,
-        difference_tons,
         notes,
         created_by,
         created_at,
         updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-        ($9/1000.0),($10/1000.0),(($9-$10)/1000.0),
-        $11,$12, NOW(), NOW()
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW(), NOW()
       )
       RETURNING id
     `;
@@ -498,8 +493,8 @@ export const createRecoveryTicket = async (req, res) => {
       ticket_number ? String(ticket_number).trim() : null,
       String(ticket_date),
       ticket_time ? String(ticket_time) : null,
-      parseInt(String(supplier_id), 10),
-      parseInt(String(recipient_id), 10),
+      String(supplier_id),  // UUID
+      String(recipient_id), // UUID
       String(waste_code_id),
       String(sector_id),
       vehicle_number ? String(vehicle_number).trim() : null,
@@ -555,9 +550,6 @@ export const updateRecoveryTicket = async (req, res) => {
     const params = [];
     let p = 1;
 
-    const deliveredProvided = req.body.delivered_quantity_kg !== undefined;
-    const acceptedProvided = req.body.accepted_quantity_kg !== undefined;
-
     for (const key of updatable) {
       if (req.body[key] !== undefined) {
         setParts.push(`${key} = $${p++}`);
@@ -569,31 +561,8 @@ export const updateRecoveryTicket = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No fields to update' });
     }
 
-    if (deliveredProvided || acceptedProvided) {
-      const existingRes = await pool.query(
-        `SELECT delivered_quantity_kg, accepted_quantity_kg
-         FROM waste_tickets_recovery
-         WHERE id = $1 AND deleted_at IS NULL`,
-        [ticketId]
-      );
-      if (existingRes.rows.length === 0) {
-        return res.status(404).json({ success: false, message: 'Ticket not found' });
-      }
-
-      const currentDelivered = Number(existingRes.rows[0].delivered_quantity_kg);
-      const currentAccepted = Number(existingRes.rows[0].accepted_quantity_kg);
-
-      const newDelivered = deliveredProvided ? Number(req.body.delivered_quantity_kg) : currentDelivered;
-      const newAccepted = acceptedProvided ? Number(req.body.accepted_quantity_kg) : currentAccepted;
-
-      if (!Number.isFinite(newDelivered) || newDelivered < 0 || !Number.isFinite(newAccepted) || newAccepted < 0) {
-        return res.status(400).json({ success: false, message: 'Quantity invalid' });
-      }
-
-      setParts.push(`delivered_quantity_tons = (${newDelivered}/1000.0)`);
-      setParts.push(`accepted_quantity_tons = (${newAccepted}/1000.0)`);
-      setParts.push(`difference_tons = ((${newDelivered}-${newAccepted})/1000.0)`);
-    }
+    // DB auto-recalcs delivered_quantity_tons, accepted_quantity_tons, difference_tons (GENERATED COLUMNS)
+    // No manual calculation needed
 
     setParts.push(`updated_at = NOW()`);
 
