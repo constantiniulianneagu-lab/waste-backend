@@ -1,8 +1,7 @@
-// src/middleware/enforceSectorAccess.js
-const pool = require("../db/pool");
+import pool from "../db/pool.js";
 
 /**
- * Very small UUID v4-ish check (also accepts any canonical UUID).
+ * UUID check (canonical UUID).
  * IMPORTANT: UUID strings may start with digits (e.g. "1b7e..."),
  * so DO NOT parseInt() before checking UUID format.
  */
@@ -41,7 +40,8 @@ async function resolveSectorUuid(raw) {
          LIMIT 1`,
         [asInt]
       );
-      const sectorUuid = q.rows[0]?.id ?? null;
+
+      const sectorUuid = q.rows?.[0]?.id ?? null;
       if (!sectorUuid) {
         return { ok: false, code: 404, message: "Sector inexistent" };
       }
@@ -53,20 +53,14 @@ async function resolveSectorUuid(raw) {
 }
 
 /**
- * Middleware:
- * - If request has sector_id in query/body, resolves it to a UUID and stores it in req.requestedSectorUuid
- * - If user is limited to certain sectors, enforces access
- *
- * Assumptions:
- * - req.user may exist with properties:
- *    - is_admin (boolean)
- *    - sector_id (uuid) or sectors (array of uuids)
+ * Named export, used by routes like:
+ * import { enforceSectorAccess } from '../../middleware/enforceSectorAccess.js';
  */
-async function enforceSectorAccess(req, res, next) {
+export async function enforceSectorAccess(req, res, next) {
   try {
     const rawSector =
-      (req.query && req.query.sector_id) ||
-      (req.body && req.body.sector_id) ||
+      req?.query?.sector_id ??
+      req?.body?.sector_id ??
       null;
 
     if (rawSector) {
@@ -87,7 +81,7 @@ async function enforceSectorAccess(req, res, next) {
 
     // Allowed sectors for this user
     const allowed = [];
-    if (req.user.sectors && Array.isArray(req.user.sectors)) {
+    if (Array.isArray(req.user.sectors)) {
       allowed.push(...req.user.sectors.filter(Boolean));
     }
     if (req.user.sector_id) allowed.push(req.user.sector_id);
@@ -117,5 +111,3 @@ async function enforceSectorAccess(req, res, next) {
       .json({ success: false, error: "Eroare internă server." });
   }
 }
-
-module.exports = enforceSectorAccess;
