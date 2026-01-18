@@ -84,7 +84,12 @@ export const enforceSectorAccess = async (req, res, next) => {
     }
 
     const raw = pickSectorId(req);
-    if (raw === null || raw === undefined || String(raw).trim() === "") return next();
+    console.log('🔵 enforceSectorAccess - raw sector_id from request:', raw);
+    
+    if (raw === null || raw === undefined || String(raw).trim() === "") {
+      console.log('🔵 enforceSectorAccess - NO sector_id, skipping...');
+      return next();
+    }
 
     const ctx = getContextKey(req);
 
@@ -135,6 +140,7 @@ export const enforceSectorAccess = async (req, res, next) => {
     }
 
     // Stash resolved UUID so controllers can use it without extra query
+    console.log('🔵 enforceSectorAccess - Setting req.requestedSectorUuid to:', sectorUuid);
     req.requestedSectorUuid = sectorUuid;
 
     return next();
