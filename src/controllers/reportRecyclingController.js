@@ -113,6 +113,9 @@ export const getRecyclingTickets = async (req, res) => {
       });
     }
 
+    console.log('🟢 getRecyclingTickets - req.query:', req.query);
+    console.log('🟢 getRecyclingTickets - req.requestedSectorUuid:', req.requestedSectorUuid);
+
     const { page = 1, limit = 50, sort_by = 'ticket_date', sort_dir = 'desc' } = req.query;
 
     const pageNum = clampInt(page, 1, 1000000, 1);
@@ -120,6 +123,11 @@ export const getRecyclingTickets = async (req, res) => {
     const offset = (pageNum - 1) * limitNum;
 
     const f = buildFilters(req, 't');
+    
+    console.log('🟢 getRecyclingTickets - buildFilters result:', {
+      whereSql: f.whereSql,
+      params: f.params
+    });
 
     const sortMap = {
       ticket_date: 't.ticket_date',
