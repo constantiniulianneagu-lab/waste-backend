@@ -416,13 +416,13 @@ export const getAuxiliaryData = async (req, res) => {
     `;
     const wasteCodesRes = await pool.query(wasteCodesQuery);
 
-    // ✅ OPERATORS (colectori, TMB, sortatori, reciclatori)
+    // ✅ OPERATORS (colectori, TMB, sortatori, reciclatori, valorificare, eliminare, depozit)
     const operatorsQuery = `
       SELECT id, name, type
       FROM institutions
       WHERE is_active = true 
         AND deleted_at IS NULL
-        AND type IN ('WASTE_COLLECTOR', 'TMB_OPERATOR', 'SORTING_OPERATOR', 'RECYCLING_CLIENT')
+        AND type IN ('WASTE_COLLECTOR', 'TMB_OPERATOR', 'SORTING_OPERATOR', 'RECYCLING_CLIENT', 'RECOVERY_CLIENT', 'DISPOSAL_CLIENT', 'LANDFILL')
       ORDER BY name
     `;
     const operatorsRes = await pool.query(operatorsQuery);
