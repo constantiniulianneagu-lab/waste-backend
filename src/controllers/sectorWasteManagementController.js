@@ -105,24 +105,27 @@ const calculateCollection = async (sectorUUID, start_date, end_date) => {
   
   const total_tons = Number(tonsResult.rows[0].total_tons);
   
-  // B. Operators (collectors)
-  const operatorsResult = await pool.query(
-    `SELECT 
-      i.id,
-      i.name,
-      COALESCE(SUM(wl.net_weight_tons), 0) as tons_collected,
-      ROUND(
-        (COALESCE(SUM(wl.net_weight_tons), 0) / NULLIF($4, 0) * 100), 2
-      ) as percentage
-    FROM waste_tickets_landfill wl
-    JOIN institutions i ON wl.supplier_id = i.id
-    WHERE wl.sector_id = $1
-      AND wl.ticket_date BETWEEN $2 AND $3
-      AND wl.deleted_at IS NULL
-    GROUP BY i.id, i.name
-    ORDER BY tons_collected DESC`,
-    [sectorUUID, start_date, end_date, total_tons || 1]
-  );
+    // B. Operators (collectors)
+    const safeTotal = total_tons > 0 ? total_tons : 1; // numeric safe
+
+    const operatorsResult = await pool.query(
+      `SELECT 
+        i.id,
+        i.name,
+        COALESCE(SUM(wl.net_weight_tons), 0) as tons_collected,
+        ROUND(
+          (COALESCE(SUM(wl.net_weight_tons), 0) / NULLIF($4::numeric, 0) * 100), 2
+        ) as percentage
+      FROM waste_tickets_landfill wl
+      JOIN institutions i ON wl.supplier_id = i.id
+      WHERE wl.sector_id = $1
+        AND wl.ticket_date BETWEEN $2 AND $3
+        AND wl.deleted_at IS NULL
+      GROUP BY i.id, i.name
+      ORDER BY tons_collected DESC`,
+      [sectorUUID, start_date, end_date, safeTotal]
+    );
+  
   
   // C. Waste types
   const wasteTypesResult = await pool.query(
