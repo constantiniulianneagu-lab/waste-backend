@@ -1,13 +1,11 @@
 // controllers/disposalContractController.js
 /**
  * ============================================================================
- * DISPOSAL CONTRACT CONTROLLER - UPDATED
+ * DISPOSAL CONTRACT CONTROLLER - COMPLETE WITH AMENDMENTS
  * ============================================================================
- * CRUD operations pentru contracte depozitare
- *
- * Structură simplificată: 1 contract = 1 sector
- * Include suport pentru acte adiționale
- *
+ * CRUD operations pentru contracte depozitare + acte adiționale
+ * 
+ * Fix: institutionId = "0" means ALL contracts (no filter)
  * Updated: 2025-01-24
  * ============================================================================
  */
@@ -34,7 +32,7 @@ export const getDisposalContracts = async (req, res) => {
     const params = [];
     let paramCount = 1;
 
-    // ✅ Filter by institution (0 = ALL)
+    // ✅ FIX: institutionId = "0" means ALL (no institution filter)
     const useInstitutionFilter = institutionId && institutionId !== "0";
     if (useInstitutionFilter) {
       whereConditions.push(`dc.institution_id = $${paramCount}`);
@@ -170,6 +168,7 @@ export const getDisposalContracts = async (req, res) => {
 
     const result = await pool.query(query, params);
 
+    // Calculate effective total value for each contract
     const contracts = result.rows.map((contract) => {
       const effectiveTariff = parseFloat(contract.effective_tariff) || 0;
       const effectiveCec = parseFloat(contract.effective_cec) || 0;
@@ -178,8 +177,7 @@ export const getDisposalContracts = async (req, res) => {
       return {
         ...contract,
         effective_total_per_ton: effectiveTariff + effectiveCec,
-        effective_total_value:
-          effectiveQuantity * (effectiveTariff + effectiveCec),
+        effective_total_value: effectiveQuantity * (effectiveTariff + effectiveCec),
       };
     });
 
@@ -225,7 +223,7 @@ export const getDisposalContract = async (req, res) => {
         dcs.contracted_quantity_tons,
         s.sector_number,
         s.sector_name
-        
+
       FROM disposal_contracts dc
       LEFT JOIN institutions i ON dc.institution_id = i.id
       LEFT JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id AND dcs.deleted_at IS NULL
@@ -259,7 +257,7 @@ export const getDisposalContract = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Error fetching disposal contract:", err);
+    console.error("Error fetching contract:", err);
     res.status(500).json({
       success: false,
       message: "Eroare la încărcarea contractului",
@@ -282,35 +280,41 @@ export const createDisposalContract = async (req, res) => {
 
     const { institutionId } = req.params;
     const {
-      sector_id,
       contract_number,
       contract_date_start,
       contract_date_end,
+      notes,
+      is_active = true,
+      // Sector data (simplified: one sector per contract)
+      sector_id,
       tariff_per_ton,
       cec_tax_per_ton,
       contracted_quantity_tons,
-      notes,
-      is_active = true,
     } = req.body;
 
+    // Validation
     if (!contract_number || !contract_date_start) {
       return res.status(400).json({
         success: false,
-        message: "Numărul contractului și data de început sunt obligatorii",
+        message: "Câmpuri obligatorii: contract_number, contract_date_start",
       });
     }
 
     const client = await pool.connect();
-
     try {
       await client.query("BEGIN");
 
-      // Create main contract
+      // Insert contract
       const contractQuery = `
         INSERT INTO disposal_contracts (
-          institution_id, contract_number, contract_date_start,
-          contract_date_end, is_active, notes
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+          institution_id,
+          contract_number,
+          contract_date_start,
+          contract_date_end,
+          notes,
+          is_active,
+          created_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
       `;
 
@@ -319,37 +323,60 @@ export const createDisposalContract = async (req, res) => {
         contract_number,
         contract_date_start,
         contract_date_end || null,
-        is_active,
         notes || null,
+        is_active,
+        req.user?.id || null,
       ]);
 
-      const contract = contractResult.rows[0];
+      const contractId = contractResult.rows[0].id;
 
-      // Create sector details
+      // Insert sector details
       const sectorQuery = `
         INSERT INTO disposal_contract_sectors (
-          contract_id, sector_id, tariff_per_ton, cec_tax_per_ton, contracted_quantity_tons
+          contract_id,
+          sector_id,
+          tariff_per_ton,
+          cec_tax_per_ton,
+          contracted_quantity_tons
         ) VALUES ($1, $2, $3, $4, $5)
         RETURNING *
       `;
 
-      const sectorResult = await client.query(sectorQuery, [
-        contract.id,
+      await client.query(sectorQuery, [
+        contractId,
         sector_id || null,
-        tariff_per_ton || null,
-        cec_tax_per_ton || null,
+        tariff_per_ton || 0,
+        cec_tax_per_ton || 0,
         contracted_quantity_tons || null,
       ]);
 
       await client.query("COMMIT");
 
+      // Return the full contract
+      const fullContract = await pool.query(
+        `
+        SELECT 
+          dc.*,
+          dcs.sector_id,
+          dcs.tariff_per_ton,
+          dcs.cec_tax_per_ton,
+          dcs.contracted_quantity_tons,
+          s.sector_number,
+          s.sector_name,
+          i.name as institution_name
+        FROM disposal_contracts dc
+        LEFT JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id
+        LEFT JOIN sectors s ON dcs.sector_id = s.id
+        LEFT JOIN institutions i ON dc.institution_id = i.id
+        WHERE dc.id = $1
+      `,
+        [contractId]
+      );
+
       res.status(201).json({
         success: true,
         message: "Contract creat cu succes",
-        data: {
-          ...contract,
-          sector_details: sectorResult.rows[0],
-        },
+        data: fullContract.rows[0],
       });
     } catch (err) {
       await client.query("ROLLBACK");
@@ -358,7 +385,16 @@ export const createDisposalContract = async (req, res) => {
       client.release();
     }
   } catch (err) {
-    console.error("Error creating disposal contract:", err);
+    console.error("Error creating contract:", err);
+
+    // Check for unique constraint violation
+    if (err.code === "23505") {
+      return res.status(400).json({
+        success: false,
+        message: "Există deja un contract cu acest număr pentru această instituție",
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: "Eroare la crearea contractului",
@@ -386,6 +422,7 @@ export const updateDisposalContract = async (req, res) => {
       contract_date_end,
       notes,
       is_active,
+      // Sector data
       sector_id,
       tariff_per_ton,
       cec_tax_per_ton,
@@ -393,23 +430,23 @@ export const updateDisposalContract = async (req, res) => {
     } = req.body;
 
     const client = await pool.connect();
-
     try {
       await client.query("BEGIN");
 
-      const updateContractQuery = `
+      // Update contract
+      const contractQuery = `
         UPDATE disposal_contracts SET
-          contract_number = $1,
-          contract_date_start = $2,
+          contract_number = COALESCE($1, contract_number),
+          contract_date_start = COALESCE($2, contract_date_start),
           contract_date_end = $3,
           notes = $4,
-          is_active = $5,
+          is_active = COALESCE($5, is_active),
           updated_at = CURRENT_TIMESTAMP
         WHERE id = $6 AND deleted_at IS NULL
         RETURNING *
       `;
 
-      const contractResult = await client.query(updateContractQuery, [
+      const result = await client.query(contractQuery, [
         contract_number,
         contract_date_start,
         contract_date_end || null,
@@ -418,7 +455,7 @@ export const updateDisposalContract = async (req, res) => {
         contractId,
       ]);
 
-      if (contractResult.rows.length === 0) {
+      if (result.rows.length === 0) {
         await client.query("ROLLBACK");
         return res.status(404).json({
           success: false,
@@ -426,34 +463,33 @@ export const updateDisposalContract = async (req, res) => {
         });
       }
 
-      const updateSectorQuery = `
-        UPDATE disposal_contract_sectors SET
-          sector_id = $1,
-          tariff_per_ton = $2,
-          cec_tax_per_ton = $3,
-          contracted_quantity_tons = $4,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE contract_id = $5 AND deleted_at IS NULL
-        RETURNING *
-      `;
+      // Update sector details if provided
+      if (sector_id !== undefined) {
+        // Delete old sector link and create new one
+        await client.query("DELETE FROM disposal_contract_sectors WHERE contract_id = $1", [
+          contractId,
+        ]);
 
-      const sectorResult = await client.query(updateSectorQuery, [
-        sector_id || null,
-        tariff_per_ton || null,
-        cec_tax_per_ton || null,
-        contracted_quantity_tons || null,
-        contractId,
-      ]);
+        await client.query(
+          `
+          INSERT INTO disposal_contract_sectors (
+            contract_id,
+            sector_id,
+            tariff_per_ton,
+            cec_tax_per_ton,
+            contracted_quantity_tons
+          ) VALUES ($1, $2, $3, $4, $5)
+        `,
+          [contractId, sector_id, tariff_per_ton || 0, cec_tax_per_ton || 0, contracted_quantity_tons || null]
+        );
+      }
 
       await client.query("COMMIT");
 
       res.json({
         success: true,
         message: "Contract actualizat cu succes",
-        data: {
-          ...contractResult.rows[0],
-          sector_details: sectorResult.rows[0] || null,
-        },
+        data: result.rows[0],
       });
     } catch (err) {
       await client.query("ROLLBACK");
@@ -462,7 +498,7 @@ export const updateDisposalContract = async (req, res) => {
       client.release();
     }
   } catch (err) {
-    console.error("Error updating disposal contract:", err);
+    console.error("Error updating contract:", err);
     res.status(500).json({
       success: false,
       message: "Eroare la actualizarea contractului",
@@ -483,12 +519,12 @@ export const deleteDisposalContract = async (req, res) => {
       });
     }
 
-    const { institutionId, contractId } = req.params;
+    const { contractId } = req.params;
 
     const query = `
-      UPDATE disposal_contracts SET
-        deleted_at = CURRENT_TIMESTAMP,
-        is_active = false
+      UPDATE disposal_contracts 
+      SET deleted_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
       WHERE id = $1 AND deleted_at IS NULL
       RETURNING id
     `;
@@ -502,15 +538,311 @@ export const deleteDisposalContract = async (req, res) => {
       });
     }
 
+    // Also soft-delete related sectors
+    await pool.query("UPDATE disposal_contract_sectors SET deleted_at = CURRENT_TIMESTAMP WHERE contract_id = $1", [
+      contractId,
+    ]);
+
     res.json({
       success: true,
       message: "Contract șters cu succes",
     });
   } catch (err) {
-    console.error("Error deleting disposal contract:", err);
+    console.error("Error deleting contract:", err);
     res.status(500).json({
       success: false,
       message: "Eroare la ștergerea contractului",
     });
   }
+};
+
+// ============================================================================
+// AMENDMENTS CRUD
+// ============================================================================
+
+/**
+ * GET all amendments for a contract
+ */
+export const getContractAmendments = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+
+    const query = `
+      SELECT 
+        dca.*,
+        u.first_name || ' ' || u.last_name as created_by_name
+      FROM disposal_contract_amendments dca
+      LEFT JOIN users u ON dca.created_by = u.id
+      WHERE dca.contract_id = $1 AND dca.deleted_at IS NULL
+      ORDER BY dca.amendment_date DESC, dca.id DESC
+    `;
+
+    const result = await pool.query(query, [contractId]);
+
+    res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (err) {
+    console.error("Error fetching amendments:", err);
+    res.status(500).json({
+      success: false,
+      message: "Eroare la încărcarea actelor adiționale",
+    });
+  }
+};
+
+/**
+ * CREATE amendment for a contract
+ */
+export const createContractAmendment = async (req, res) => {
+  try {
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({
+        success: false,
+        message: "Nu aveți permisiune să adăugați acte adiționale",
+      });
+    }
+
+    const { contractId } = req.params;
+    const {
+      amendment_number,
+      amendment_date,
+      amendment_type, // EXTENSION, TARIFF_CHANGE, QUANTITY_CHANGE, MULTIPLE
+      new_contract_date_end,
+      new_tariff_per_ton,
+      new_cec_tax_per_ton,
+      new_contracted_quantity_tons,
+      changes_description,
+      reason,
+      notes,
+    } = req.body;
+
+    // Validation
+    if (!amendment_number || !amendment_date) {
+      return res.status(400).json({
+        success: false,
+        message: "Numărul și data actului adițional sunt obligatorii",
+      });
+    }
+
+    // Check contract exists
+    const contractCheck = await pool.query(
+      "SELECT id, contract_number FROM disposal_contracts WHERE id = $1 AND deleted_at IS NULL",
+      [contractId]
+    );
+
+    if (contractCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Contract negăsit",
+      });
+    }
+
+    // Determine amendment type if not provided
+    let finalAmendmentType = amendment_type;
+    if (!finalAmendmentType) {
+      const changes = [];
+      if (new_contract_date_end) changes.push("EXTENSION");
+      if (new_tariff_per_ton !== undefined || new_cec_tax_per_ton !== undefined)
+        changes.push("TARIFF_CHANGE");
+      if (new_contracted_quantity_tons !== undefined) changes.push("QUANTITY_CHANGE");
+
+      finalAmendmentType = changes.length > 1 ? "MULTIPLE" : changes[0] || "MULTIPLE";
+    }
+
+    const query = `
+      INSERT INTO disposal_contract_amendments (
+        contract_id,
+        amendment_number,
+        amendment_date,
+        amendment_type,
+        new_contract_date_end,
+        new_tariff_per_ton,
+        new_cec_tax_per_ton,
+        new_contracted_quantity_tons,
+        changes_description,
+        reason,
+        notes,
+        created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, [
+      contractId,
+      amendment_number,
+      amendment_date,
+      finalAmendmentType,
+      new_contract_date_end || null,
+      new_tariff_per_ton || null,
+      new_cec_tax_per_ton || null,
+      new_contracted_quantity_tons || null,
+      changes_description || null,
+      reason || null,
+      notes || null,
+      req.user?.id || null,
+    ]);
+
+    res.status(201).json({
+      success: true,
+      message: "Act adițional adăugat cu succes",
+      data: result.rows[0],
+    });
+  } catch (err) {
+    console.error("Error creating amendment:", err);
+
+    if (err.code === "23505") {
+      return res.status(400).json({
+        success: false,
+        message: "Există deja un act adițional cu acest număr pentru acest contract",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Eroare la adăugarea actului adițional",
+    });
+  }
+};
+
+/**
+ * UPDATE amendment
+ */
+export const updateContractAmendment = async (req, res) => {
+  try {
+    const { canEditData } = req.userAccess;
+    if (!canEditData) {
+      return res.status(403).json({
+        success: false,
+        message: "Nu aveți permisiune să editați acte adiționale",
+      });
+    }
+
+    const { contractId, amendmentId } = req.params;
+    const {
+      amendment_number,
+      amendment_date,
+      amendment_type,
+      new_contract_date_end,
+      new_tariff_per_ton,
+      new_cec_tax_per_ton,
+      new_contracted_quantity_tons,
+      changes_description,
+      reason,
+      notes,
+    } = req.body;
+
+    const query = `
+      UPDATE disposal_contract_amendments SET
+        amendment_number = COALESCE($1, amendment_number),
+        amendment_date = COALESCE($2, amendment_date),
+        amendment_type = COALESCE($3, amendment_type),
+        new_contract_date_end = $4,
+        new_tariff_per_ton = $5,
+        new_cec_tax_per_ton = $6,
+        new_contracted_quantity_tons = $7,
+        changes_description = $8,
+        reason = $9,
+        notes = $10,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $11 AND contract_id = $12 AND deleted_at IS NULL
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, [
+      amendment_number,
+      amendment_date,
+      amendment_type,
+      new_contract_date_end || null,
+      new_tariff_per_ton || null,
+      new_cec_tax_per_ton || null,
+      new_contracted_quantity_tons || null,
+      changes_description || null,
+      reason || null,
+      notes || null,
+      amendmentId,
+      contractId,
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Act adițional negăsit",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Act adițional actualizat cu succes",
+      data: result.rows[0],
+    });
+  } catch (err) {
+    console.error("Error updating amendment:", err);
+    res.status(500).json({
+      success: false,
+      message: "Eroare la actualizarea actului adițional",
+    });
+  }
+};
+
+/**
+ * DELETE amendment
+ */
+export const deleteContractAmendment = async (req, res) => {
+  try {
+    const { canDeleteData } = req.userAccess;
+    if (!canDeleteData) {
+      return res.status(403).json({
+        success: false,
+        message: "Nu aveți permisiune să ștergeți acte adiționale",
+      });
+    }
+
+    const { contractId, amendmentId } = req.params;
+
+    const query = `
+      UPDATE disposal_contract_amendments 
+      SET deleted_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND contract_id = $2 AND deleted_at IS NULL
+      RETURNING id
+    `;
+
+    const result = await pool.query(query, [amendmentId, contractId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Act adițional negăsit",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Act adițional șters cu succes",
+    });
+  } catch (err) {
+    console.error("Error deleting amendment:", err);
+    res.status(500).json({
+      success: false,
+      message: "Eroare la ștergerea actului adițional",
+    });
+  }
+};
+
+// ============================================================================
+// EXPORT ALL
+// ============================================================================
+export default {
+  getDisposalContracts,
+  getDisposalContract,
+  createDisposalContract,
+  updateDisposalContract,
+  deleteDisposalContract,
+  getContractAmendments,
+  createContractAmendment,
+  updateContractAmendment,
+  deleteContractAmendment,
 };
