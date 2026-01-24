@@ -24,12 +24,17 @@ import { resolveUserAccess } from '../middleware/resolveUserAccess.js';
 import { ROLES } from '../constants/roles.js';
 
 // Import contract controllers
+// La importuri, adaugă:
 import {
   getTMBContracts,
   getTMBContract,
   createTMBContract,
   updateTMBContract,
-  deleteTMBContract
+  deleteTMBContract,
+  getTMBContractAmendments,
+  createTMBContractAmendment,
+  updateTMBContractAmendment,
+  deleteTMBContractAmendment,
 } from '../controllers/tmbContractController.js';
 
 import {
@@ -92,6 +97,27 @@ router.get('/:institutionId/tmb-contracts/:contractId', getTMBContract);
 router.post('/:institutionId/tmb-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createTMBContract);
 router.put('/:institutionId/tmb-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateTMBContract);
 router.delete('/:institutionId/tmb-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteTMBContract);
+
+// ============================================================================
+// TMB CONTRACT AMENDMENTS ROUTES
+// ============================================================================
+
+router.get('/:institutionId/tmb-contracts/:contractId/amendments', getTMBContractAmendments);
+router.post(
+  '/:institutionId/tmb-contracts/:contractId/amendments',
+  authorizeRoles(ROLES.PLATFORM_ADMIN),
+  createTMBContractAmendment
+);
+router.put(
+  '/:institutionId/tmb-contracts/:contractId/amendments/:amendmentId',
+  authorizeRoles(ROLES.PLATFORM_ADMIN),
+  updateTMBContractAmendment
+);
+router.delete(
+  '/:institutionId/tmb-contracts/:contractId/amendments/:amendmentId',
+  authorizeRoles(ROLES.PLATFORM_ADMIN),
+  deleteTMBContractAmendment
+);
 
 // ============================================================================
 // WASTE OPERATOR CONTRACT ROUTES
