@@ -34,7 +34,7 @@ import {
 
 import {
   getWasteOperatorContracts,
-  getWasteOperatorContractById,
+  getWasteOperatorContract,
   createWasteOperatorContract,
   updateWasteOperatorContract,
   deleteWasteOperatorContract
@@ -98,7 +98,7 @@ router.delete('/:institutionId/tmb-contracts/:contractId', authorizeRoles(ROLES.
 // ============================================================================
 
 router.get('/:institutionId/waste-contracts', getWasteOperatorContracts);
-router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContractById);
+router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContract);
 router.post('/:institutionId/waste-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createWasteOperatorContract);
 router.put('/:institutionId/waste-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateWasteOperatorContract);
 router.delete('/:institutionId/waste-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteWasteOperatorContract);
