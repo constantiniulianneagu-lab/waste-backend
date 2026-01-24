@@ -3,12 +3,8 @@
  * ============================================================================
  * INSTITUTION ROUTES - WITH ACCESS CONTROL + SCOPE FILTERING
  * ============================================================================
- * Policy:
- * - AUTH required
- * - resolveUserAccess required (scope)
- * - REGULATOR_VIEWER MUST NOT access institutions page (per requirements)
- * - READ allowed for PLATFORM_ADMIN / ADMIN_INSTITUTION / EDITOR_INSTITUTION
- * - WRITE (institution + contracts) allowed ONLY for PLATFORM_ADMIN
+ * Updated: 2025-01-24
+ * - Added amendment routes for disposal contracts
  * ============================================================================
  */
 
@@ -20,7 +16,7 @@ import {
   updateInstitution,
   deleteInstitution,
   getInstitutionStats,
-  getInstitutionContracts // Deprecated - kept for backwards compatibility
+  getInstitutionContracts
 } from '../controllers/institutionController.js';
 
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
@@ -57,7 +53,11 @@ import {
   getDisposalContract,
   createDisposalContract,
   updateDisposalContract,
-  deleteDisposalContract
+  deleteDisposalContract,
+  getContractAmendments,
+  createContractAmendment,
+  updateContractAmendment,
+  deleteContractAmendment
 } from '../controllers/disposalContractController.js';
 
 const router = express.Router();
@@ -66,7 +66,7 @@ const router = express.Router();
 router.use(authenticateToken);
 router.use(resolveUserAccess);
 
-// REGULATOR_VIEWER NU are acces la pagina Institutii (per tabel cerinte)
+// REGULATOR_VIEWER NU are acces la pagina Institutii
 router.use(authorizeRoles(ROLES.PLATFORM_ADMIN, ROLES.ADMIN_INSTITUTION, ROLES.EDITOR_INSTITUTION));
 
 // ============================================================================
@@ -74,13 +74,8 @@ router.use(authorizeRoles(ROLES.PLATFORM_ADMIN, ROLES.ADMIN_INSTITUTION, ROLES.E
 // ============================================================================
 
 router.get('/', getAllInstitutions);
-
-// Stats = doar PLATFORM_ADMIN (cum era)
 router.get('/stats', authorizeRoles(ROLES.PLATFORM_ADMIN), getInstitutionStats);
-
-// Deprecated - kept for backwards compatibility
 router.get('/:id/contracts', getInstitutionContracts);
-
 router.get('/:id', getInstitutionById);
 
 // WRITE: doar PLATFORM_ADMIN
@@ -127,5 +122,33 @@ router.get('/:institutionId/disposal-contracts/:contractId', getDisposalContract
 router.post('/:institutionId/disposal-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createDisposalContract);
 router.put('/:institutionId/disposal-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateDisposalContract);
 router.delete('/:institutionId/disposal-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteDisposalContract);
+
+// ============================================================================
+// DISPOSAL CONTRACT AMENDMENTS ROUTES (NEW!)
+// ============================================================================
+
+// Get all amendments for a contract
+router.get('/:institutionId/disposal-contracts/:contractId/amendments', getContractAmendments);
+
+// Create new amendment
+router.post(
+  '/:institutionId/disposal-contracts/:contractId/amendments',
+  authorizeRoles(ROLES.PLATFORM_ADMIN),
+  createContractAmendment
+);
+
+// Update amendment
+router.put(
+  '/:institutionId/disposal-contracts/:contractId/amendments/:amendmentId',
+  authorizeRoles(ROLES.PLATFORM_ADMIN),
+  updateContractAmendment
+);
+
+// Delete amendment
+router.delete(
+  '/:institutionId/disposal-contracts/:contractId/amendments/:amendmentId',
+  authorizeRoles(ROLES.PLATFORM_ADMIN),
+  deleteContractAmendment
+);
 
 export default router;
