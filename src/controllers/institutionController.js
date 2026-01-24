@@ -1,14 +1,13 @@
 // src/controllers/institutionController.js
 /**
  * ============================================================================
- * INSTITUTION CONTROLLER - FIXED & IMPROVED
+ * INSTITUTION CONTROLLER - UPDATED WITH REPRESENTATIVE FIELDS
  * ============================================================================
  * 
- * ✅ FIXES:
- * - createInstitution: salvează TOATE câmpurile
- * - updateInstitution: actualizează TOATE câmpurile
- * - deleteInstitution: curățat dead code
- * - Adăugat support pentru institution_sectors (relație many-to-many)
+ * Updated: 2025-01-24
+ * - Added representative_name, representative_position, representative_phone, representative_email
+ * - For operators: WASTE_COLLECTOR, SORTING_OPERATOR, TMB_OPERATOR, 
+ *   AEROBIC_OPERATOR, ANAEROBIC_OPERATOR, DISPOSAL_CLIENT
  * 
  * ============================================================================
  */
@@ -129,6 +128,12 @@ export const getAllInstitutions = async (req, res) => {
         i.is_active,
         i.created_at,
         i.updated_at,
+        
+        -- Representative fields (NEW!)
+        i.representative_name,
+        i.representative_position,
+        i.representative_phone,
+        i.representative_email,
         
         -- Sectoare asociate ca string (pentru compatibility)
         (
@@ -280,7 +285,7 @@ export const getInstitutionById = async (req, res) => {
 };
 
 // ============================================================================
-// CREATE INSTITUTION - FIXED: salvează TOATE câmpurile
+// CREATE INSTITUTION - WITH REPRESENTATIVE FIELDS
 // ============================================================================
 export const createInstitution = async (req, res) => {
   try {
@@ -297,14 +302,19 @@ export const createInstitution = async (req, res) => {
       name, 
       short_name,
       type, 
-      sector,  // poate fi "1,2,3" sau array [1,2,3]
+      sector,
       contact_email,
       contact_phone,
       address,
       website,
       fiscal_code,
       registration_no,
-      is_active = true
+      is_active = true,
+      // NEW: Representative fields
+      representative_name,
+      representative_position,
+      representative_phone,
+      representative_email
     } = req.body;
 
     // Validare minimă
@@ -328,7 +338,7 @@ export const createInstitution = async (req, res) => {
       });
     }
 
-    // Inserează instituție cu TOATE câmpurile
+    // Inserează instituție cu TOATE câmpurile inclusiv representative
     const result = await pool.query(
       `INSERT INTO institutions (
         name, 
@@ -341,10 +351,14 @@ export const createInstitution = async (req, res) => {
         fiscal_code,
         registration_no,
         is_active,
+        representative_name,
+        representative_position,
+        representative_phone,
+        representative_email,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
       RETURNING *`,
       [
         name,
@@ -356,7 +370,11 @@ export const createInstitution = async (req, res) => {
         website || null,
         fiscal_code || null,
         registration_no || null,
-        is_active
+        is_active,
+        representative_name || null,
+        representative_position || null,
+        representative_phone || null,
+        representative_email ? representative_email.toLowerCase() : null
       ]
     );
 
@@ -397,7 +415,7 @@ export const createInstitution = async (req, res) => {
 };
 
 // ============================================================================
-// UPDATE INSTITUTION - FIXED: actualizează TOATE câmpurile
+// UPDATE INSTITUTION - WITH REPRESENTATIVE FIELDS
 // ============================================================================
 export const updateInstitution = async (req, res) => {
   try {
@@ -422,7 +440,12 @@ export const updateInstitution = async (req, res) => {
       website,
       fiscal_code,
       registration_no,
-      is_active
+      is_active,
+      // NEW: Representative fields
+      representative_name,
+      representative_position,
+      representative_phone,
+      representative_email
     } = req.body;
 
     // Verifică dacă instituția există
@@ -438,63 +461,93 @@ export const updateInstitution = async (req, res) => {
       });
     }
 
-    // Verifică dacă noul nume e deja folosit de altă instituție
-    if (name) {
-      const nameCheck = await pool.query(
-        'SELECT id FROM institutions WHERE name = $1 AND id != $2 AND deleted_at IS NULL',
-        [name, id]
-      );
-
-      if (nameCheck.rows.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'O instituție cu acest nume există deja'
-        });
-      }
-    }
-
-    // Construiește query dinamic pentru câmpurile trimise
-    const updates = [];
+    // Construiește query-ul de update dinamic
+    const updateFields = [];
     const params = [];
     let paramCount = 1;
 
-    const addUpdate = (field, value) => {
-      if (value !== undefined) {
-        updates.push(`${field} = $${paramCount}`);
-        params.push(value);
-        paramCount++;
-      }
-    };
-
-    addUpdate('name', name);
-    addUpdate('short_name', short_name);
-    addUpdate('type', type);
-    addUpdate('contact_email', contact_email ? contact_email.toLowerCase() : contact_email);
-    addUpdate('contact_phone', contact_phone);
-    addUpdate('address', address);
-    addUpdate('website', website);
-    addUpdate('fiscal_code', fiscal_code);
-    addUpdate('registration_no', registration_no);
-    
+    if (name !== undefined) {
+      updateFields.push(`name = $${paramCount}`);
+      params.push(name);
+      paramCount++;
+    }
+    if (short_name !== undefined) {
+      updateFields.push(`short_name = $${paramCount}`);
+      params.push(short_name || null);
+      paramCount++;
+    }
+    if (type !== undefined) {
+      updateFields.push(`type = $${paramCount}`);
+      params.push(type);
+      paramCount++;
+    }
+    if (contact_email !== undefined) {
+      updateFields.push(`contact_email = $${paramCount}`);
+      params.push(contact_email ? contact_email.toLowerCase() : null);
+      paramCount++;
+    }
+    if (contact_phone !== undefined) {
+      updateFields.push(`contact_phone = $${paramCount}`);
+      params.push(contact_phone || null);
+      paramCount++;
+    }
+    if (address !== undefined) {
+      updateFields.push(`address = $${paramCount}`);
+      params.push(address || null);
+      paramCount++;
+    }
+    if (website !== undefined) {
+      updateFields.push(`website = $${paramCount}`);
+      params.push(website || null);
+      paramCount++;
+    }
+    if (fiscal_code !== undefined) {
+      updateFields.push(`fiscal_code = $${paramCount}`);
+      params.push(fiscal_code || null);
+      paramCount++;
+    }
+    if (registration_no !== undefined) {
+      updateFields.push(`registration_no = $${paramCount}`);
+      params.push(registration_no || null);
+      paramCount++;
+    }
     if (is_active !== undefined) {
-      addUpdate('is_active', is_active);
+      updateFields.push(`is_active = $${paramCount}`);
+      params.push(is_active);
+      paramCount++;
+    }
+    
+    // NEW: Representative fields
+    if (representative_name !== undefined) {
+      updateFields.push(`representative_name = $${paramCount}`);
+      params.push(representative_name || null);
+      paramCount++;
+    }
+    if (representative_position !== undefined) {
+      updateFields.push(`representative_position = $${paramCount}`);
+      params.push(representative_position || null);
+      paramCount++;
+    }
+    if (representative_phone !== undefined) {
+      updateFields.push(`representative_phone = $${paramCount}`);
+      params.push(representative_phone || null);
+      paramCount++;
+    }
+    if (representative_email !== undefined) {
+      updateFields.push(`representative_email = $${paramCount}`);
+      params.push(representative_email ? representative_email.toLowerCase() : null);
+      paramCount++;
     }
 
-    updates.push(`updated_at = NOW()`);
+    // Adaugă updated_at
+    updateFields.push(`updated_at = NOW()`);
 
-    if (updates.length === 1) {
-      // Doar updated_at, nimic de actualizat
-      return res.status(400).json({
-        success: false,
-        message: 'Niciun câmp de actualizat'
-      });
-    }
-
+    // Adaugă ID-ul la parametri
     params.push(id);
 
     const query = `
       UPDATE institutions 
-      SET ${updates.join(', ')}
+      SET ${updateFields.join(', ')}
       WHERE id = $${paramCount} AND deleted_at IS NULL
       RETURNING *
     `;
@@ -536,7 +589,7 @@ export const updateInstitution = async (req, res) => {
 };
 
 // ============================================================================
-// DELETE INSTITUTION - FIXED: curățat dead code
+// DELETE INSTITUTION
 // ============================================================================
 export const deleteInstitution = async (req, res) => {
   try {
@@ -636,6 +689,8 @@ export const getInstitutionStats = async (req, res) => {
         COUNT(*) FILTER (WHERE type = 'WASTE_COLLECTOR') as collectors,
         COUNT(*) FILTER (WHERE type = 'TMB_OPERATOR') as tmb_operators,
         COUNT(*) FILTER (WHERE type = 'SORTING_OPERATOR') as sorting_operators,
+        COUNT(*) FILTER (WHERE type = 'AEROBIC_OPERATOR') as aerobic_operators,
+        COUNT(*) FILTER (WHERE type = 'ANAEROBIC_OPERATOR') as anaerobic_operators,
         COUNT(*) FILTER (WHERE type = 'DISPOSAL_CLIENT' OR type = 'LANDFILL') as disposal,
         COUNT(*) FILTER (WHERE type = 'RECYCLING_CLIENT') as recycling,
         COUNT(*) FILTER (WHERE type = 'RECOVERY_CLIENT') as recovery,
@@ -658,7 +713,7 @@ export const getInstitutionStats = async (req, res) => {
 };
 
 // ============================================================================
-// GET INSTITUTION CONTRACTS - PLACEHOLDER
+// GET INSTITUTION CONTRACTS - SUMMARY
 // ============================================================================
 export const getInstitutionContracts = async (req, res) => {
   try {
@@ -684,12 +739,77 @@ export const getInstitutionContracts = async (req, res) => {
         message: 'Institution not found'
       });
     }
+
+    const institution = institutionResult.rows[0];
+    let contracts = [];
+
+    // Get contracts based on institution type
+    switch (institution.type) {
+      case 'WASTE_COLLECTOR':
+        const wasteContracts = await pool.query(`
+          SELECT 'WASTE_COLLECTOR' as contract_type, id, contract_number, contract_date_start, contract_date_end, is_active
+          FROM waste_collector_contracts
+          WHERE institution_id = $1 AND deleted_at IS NULL
+          ORDER BY contract_date_start DESC
+        `, [id]);
+        contracts = wasteContracts.rows;
+        break;
+
+      case 'SORTING_OPERATOR':
+        const sortingContracts = await pool.query(`
+          SELECT 'SORTING' as contract_type, id, contract_number, contract_date_start, contract_date_end, is_active
+          FROM sorting_operator_contracts
+          WHERE institution_id = $1 AND deleted_at IS NULL
+          ORDER BY contract_date_start DESC
+        `, [id]);
+        contracts = sortingContracts.rows;
+        break;
+
+      case 'TMB_OPERATOR':
+      case 'AEROBIC_OPERATOR':
+      case 'ANAEROBIC_OPERATOR':
+        // TMB contracts are linked by sector, not institution
+        // Get sectors for this institution first
+        const sectorsResult = await pool.query(`
+          SELECT s.id 
+          FROM institution_sectors ins
+          JOIN sectors s ON ins.sector_id = s.id
+          WHERE ins.institution_id = $1
+        `, [id]);
+        
+        if (sectorsResult.rows.length > 0) {
+          const sectorIds = sectorsResult.rows.map(r => r.id);
+          const tmbContracts = await pool.query(`
+            SELECT 'TMB' as contract_type, tc.id, tc.contract_number, tc.contract_date_start, tc.contract_date_end, tc.is_active,
+                   s.sector_number, s.sector_name
+            FROM tmb_contracts tc
+            JOIN sectors s ON tc.sector_id = s.id
+            WHERE tc.sector_id = ANY($1) AND tc.deleted_at IS NULL
+            ORDER BY tc.contract_date_start DESC
+          `, [sectorIds]);
+          contracts = tmbContracts.rows;
+        }
+        break;
+
+      case 'DISPOSAL_CLIENT':
+      case 'LANDFILL':
+        const disposalContracts = await pool.query(`
+          SELECT 'DISPOSAL' as contract_type, dc.id, dc.contract_number, dc.contract_date_start, dc.contract_date_end, dc.is_active,
+                 s.sector_number, s.sector_name
+          FROM disposal_contracts dc
+          LEFT JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id
+          LEFT JOIN sectors s ON dcs.sector_id = s.id
+          WHERE dc.institution_id = $1 AND dc.deleted_at IS NULL
+          ORDER BY dc.contract_date_start DESC
+        `, [id]);
+        contracts = disposalContracts.rows;
+        break;
+    }
     
-    // Returnează gol - frontend-ul va folosi endpoint-uri specifice
     res.json({
       success: true,
-      data: [],
-      message: 'Use specific contract endpoints based on institution type'
+      data: contracts,
+      institution_type: institution.type
     });
     
   } catch (err) {
