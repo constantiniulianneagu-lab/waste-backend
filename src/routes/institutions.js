@@ -23,9 +23,9 @@ import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 import { resolveUserAccess } from '../middleware/resolveUserAccess.js';
 import { ROLES } from '../constants/roles.js';
 
-// Import contract controllers
-// La importuri, adaugă:
+// TMB Contracts imports
 import {
+  validateTMBContract,
   getTMBContracts,
   getTMBContract,
   createTMBContract,
@@ -34,7 +34,6 @@ import {
   getTMBContractAmendments,
   createTMBContractAmendment,
   updateTMBContractAmendment,
-  validateTMBContract,
   deleteTMBContractAmendment,
 } from '../controllers/tmbContractController.js';
 
