@@ -34,6 +34,7 @@ import {
   getTMBContractAmendments,
   createTMBContractAmendment,
   updateTMBContractAmendment,
+  validateTMBContract,
   deleteTMBContractAmendment,
 } from '../controllers/tmbContractController.js';
 
@@ -62,6 +63,7 @@ import {
   getContractAmendments,
   createContractAmendment,
   updateContractAmendment,
+  validateDisposalContract,
   deleteContractAmendment
 } from '../controllers/disposalContractController.js';
 
@@ -97,6 +99,7 @@ router.get('/:institutionId/tmb-contracts/:contractId', getTMBContract);
 router.post('/:institutionId/tmb-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createTMBContract);
 router.put('/:institutionId/tmb-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateTMBContract);
 router.delete('/:institutionId/tmb-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteTMBContract);
+router.post('/contracts/validate/tmb', validateTMBContract);
 
 // ============================================================================
 // TMB CONTRACT AMENDMENTS ROUTES
@@ -118,7 +121,6 @@ router.delete(
   authorizeRoles(ROLES.PLATFORM_ADMIN),
   deleteTMBContractAmendment
 );
-
 // ============================================================================
 // WASTE OPERATOR CONTRACT ROUTES
 // ============================================================================
@@ -148,6 +150,7 @@ router.get('/:institutionId/disposal-contracts/:contractId', getDisposalContract
 router.post('/:institutionId/disposal-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createDisposalContract);
 router.put('/:institutionId/disposal-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateDisposalContract);
 router.delete('/:institutionId/disposal-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteDisposalContract);
+router.post('/contracts/validate/disposal', validateDisposalContract);
 
 // ============================================================================
 // DISPOSAL CONTRACT AMENDMENTS ROUTES (NEW!)
