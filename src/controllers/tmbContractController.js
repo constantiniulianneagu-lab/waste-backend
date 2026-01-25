@@ -35,16 +35,9 @@ export const getTMBContracts = async (req, res) => {
     let paramCount = 1;
 
     // institutionId = "0" means ALL (no filter)
-    // For TMB, we filter by operator institution through institution_sectors
     const useInstitutionFilter = institutionId && institutionId !== "0";
     if (useInstitutionFilter) {
-      whereConditions.push(`
-        EXISTS (
-          SELECT 1 FROM institution_sectors ins 
-          WHERE ins.sector_id = tc.sector_id 
-          AND ins.institution_id = $${paramCount}
-        )
-      `);
+      whereConditions.push(`tc.institution_id = $${paramCount}`);
       params.push(institutionId);
       paramCount++;
     }
@@ -68,6 +61,7 @@ export const getTMBContracts = async (req, res) => {
     const query = `
       SELECT 
         tc.id,
+        tc.institution_id,
         tc.sector_id,
         tc.contract_number,
         tc.contract_date_start,
@@ -92,24 +86,14 @@ export const getTMBContracts = async (req, res) => {
         s.sector_number,
         s.sector_name,
         
+        -- Main operator (institution) info
+        i.name as institution_name,
+        i.short_name as institution_short_name,
+        i.type as institution_type,
+        
         -- Associate institution info
         ai.name as associate_name,
         ai.short_name as associate_short_name,
-        
-        -- Main operator (from institution_sectors)
-        (
-          SELECT json_build_object(
-            'id', i.id,
-            'name', i.name,
-            'short_name', i.short_name
-          )
-          FROM institution_sectors ins
-          JOIN institutions i ON ins.institution_id = i.id
-          WHERE ins.sector_id = tc.sector_id
-            AND i.type IN ('TMB_OPERATOR', 'AEROBIC_OPERATOR', 'ANAEROBIC_OPERATOR')
-            AND i.deleted_at IS NULL
-          LIMIT 1
-        ) as operator_info,
         
         -- Count of amendments
         (
@@ -154,6 +138,7 @@ export const getTMBContracts = async (req, res) => {
 
       FROM tmb_contracts tc
       LEFT JOIN sectors s ON tc.sector_id = s.id
+      LEFT JOIN institutions i ON tc.institution_id = i.id
       LEFT JOIN institutions ai ON tc.associate_institution_id = ai.id
       WHERE ${whereClause}
       ORDER BY s.sector_number, tc.contract_date_start DESC
@@ -186,69 +171,6 @@ export const getTMBContracts = async (req, res) => {
 };
 
 // ============================================================================
-// GET SINGLE TMB CONTRACT WITH ALL AMENDMENTS
-// ============================================================================
-export const getTMBContract = async (req, res) => {
-  try {
-    const { scopes } = req.userAccess;
-    if (scopes?.contracts === "NONE") {
-      return res.status(403).json({
-        success: false,
-        message: "Nu aveți permisiune să accesați contractele",
-      });
-    }
-
-    const { contractId } = req.params;
-
-    const query = `
-      SELECT 
-        tc.*,
-        s.sector_number,
-        s.sector_name,
-        ai.name as associate_name,
-        ai.short_name as associate_short_name,
-        COALESCE(tc.tariff_per_ton, 0) * COALESCE(tc.estimated_quantity_tons, 0) as total_value
-      FROM tmb_contracts tc
-      LEFT JOIN sectors s ON tc.sector_id = s.id
-      LEFT JOIN institutions ai ON tc.associate_institution_id = ai.id
-      WHERE tc.id = $1 AND tc.deleted_at IS NULL
-    `;
-
-    const contractResult = await pool.query(query, [contractId]);
-
-    if (contractResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Contract TMB negăsit",
-      });
-    }
-
-    // Get amendments
-    const amendmentsQuery = `
-      SELECT *
-      FROM tmb_contract_amendments
-      WHERE contract_id = $1 AND deleted_at IS NULL
-      ORDER BY amendment_date DESC, id DESC
-    `;
-    const amendmentsResult = await pool.query(amendmentsQuery, [contractId]);
-
-    res.json({
-      success: true,
-      data: {
-        ...contractResult.rows[0],
-        amendments: amendmentsResult.rows,
-      },
-    });
-  } catch (err) {
-    console.error("Error fetching TMB contract:", err);
-    res.status(500).json({
-      success: false,
-      message: "Eroare la încărcarea contractului TMB",
-    });
-  }
-};
-
-// ============================================================================
 // CREATE TMB CONTRACT
 // ============================================================================
 export const createTMBContract = async (req, res) => {
@@ -262,6 +184,7 @@ export const createTMBContract = async (req, res) => {
     }
 
     const {
+      institution_id,  // Operatorul TMB principal
       sector_id,
       contract_number,
       contract_date_start,
@@ -279,15 +202,16 @@ export const createTMBContract = async (req, res) => {
     } = req.body;
 
     // Validation
-    if (!contract_number || !contract_date_start || !sector_id) {
+    if (!contract_number || !contract_date_start || !sector_id || !institution_id) {
       return res.status(400).json({
         success: false,
-        message: "Câmpuri obligatorii: contract_number, contract_date_start, sector_id",
+        message: "Câmpuri obligatorii: institution_id, contract_number, contract_date_start, sector_id",
       });
     }
 
     const query = `
       INSERT INTO tmb_contracts (
+        institution_id,
         sector_id,
         contract_number,
         contract_date_start,
@@ -303,11 +227,12 @@ export const createTMBContract = async (req, res) => {
         notes,
         is_active,
         created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *
     `;
 
     const result = await pool.query(query, [
+      institution_id,
       sector_id,
       contract_number,
       contract_date_start,
@@ -325,13 +250,16 @@ export const createTMBContract = async (req, res) => {
       req.user?.id || null,
     ]);
 
-    // Get full contract with sector info
+    // Get full contract with joins
     const fullContract = await pool.query(
       `
-      SELECT tc.*, s.sector_number, s.sector_name,
+      SELECT tc.*, 
+             s.sector_number, s.sector_name,
+             i.name as institution_name, i.short_name as institution_short_name,
              ai.name as associate_name, ai.short_name as associate_short_name
       FROM tmb_contracts tc
       LEFT JOIN sectors s ON tc.sector_id = s.id
+      LEFT JOIN institutions i ON tc.institution_id = i.id
       LEFT JOIN institutions ai ON tc.associate_institution_id = ai.id
       WHERE tc.id = $1
     `,
@@ -375,6 +303,7 @@ export const updateTMBContract = async (req, res) => {
 
     const { contractId } = req.params;
     const {
+      institution_id,
       sector_id,
       contract_number,
       contract_date_start,
@@ -393,26 +322,28 @@ export const updateTMBContract = async (req, res) => {
 
     const query = `
       UPDATE tmb_contracts SET
-        sector_id = COALESCE($1, sector_id),
-        contract_number = COALESCE($2, contract_number),
-        contract_date_start = COALESCE($3, contract_date_start),
-        contract_date_end = $4,
-        tariff_per_ton = $5,
-        estimated_quantity_tons = $6,
-        associate_institution_id = $7,
-        indicator_recycling_percent = $8,
-        indicator_energy_recovery_percent = $9,
-        indicator_disposal_percent = $10,
-        contract_file_url = $11,
-        contract_file_name = $12,
-        notes = $13,
-        is_active = COALESCE($14, is_active),
+        institution_id = COALESCE($1, institution_id),
+        sector_id = COALESCE($2, sector_id),
+        contract_number = COALESCE($3, contract_number),
+        contract_date_start = COALESCE($4, contract_date_start),
+        contract_date_end = $5,
+        tariff_per_ton = $6,
+        estimated_quantity_tons = $7,
+        associate_institution_id = $8,
+        indicator_recycling_percent = $9,
+        indicator_energy_recovery_percent = $10,
+        indicator_disposal_percent = $11,
+        contract_file_url = $12,
+        contract_file_name = $13,
+        notes = $14,
+        is_active = COALESCE($15, is_active),
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $15 AND deleted_at IS NULL
+      WHERE id = $16 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const result = await pool.query(query, [
+      institution_id,
       sector_id,
       contract_number,
       contract_date_start,
