@@ -171,6 +171,135 @@ export const getTMBContracts = async (req, res) => {
 };
 
 // ============================================================================
+// VALIDATE TMB CONTRACT (before save)
+// ============================================================================
+export const validateTMBContract = async (req, res) => {
+  try {
+    const {
+      id, // null pentru contract nou, id pentru edit
+      institution_id,
+      sector_id,
+      contract_number,
+      contract_date_start,
+      contract_date_end,
+    } = req.body;
+
+    const warnings = [];
+    const errors = [];
+
+    // 1. CHECK DUPLICATE CONTRACT NUMBER
+    const duplicateNumberQuery = `
+      SELECT id, contract_number, institution_id
+      FROM tmb_contracts
+      WHERE contract_number = $1 
+        AND deleted_at IS NULL
+        ${id ? 'AND id != $2' : ''}
+    `;
+    const duplicateParams = id ? [contract_number, id] : [contract_number];
+    const duplicateResult = await pool.query(duplicateNumberQuery, duplicateParams);
+    
+    if (duplicateResult.rows.length > 0) {
+      errors.push({
+        type: 'DUPLICATE_NUMBER',
+        message: `Există deja un contract cu numărul "${contract_number}"`,
+      });
+    }
+
+    // 2. CHECK EXISTING CONTRACT FOR SAME OPERATOR + SECTOR
+    const existingContractQuery = `
+      SELECT tc.id, tc.contract_number, tc.contract_date_start, tc.contract_date_end,
+             i.name as institution_name, s.sector_number
+      FROM tmb_contracts tc
+      LEFT JOIN institutions i ON tc.institution_id = i.id
+      LEFT JOIN sectors s ON tc.sector_id = s.id
+      WHERE tc.institution_id = $1 
+        AND tc.sector_id = $2
+        AND tc.is_active = true
+        AND tc.deleted_at IS NULL
+        ${id ? 'AND tc.id != $3' : ''}
+    `;
+    const existingParams = id 
+      ? [institution_id, sector_id, id] 
+      : [institution_id, sector_id];
+    const existingResult = await pool.query(existingContractQuery, existingParams);
+
+    if (existingResult.rows.length > 0) {
+      const existing = existingResult.rows[0];
+      warnings.push({
+        type: 'EXISTING_CONTRACT',
+        message: `Există deja un contract activ pentru acest operator și sector`,
+        details: {
+          contract_number: existing.contract_number,
+          period: `${existing.contract_date_start ? new Date(existing.contract_date_start).toLocaleDateString('ro-RO') : '?'} - ${existing.contract_date_end ? new Date(existing.contract_date_end).toLocaleDateString('ro-RO') : 'nedefinit'}`,
+        },
+      });
+    }
+
+    // 3. CHECK OVERLAPPING PERIODS
+    if (contract_date_start && existingResult.rows.length > 0) {
+      for (const existing of existingResult.rows) {
+        if (existing.contract_date_end && contract_date_end) {
+          // Both have end dates - check overlap
+          const newStart = new Date(contract_date_start);
+          const newEnd = new Date(contract_date_end);
+          const existStart = new Date(existing.contract_date_start);
+          const existEnd = new Date(existing.contract_date_end);
+
+          // Overlap if: newStart <= existEnd AND newEnd >= existStart
+          if (newStart <= existEnd && newEnd >= existStart) {
+            warnings.push({
+              type: 'OVERLAPPING_PERIOD',
+              message: `Perioada se suprapune cu contractul ${existing.contract_number}`,
+              details: {
+                contract_number: existing.contract_number,
+                period: `${existStart.toLocaleDateString('ro-RO')} - ${existEnd.toLocaleDateString('ro-RO')}`,
+              },
+            });
+          }
+        } else if (!existing.contract_date_end) {
+          // Existing contract has no end date (indefinite)
+          warnings.push({
+            type: 'OVERLAPPING_PERIOD',
+            message: `Contractul ${existing.contract_number} nu are dată de sfârșit definită`,
+            details: {
+              contract_number: existing.contract_number,
+              period: `${new Date(existing.contract_date_start).toLocaleDateString('ro-RO')} - nedefinit`,
+            },
+          });
+        }
+      }
+    }
+
+    // 4. CHECK IF CONTRACT IS ALREADY EXPIRED
+    if (contract_date_end) {
+      const endDate = new Date(contract_date_end);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      if (endDate < today) {
+        warnings.push({
+          type: 'EXPIRED_CONTRACT',
+          message: 'Contractul va fi creat ca expirat (data sfârșit este în trecut)',
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      valid: errors.length === 0,
+      errors,
+      warnings,
+    });
+  } catch (err) {
+    console.error("Error validating TMB contract:", err);
+    res.status(500).json({
+      success: false,
+      message: "Eroare la validarea contractului",
+    });
+  }
+};
+
+// ============================================================================
 // CREATE TMB CONTRACT
 // ============================================================================
 export const createTMBContract = async (req, res) => {
@@ -721,6 +850,7 @@ export default {
   getTMBContracts,
   getTMBContract,
   createTMBContract,
+  validateTMBContract,
   updateTMBContract,
   deleteTMBContract,
   getTMBContractAmendments,
