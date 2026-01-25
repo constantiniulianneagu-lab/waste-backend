@@ -266,6 +266,145 @@ export const getDisposalContract = async (req, res) => {
 };
 
 // ============================================================================
+// VALIDATE DISPOSAL CONTRACT (before save)
+// ============================================================================
+export const validateDisposalContract = async (req, res) => {
+  try {
+    const {
+      id,
+      institution_id,
+      sector_id,
+      contract_number,
+      contract_date_start,
+      contract_date_end,
+    } = req.body;
+
+    const warnings = [];
+    const errors = [];
+
+    // 1. CHECK DUPLICATE CONTRACT NUMBER
+    if (contract_number) {
+      const duplicateNumberQuery = `
+        SELECT dc.id, dc.contract_number
+        FROM disposal_contracts dc
+        WHERE dc.contract_number = $1 
+          AND dc.deleted_at IS NULL
+          ${id ? 'AND dc.id != $2' : ''}
+      `;
+      const duplicateParams = id ? [contract_number, id] : [contract_number];
+      const duplicateResult = await pool.query(duplicateNumberQuery, duplicateParams);
+      
+      if (duplicateResult.rows.length > 0) {
+        errors.push({
+          type: 'DUPLICATE_NUMBER',
+          message: `Există deja un contract cu numărul "${contract_number}"`,
+        });
+      }
+    }
+
+    // 2. CHECK EXISTING CONTRACT FOR SAME INSTITUTION + SECTOR
+    if (institution_id && sector_id) {
+      const existingContractQuery = `
+        SELECT dc.id, dc.contract_number, dc.contract_date_start, dc.contract_date_end,
+               i.name as institution_name, s.sector_number
+        FROM disposal_contracts dc
+        LEFT JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id AND dcs.deleted_at IS NULL
+        LEFT JOIN institutions i ON dc.institution_id = i.id
+        LEFT JOIN sectors s ON dcs.sector_id = s.id
+        WHERE dc.institution_id = $1 
+          AND dcs.sector_id = $2
+          AND dc.is_active = true
+          AND dc.deleted_at IS NULL
+          ${id ? 'AND dc.id != $3' : ''}
+      `;
+      const existingParams = id 
+        ? [institution_id, sector_id, id] 
+        : [institution_id, sector_id];
+      const existingResult = await pool.query(existingContractQuery, existingParams);
+
+      if (existingResult.rows.length > 0) {
+        const existing = existingResult.rows[0];
+        const existingPeriod = `${existing.contract_date_start ? new Date(existing.contract_date_start).toLocaleDateString('ro-RO') : '?'} - ${existing.contract_date_end ? new Date(existing.contract_date_end).toLocaleDateString('ro-RO') : 'nedefinit'}`;
+        
+        warnings.push({
+          type: 'EXISTING_CONTRACT',
+          message: `Există deja un contract activ pentru această instituție și sector`,
+          details: {
+            contract_number: existing.contract_number,
+            period: existingPeriod,
+          },
+        });
+
+        // 3. CHECK OVERLAPPING PERIODS
+        if (contract_date_start) {
+          for (const exist of existingResult.rows) {
+            const newStart = new Date(contract_date_start);
+            const existStart = new Date(exist.contract_date_start);
+            
+            if (exist.contract_date_end && contract_date_end) {
+              const newEnd = new Date(contract_date_end);
+              const existEnd = new Date(exist.contract_date_end);
+
+              if (newStart <= existEnd && newEnd >= existStart) {
+                const overlapStart = newStart > existStart ? newStart : existStart;
+                const overlapEnd = newEnd < existEnd ? newEnd : existEnd;
+                const overlapDays = Math.ceil((overlapEnd - overlapStart) / (1000 * 60 * 60 * 24));
+                
+                warnings.push({
+                  type: 'OVERLAPPING_PERIOD',
+                  message: `Perioada se suprapune cu contractul ${exist.contract_number} (${overlapDays} zile)`,
+                  details: {
+                    contract_number: exist.contract_number,
+                    period: `${existStart.toLocaleDateString('ro-RO')} - ${existEnd.toLocaleDateString('ro-RO')}`,
+                    overlap_days: overlapDays,
+                  },
+                });
+              }
+            } else if (!exist.contract_date_end) {
+              warnings.push({
+                type: 'OVERLAPPING_PERIOD',
+                message: `Contractul ${exist.contract_number} nu are dată de sfârșit (perioadă nedefinită)`,
+                details: {
+                  contract_number: exist.contract_number,
+                  period: `${existStart.toLocaleDateString('ro-RO')} - nedefinit`,
+                },
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // 4. CHECK IF CONTRACT IS ALREADY EXPIRED
+    if (contract_date_end) {
+      const endDate = new Date(contract_date_end);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      if (endDate < today) {
+        warnings.push({
+          type: 'EXPIRED_CONTRACT',
+          message: 'Contractul va fi creat ca expirat (data sfârșit este în trecut)',
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      valid: errors.length === 0,
+      errors,
+      warnings,
+    });
+  } catch (err) {
+    console.error("Error validating disposal contract:", err);
+    res.status(500).json({
+      success: false,
+      message: "Eroare la validarea contractului",
+    });
+  }
+};
+
+// ============================================================================
 // CREATE DISPOSAL CONTRACT
 // ============================================================================
 export const createDisposalContract = async (req, res) => {
@@ -480,7 +619,13 @@ export const updateDisposalContract = async (req, res) => {
             contracted_quantity_tons
           ) VALUES ($1, $2, $3, $4, $5)
         `,
-          [contractId, sector_id, tariff_per_ton || 0, cec_tax_per_ton || 0, contracted_quantity_tons || null]
+          [
+            contractId,
+            sector_id,
+            tariff_per_ton || 0,
+            cec_tax_per_ton || 0,
+            contracted_quantity_tons || null,
+          ]
         );
       }
 
@@ -539,9 +684,10 @@ export const deleteDisposalContract = async (req, res) => {
     }
 
     // Also soft-delete related sectors
-    await pool.query("UPDATE disposal_contract_sectors SET deleted_at = CURRENT_TIMESTAMP WHERE contract_id = $1", [
-      contractId,
-    ]);
+    await pool.query(
+      "UPDATE disposal_contract_sectors SET deleted_at = CURRENT_TIMESTAMP WHERE contract_id = $1",
+      [contractId]
+    );
 
     res.json({
       success: true,
@@ -838,6 +984,7 @@ export const deleteContractAmendment = async (req, res) => {
 export default {
   getDisposalContracts,
   getDisposalContract,
+  validateDisposalContract,
   createDisposalContract,
   updateDisposalContract,
   deleteDisposalContract,
