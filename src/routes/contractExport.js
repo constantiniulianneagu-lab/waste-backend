@@ -6,7 +6,7 @@
  */
 
 import express from 'express';
-import { authenticateToken, checkUserAccess } from '../middleware/auth.js';
+import { authenticateToken } from '../middleware/auth.js';
 import {
   exportContractsPDF,
   exportContractsExcel,
@@ -17,7 +17,6 @@ const router = express.Router();
 
 // All routes require authentication
 router.use(authenticateToken);
-router.use(checkUserAccess);
 
 // Export routes
 router.get('/export/pdf', exportContractsPDF);
