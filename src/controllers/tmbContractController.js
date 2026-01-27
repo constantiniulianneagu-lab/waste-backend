@@ -209,6 +209,7 @@ export const getTMBContracts = async (req, res) => {
         tc.is_active,
         tc.created_at,
         tc.updated_at,
+        tc.attribution_type,
         
         -- Calculated total value
         COALESCE(tc.tariff_per_ton, 0) * COALESCE(tc.estimated_quantity_tons, 0) as total_value,
@@ -376,6 +377,7 @@ export const createTMBContract = async (req, res) => {
       contract_file_name,
       notes,
       is_active = true,
+      attribution_type,
     } = req.body;
 
     // Validation
@@ -403,8 +405,9 @@ export const createTMBContract = async (req, res) => {
         contract_file_name,
         notes,
         is_active,
+        attribution_type,
         created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
     `;
 
@@ -424,6 +427,7 @@ export const createTMBContract = async (req, res) => {
       contract_file_name || null,
       notes || null,
       is_active,
+      attribution_type || null,
       req.user?.id || null,
     ]);
 
@@ -495,6 +499,7 @@ export const updateTMBContract = async (req, res) => {
       contract_file_name,
       notes,
       is_active,
+      attribution_type,
     } = req.body;
 
     const query = `
@@ -514,6 +519,7 @@ export const updateTMBContract = async (req, res) => {
         contract_file_name = $13,
         notes = $14,
         is_active = COALESCE($15, is_active),
+        attribution_type = COALESCE($17, attribution_type),
         updated_at = CURRENT_TIMESTAMP
       WHERE id = $16 AND deleted_at IS NULL
       RETURNING *
@@ -536,6 +542,7 @@ export const updateTMBContract = async (req, res) => {
       notes || null,
       is_active,
       contractId,
+      attribution_type || null,
     ]);
 
     if (result.rows.length === 0) {

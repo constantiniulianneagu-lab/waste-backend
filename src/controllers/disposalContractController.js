@@ -69,6 +69,7 @@ export const getDisposalContracts = async (req, res) => {
         dc.contract_file_name,
         dc.created_at,
         dc.updated_at,
+        dc.attribution_type,
         
         -- Institution info
         i.name as institution_name,
@@ -429,6 +430,7 @@ export const createDisposalContract = async (req, res) => {
       tariff_per_ton,
       cec_tax_per_ton,
       contracted_quantity_tons,
+      attribution_type,
     } = req.body;
 
     // Validation
@@ -452,8 +454,9 @@ export const createDisposalContract = async (req, res) => {
           contract_date_end,
           notes,
           is_active,
+          attribution_type,
           created_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
       `;
 
@@ -464,6 +467,7 @@ export const createDisposalContract = async (req, res) => {
         contract_date_end || null,
         notes || null,
         is_active,
+        attribution_type || null,
         req.user?.id || null,
       ]);
 
@@ -566,6 +570,7 @@ export const updateDisposalContract = async (req, res) => {
       tariff_per_ton,
       cec_tax_per_ton,
       contracted_quantity_tons,
+      attribution_type,
     } = req.body;
 
     const client = await pool.connect();
@@ -580,6 +585,7 @@ export const updateDisposalContract = async (req, res) => {
           contract_date_end = $3,
           notes = $4,
           is_active = COALESCE($5, is_active),
+          attribution_type = COALESCE($7, attribution_type),
           updated_at = CURRENT_TIMESTAMP
         WHERE id = $6 AND deleted_at IS NULL
         RETURNING *
@@ -592,6 +598,7 @@ export const updateDisposalContract = async (req, res) => {
         notes || null,
         is_active,
         contractId,
+        attribution_type || null,
       ]);
 
       if (result.rows.length === 0) {
