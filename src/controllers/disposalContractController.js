@@ -581,12 +581,18 @@ export const updateDisposalContract = async (req, res) => {
       contract_date_end,
       notes,
       is_active,
-      // Sector data
       sector_id,
       tariff_per_ton,
       cec_tax_per_ton,
       contracted_quantity_tons,
       attribution_type,
+    
+      // ✅ ADD THESE (file fields)
+      contract_file_url,
+      contract_file_name,
+      contract_file_size,
+      contract_file_type,
+      contract_file_uploaded_at,
     } = req.body;
 
     const client = await pool.connect();
@@ -595,27 +601,37 @@ export const updateDisposalContract = async (req, res) => {
 
       // Update contract
       const contractQuery = `
-        UPDATE disposal_contracts SET
-          contract_number = COALESCE($1, contract_number),
-          contract_date_start = COALESCE($2, contract_date_start),
-          contract_date_end = $3,
-          notes = $4,
-          is_active = COALESCE($5, is_active),
-          attribution_type = COALESCE($7, attribution_type),
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = $6 AND deleted_at IS NULL
-        RETURNING *
-      `;
+  UPDATE disposal_contracts SET
+    contract_number = COALESCE($1, contract_number),
+    contract_date_start = COALESCE($2, contract_date_start),
+    contract_date_end = $3,
+    contract_file_url = COALESCE($4, contract_file_url),
+    contract_file_name = COALESCE($5, contract_file_name),
+    contract_file_size = COALESCE($6, contract_file_size),
+    contract_file_type = COALESCE($7, contract_file_type),
+    contract_file_uploaded_at = COALESCE($8, contract_file_uploaded_at),
+    notes = $9,
+    is_active = COALESCE($10, is_active),
+    attribution_type = COALESCE($11, attribution_type),
+    updated_at = CURRENT_TIMESTAMP
+  WHERE id = $12 AND deleted_at IS NULL
+  RETURNING *
+`;
 
-      const result = await client.query(contractQuery, [
-        contract_number,
-        contract_date_start,
-        contract_date_end || null,
-        notes || null,
-        is_active,
-        contractId,
-        attribution_type || null,
-      ]);
+const result = await client.query(contractQuery, [
+  contract_number,
+  contract_date_start,
+  contract_date_end || null,
+  contract_file_url || null,
+  contract_file_name || null,
+  contract_file_size || null,
+  contract_file_type || null,
+  contract_file_uploaded_at || null,
+  notes || null,
+  is_active,
+  attribution_type || null,
+  contractId,
+]);
 
       if (result.rows.length === 0) {
         await client.query("ROLLBACK");
