@@ -194,16 +194,23 @@ export const exportContractsPDF = async (req, res) => {
       x = 40;
       const rowY = doc.y;
 
+      // Helper to safely format numbers
+      const formatNum = (val) => {
+        if (val === null || val === undefined) return '-';
+        const num = parseFloat(val);
+        return isNaN(num) ? '-' : num.toFixed(2);
+      };
+
       if (contractType === 'DISPOSAL') {
         doc.text(contract.contract_number || '-', x, rowY, { width: colWidths[0] }); x += colWidths[0];
         doc.text(contract.operator_name || '-', x, rowY, { width: colWidths[1] }); x += colWidths[1];
         doc.text(contract.sector_number ? `S${contract.sector_number}` : '-', x, rowY, { width: colWidths[2] }); x += colWidths[2];
         doc.text(contract.contract_date_start ? new Date(contract.contract_date_start).toLocaleDateString('ro-RO') : '-', x, rowY, { width: colWidths[3] }); x += colWidths[3];
         doc.text(contract.effective_date_end ? new Date(contract.effective_date_end).toLocaleDateString('ro-RO') : '-', x, rowY, { width: colWidths[4] }); x += colWidths[4];
-        doc.text(contract.tariff_per_ton ? contract.tariff_per_ton.toFixed(2) : '-', x, rowY, { width: colWidths[5] }); x += colWidths[5];
-        doc.text(contract.cec_tax_per_ton ? contract.cec_tax_per_ton.toFixed(2) : '-', x, rowY, { width: colWidths[6] }); x += colWidths[6];
-        doc.text(contract.contracted_quantity_tons ? contract.contracted_quantity_tons.toFixed(2) : '-', x, rowY, { width: colWidths[7] }); x += colWidths[7];
-        doc.text(contract.total_value ? contract.total_value.toFixed(2) : '-', x, rowY, { width: colWidths[8] });
+        doc.text(formatNum(contract.tariff_per_ton), x, rowY, { width: colWidths[5] }); x += colWidths[5];
+        doc.text(formatNum(contract.cec_tax_per_ton), x, rowY, { width: colWidths[6] }); x += colWidths[6];
+        doc.text(formatNum(contract.contracted_quantity_tons), x, rowY, { width: colWidths[7] }); x += colWidths[7];
+        doc.text(formatNum(contract.total_value), x, rowY, { width: colWidths[8] });
       } else {
         doc.text(contract.contract_number || '-', x, rowY, { width: colWidths[0] }); x += colWidths[0];
         doc.text(contract.operator_name || '-', x, rowY, { width: colWidths[1] }); x += colWidths[1];
@@ -212,8 +219,8 @@ export const exportContractsPDF = async (req, res) => {
         doc.text(contract.effective_date_end ? new Date(contract.effective_date_end).toLocaleDateString('ro-RO') : '-', x, rowY, { width: colWidths[4] }); x += colWidths[4];
         
         if (contractType === 'TMB') {
-          doc.text(contract.tariff_per_ton ? contract.tariff_per_ton.toFixed(2) : '-', x, rowY, { width: colWidths[5] }); x += colWidths[5];
-          doc.text(contract.total_value ? contract.total_value.toFixed(2) : '-', x, rowY, { width: colWidths[6] });
+          doc.text(formatNum(contract.tariff_per_ton), x, rowY, { width: colWidths[5] }); x += colWidths[5];
+          doc.text(formatNum(contract.total_value), x, rowY, { width: colWidths[6] });
         } else {
           doc.text(contract.is_active ? 'Activ' : 'Inactiv', x, rowY, { width: colWidths[5] }); x += colWidths[5];
           doc.text(contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație' : 'Negociere', x, rowY, { width: colWidths[6] });
@@ -306,19 +313,26 @@ export const exportContractsExcel = async (req, res) => {
         is_active: contract.is_active ? 'Activ' : 'Inactiv',
       };
 
+      // Helper to safely parse numbers
+      const safeNumber = (val) => {
+        if (val === null || val === undefined) return 0;
+        const num = parseFloat(val);
+        return isNaN(num) ? 0 : num;
+      };
+
       if (contractType === 'DISPOSAL') {
-        row.tariff_per_ton = contract.tariff_per_ton || 0;
-        row.cec_tax_per_ton = contract.cec_tax_per_ton || 0;
-        row.contracted_quantity_tons = contract.contracted_quantity_tons || 0;
-        row.total_value = contract.total_value || 0;
+        row.tariff_per_ton = safeNumber(contract.tariff_per_ton);
+        row.cec_tax_per_ton = safeNumber(contract.cec_tax_per_ton);
+        row.contracted_quantity_tons = safeNumber(contract.contracted_quantity_tons);
+        row.total_value = safeNumber(contract.total_value);
         row.attribution_type = contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație deschisă' : 'Negociere fără publicare';
       } else if (contractType === 'TMB') {
-        row.tariff_per_ton = contract.tariff_per_ton || 0;
-        row.contracted_quantity_tons = contract.contracted_quantity_tons || 0;
-        row.total_value = contract.total_value || 0;
-        row.indicator_recycling_percent = contract.indicator_recycling_percent || 0;
-        row.indicator_energy_recovery_percent = contract.indicator_energy_recovery_percent || 0;
-        row.indicator_disposal_percent = contract.indicator_disposal_percent || 0;
+        row.tariff_per_ton = safeNumber(contract.tariff_per_ton);
+        row.contracted_quantity_tons = safeNumber(contract.contracted_quantity_tons);
+        row.total_value = safeNumber(contract.total_value);
+        row.indicator_recycling_percent = safeNumber(contract.indicator_recycling_percent);
+        row.indicator_energy_recovery_percent = safeNumber(contract.indicator_energy_recovery_percent);
+        row.indicator_disposal_percent = safeNumber(contract.indicator_disposal_percent);
       } else {
         row.attribution_type = contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație deschisă' : 'Negociere fără publicare';
       }
@@ -357,6 +371,13 @@ export const exportContractsCSV = async (req, res) => {
     let csv = headers.join(',') + '\n';
 
     contracts.forEach(contract => {
+      // Helper to safely format numbers
+      const formatNum = (val) => {
+        if (val === null || val === undefined) return '0';
+        const num = parseFloat(val);
+        return isNaN(num) ? '0' : num.toString();
+      };
+
       const values = [
         contract.contract_number || '',
         `"${contract.operator_name || ''}"`,
@@ -367,21 +388,21 @@ export const exportContractsCSV = async (req, res) => {
 
       if (contractType === 'DISPOSAL') {
         values.push(
-          contract.tariff_per_ton || '0',
-          contract.cec_tax_per_ton || '0',
-          contract.contracted_quantity_tons || '0',
-          contract.total_value || '0',
+          formatNum(contract.tariff_per_ton),
+          formatNum(contract.cec_tax_per_ton),
+          formatNum(contract.contracted_quantity_tons),
+          formatNum(contract.total_value),
           contract.is_active ? 'Activ' : 'Inactiv',
           contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație deschisă' : 'Negociere fără publicare'
         );
       } else if (contractType === 'TMB') {
         values.push(
-          contract.tariff_per_ton || '0',
-          contract.contracted_quantity_tons || '0',
-          contract.total_value || '0',
-          contract.indicator_recycling_percent || '0',
-          contract.indicator_energy_recovery_percent || '0',
-          contract.indicator_disposal_percent || '0',
+          formatNum(contract.tariff_per_ton),
+          formatNum(contract.contracted_quantity_tons),
+          formatNum(contract.total_value),
+          formatNum(contract.indicator_recycling_percent),
+          formatNum(contract.indicator_energy_recovery_percent),
+          formatNum(contract.indicator_disposal_percent),
           contract.is_active ? 'Activ' : 'Inactiv'
         );
       } else {
