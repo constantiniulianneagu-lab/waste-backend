@@ -800,6 +800,9 @@ export const createContractAmendment = async (req, res) => {
       changes_description,
       reason,
       notes,
+      amendment_file_url,
+      amendment_file_name,
+      amendment_file_size,
     } = req.body;
 
     // Validation
@@ -848,8 +851,11 @@ export const createContractAmendment = async (req, res) => {
         changes_description,
         reason,
         notes,
+        amendment_file_url,
+        amendment_file_name,
+        amendment_file_size,
         created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING *
     `;
 
@@ -865,6 +871,9 @@ export const createContractAmendment = async (req, res) => {
       changes_description || null,
       reason || null,
       notes || null,
+      amendment_file_url || null,
+      amendment_file_name || null,
+      amendment_file_size || null,
       req.user?.id || null,
     ]);
 
@@ -915,6 +924,9 @@ export const updateContractAmendment = async (req, res) => {
       changes_description,
       reason,
       notes,
+      amendment_file_url,
+      amendment_file_name,
+      amendment_file_size,
     } = req.body;
 
     const query = `
@@ -929,8 +941,11 @@ export const updateContractAmendment = async (req, res) => {
         changes_description = $8,
         reason = $9,
         notes = $10,
+        amendment_file_url = $11,
+        amendment_file_name = $12,
+        amendment_file_size = $13,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $11 AND contract_id = $12 AND deleted_at IS NULL
+      WHERE id = $14 AND contract_id = $15 AND deleted_at IS NULL
       RETURNING *
     `;
 
@@ -945,6 +960,9 @@ export const updateContractAmendment = async (req, res) => {
       changes_description || null,
       reason || null,
       notes || null,
+      amendment_file_url || null,
+      amendment_file_name || null,
+      amendment_file_size || null,
       amendmentId,
       contractId,
     ]);
