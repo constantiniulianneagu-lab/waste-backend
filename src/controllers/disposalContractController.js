@@ -67,6 +67,9 @@ export const getDisposalContracts = async (req, res) => {
         dc.notes,
         dc.contract_file_url,
         dc.contract_file_name,
+        dc.contract_file_size,
+        dc.contract_file_type,
+        dc.contract_file_uploaded_at,
         dc.created_at,
         dc.updated_at,
         dc.attribution_type,
@@ -290,14 +293,17 @@ export const validateDisposalContract = async (req, res) => {
         FROM disposal_contracts dc
         WHERE dc.contract_number = $1 
           AND dc.deleted_at IS NULL
-          ${id ? 'AND dc.id != $2' : ''}
+          ${id ? "AND dc.id != $2" : ""}
       `;
       const duplicateParams = id ? [contract_number, id] : [contract_number];
-      const duplicateResult = await pool.query(duplicateNumberQuery, duplicateParams);
-      
+      const duplicateResult = await pool.query(
+        duplicateNumberQuery,
+        duplicateParams
+      );
+
       if (duplicateResult.rows.length > 0) {
         errors.push({
-          type: 'DUPLICATE_NUMBER',
+          type: "DUPLICATE_NUMBER",
           message: `Există deja un contract cu numărul "${contract_number}"`,
         });
       }
@@ -316,20 +322,32 @@ export const validateDisposalContract = async (req, res) => {
           AND dcs.sector_id = $2
           AND dc.is_active = true
           AND dc.deleted_at IS NULL
-          ${id ? 'AND dc.id != $3' : ''}
+          ${id ? "AND dc.id != $3" : ""}
       `;
-      const existingParams = id 
-        ? [institution_id, sector_id, id] 
+      const existingParams = id
+        ? [institution_id, sector_id, id]
         : [institution_id, sector_id];
-      const existingResult = await pool.query(existingContractQuery, existingParams);
+      const existingResult = await pool.query(
+        existingContractQuery,
+        existingParams
+      );
 
       if (existingResult.rows.length > 0) {
         const existing = existingResult.rows[0];
-        const existingPeriod = `${existing.contract_date_start ? new Date(existing.contract_date_start).toLocaleDateString('ro-RO') : '?'} - ${existing.contract_date_end ? new Date(existing.contract_date_end).toLocaleDateString('ro-RO') : 'nedefinit'}`;
-        
+        const existingPeriod = `${
+          existing.contract_date_start
+            ? new Date(existing.contract_date_start).toLocaleDateString("ro-RO")
+            : "?"
+        } - ${
+          existing.contract_date_end
+            ? new Date(existing.contract_date_end).toLocaleDateString("ro-RO")
+            : "nedefinit"
+        }`;
+
         warnings.push({
-          type: 'EXISTING_CONTRACT',
-          message: `Există deja un contract activ pentru această instituție și sector`,
+          type: "EXISTING_CONTRACT",
+          message:
+            "Există deja un contract activ pentru această instituție și sector",
           details: {
             contract_number: existing.contract_number,
             period: existingPeriod,
@@ -341,7 +359,7 @@ export const validateDisposalContract = async (req, res) => {
           for (const exist of existingResult.rows) {
             const newStart = new Date(contract_date_start);
             const existStart = new Date(exist.contract_date_start);
-            
+
             if (exist.contract_date_end && contract_date_end) {
               const newEnd = new Date(contract_date_end);
               const existEnd = new Date(exist.contract_date_end);
@@ -349,25 +367,31 @@ export const validateDisposalContract = async (req, res) => {
               if (newStart <= existEnd && newEnd >= existStart) {
                 const overlapStart = newStart > existStart ? newStart : existStart;
                 const overlapEnd = newEnd < existEnd ? newEnd : existEnd;
-                const overlapDays = Math.ceil((overlapEnd - overlapStart) / (1000 * 60 * 60 * 24));
-                
+                const overlapDays = Math.ceil(
+                  (overlapEnd - overlapStart) / (1000 * 60 * 60 * 24)
+                );
+
                 warnings.push({
-                  type: 'OVERLAPPING_PERIOD',
+                  type: "OVERLAPPING_PERIOD",
                   message: `Perioada se suprapune cu contractul ${exist.contract_number} (${overlapDays} zile)`,
                   details: {
                     contract_number: exist.contract_number,
-                    period: `${existStart.toLocaleDateString('ro-RO')} - ${existEnd.toLocaleDateString('ro-RO')}`,
+                    period: `${existStart.toLocaleDateString(
+                      "ro-RO"
+                    )} - ${existEnd.toLocaleDateString("ro-RO")}`,
                     overlap_days: overlapDays,
                   },
                 });
               }
             } else if (!exist.contract_date_end) {
               warnings.push({
-                type: 'OVERLAPPING_PERIOD',
+                type: "OVERLAPPING_PERIOD",
                 message: `Contractul ${exist.contract_number} nu are dată de sfârșit (perioadă nedefinită)`,
                 details: {
                   contract_number: exist.contract_number,
-                  period: `${existStart.toLocaleDateString('ro-RO')} - nedefinit`,
+                  period: `${existStart.toLocaleDateString(
+                    "ro-RO"
+                  )} - nedefinit`,
                 },
               });
             }
@@ -381,11 +405,12 @@ export const validateDisposalContract = async (req, res) => {
       const endDate = new Date(contract_date_end);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      
+
       if (endDate < today) {
         warnings.push({
-          type: 'EXPIRED_CONTRACT',
-          message: 'Contractul va fi creat ca expirat (data sfârșit este în trecut)',
+          type: "EXPIRED_CONTRACT",
+          message:
+            "Contractul va fi creat ca expirat (data sfârșit este în trecut)",
         });
       }
     }
@@ -431,12 +456,13 @@ export const createDisposalContract = async (req, res) => {
       cec_tax_per_ton,
       contracted_quantity_tons,
       attribution_type,
-      // ✅ ADD THESE (file fields)
-  contract_file_url,
-  contract_file_name,
-  contract_file_size,
-  contract_file_type,
-  contract_file_uploaded_at,
+
+      // ✅ file fields
+      contract_file_url,
+      contract_file_name,
+      contract_file_size,
+      contract_file_type,
+      contract_file_uploaded_at,
     } = req.body;
 
     // Validation
@@ -455,14 +481,14 @@ export const createDisposalContract = async (req, res) => {
       const contractQuery = `
         INSERT INTO disposal_contracts (
           institution_id,
-    contract_number,
-    contract_date_start,
-    contract_date_end,
-    contract_file_url,
-    contract_file_name,
-    contract_file_size,
-    contract_file_type,
-    contract_file_uploaded_at,
+          contract_number,
+          contract_date_start,
+          contract_date_end,
+          contract_file_url,
+          contract_file_name,
+          contract_file_size,
+          contract_file_type,
+          contract_file_uploaded_at,
           notes,
           is_active,
           attribution_type,
@@ -581,13 +607,14 @@ export const updateDisposalContract = async (req, res) => {
       contract_date_end,
       notes,
       is_active,
+      // Sector data
       sector_id,
       tariff_per_ton,
       cec_tax_per_ton,
       contracted_quantity_tons,
       attribution_type,
-    
-      // ✅ ADD THESE (file fields)
+
+      // ✅ file fields
       contract_file_url,
       contract_file_name,
       contract_file_size,
@@ -601,37 +628,37 @@ export const updateDisposalContract = async (req, res) => {
 
       // Update contract
       const contractQuery = `
-  UPDATE disposal_contracts SET
-    contract_number = COALESCE($1, contract_number),
-    contract_date_start = COALESCE($2, contract_date_start),
-    contract_date_end = $3,
-    contract_file_url = COALESCE($4, contract_file_url),
-    contract_file_name = COALESCE($5, contract_file_name),
-    contract_file_size = COALESCE($6, contract_file_size),
-    contract_file_type = COALESCE($7, contract_file_type),
-    contract_file_uploaded_at = COALESCE($8, contract_file_uploaded_at),
-    notes = $9,
-    is_active = COALESCE($10, is_active),
-    attribution_type = COALESCE($11, attribution_type),
-    updated_at = CURRENT_TIMESTAMP
-  WHERE id = $12 AND deleted_at IS NULL
-  RETURNING *
-`;
+        UPDATE disposal_contracts SET
+          contract_number = COALESCE($1, contract_number),
+          contract_date_start = COALESCE($2, contract_date_start),
+          contract_date_end = $3,
+          contract_file_url = $4,
+          contract_file_name = $5,
+          contract_file_size = $6,
+          contract_file_type = $7,
+          contract_file_uploaded_at = $8,
+          notes = $9,
+          is_active = COALESCE($10, is_active),
+          attribution_type = COALESCE($11, attribution_type),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $12 AND deleted_at IS NULL
+        RETURNING *
+      `;
 
-const result = await client.query(contractQuery, [
-  contract_number,
-  contract_date_start,
-  contract_date_end || null,
-  contract_file_url || null,
-  contract_file_name || null,
-  contract_file_size || null,
-  contract_file_type || null,
-  contract_file_uploaded_at || null,
-  notes || null,
-  is_active,
-  attribution_type || null,
-  contractId,
-]);
+      const result = await client.query(contractQuery, [
+        contract_number,
+        contract_date_start,
+        contract_date_end || null,
+        contract_file_url || null,
+        contract_file_name || null,
+        contract_file_size || null,
+        contract_file_type || null,
+        contract_file_uploaded_at || null,
+        notes || null,
+        is_active,
+        attribution_type || null,
+        contractId,
+      ]);
 
       if (result.rows.length === 0) {
         await client.query("ROLLBACK");
@@ -644,9 +671,10 @@ const result = await client.query(contractQuery, [
       // Update sector details if provided
       if (sector_id !== undefined) {
         // Delete old sector link and create new one
-        await client.query("DELETE FROM disposal_contract_sectors WHERE contract_id = $1", [
-          contractId,
-        ]);
+        await client.query(
+          "DELETE FROM disposal_contract_sectors WHERE contract_id = $1",
+          [contractId]
+        );
 
         await client.query(
           `
