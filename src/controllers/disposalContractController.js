@@ -455,14 +455,19 @@ export const createDisposalContract = async (req, res) => {
       const contractQuery = `
         INSERT INTO disposal_contracts (
           institution_id,
-          contract_number,
-          contract_date_start,
-          contract_date_end,
+    contract_number,
+    contract_date_start,
+    contract_date_end,
+    contract_file_url,
+    contract_file_name,
+    contract_file_size,
+    contract_file_type,
+    contract_file_uploaded_at,
           notes,
           is_active,
           attribution_type,
           created_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
       `;
 
@@ -471,6 +476,11 @@ export const createDisposalContract = async (req, res) => {
         contract_number,
         contract_date_start,
         contract_date_end || null,
+        contract_file_url || null,
+        contract_file_name || null,
+        contract_file_size || null,
+        contract_file_type || null,
+        contract_file_uploaded_at || null,
         notes || null,
         is_active,
         attribution_type || null,
