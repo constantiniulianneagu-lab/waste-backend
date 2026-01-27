@@ -431,6 +431,12 @@ export const createDisposalContract = async (req, res) => {
       cec_tax_per_ton,
       contracted_quantity_tons,
       attribution_type,
+      // ✅ ADD THESE (file fields)
+  contract_file_url,
+  contract_file_name,
+  contract_file_size,
+  contract_file_type,
+  contract_file_uploaded_at,
     } = req.body;
 
     // Validation
