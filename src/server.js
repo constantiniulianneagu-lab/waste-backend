@@ -18,6 +18,7 @@ import tmbRoutes from './routes/tmb/tmb.js';
 import contractFilesRoutes from './routes/contractFiles.js';
 import wasteCodesRoutes from './routes/wasteCodes.js';
 import sectorsRoutes from './routes/sectors.js'; // ✅ ACTUALIZAT
+import contractExportRoutes from './routes/contractExport.js';
 
 // Dashboard Routes
 import dashboardLandfillRoutes from './routes/dashboard/landfill.js';
@@ -123,6 +124,9 @@ app.use('/api/waste-codes', wasteCodesRoutes);
 
 console.log('📍 Mounting sectors routes at /api/sectors'); // ✅ ACTUALIZAT
 app.use('/api/sectors', sectorsRoutes); // ✅ ACTUALIZAT
+
+console.log('📍 Mounting contract export routes at /api/contracts');
+app.use('/api/contracts', contractExportRoutes);
 
 // Dashboard Routes
 console.log('📍 Mounting dashboard landfill routes at /api/dashboard/landfill');
