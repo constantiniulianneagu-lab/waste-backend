@@ -1,10 +1,9 @@
 // src/routes/institutions.js
 /**
  * ============================================================================
- * INSTITUTION ROUTES - WITH ACCESS CONTROL + SCOPE FILTERING
+ * INSTITUTION ROUTES - WITH ALL 6 CONTRACT TYPES
  * ============================================================================
- * Updated: 2025-01-24
- * - Added amendment routes for disposal contracts
+ * Order: Colectare → Sortare → Aerobă → Anaerobă → TMB → Depozitare
  * ============================================================================
  */
 
@@ -23,7 +22,55 @@ import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 import { resolveUserAccess } from '../middleware/resolveUserAccess.js';
 import { ROLES } from '../constants/roles.js';
 
-// TMB Contracts imports
+// WASTE COLLECTOR (Colectare)
+import {
+  getWasteOperatorContracts,
+  getWasteOperatorContract,
+  createWasteOperatorContract,
+  updateWasteOperatorContract,
+  deleteWasteOperatorContract
+} from '../controllers/wasteOperatorContractController.js';
+
+// SORTING (Sortare)
+import {
+  getSortingContracts,
+  getSortingContract,
+  createSortingContract,
+  updateSortingContract,
+  deleteSortingContract,
+  getSortingContractAmendments,
+  createSortingContractAmendment,
+  updateSortingContractAmendment,
+  deleteSortingContractAmendment
+} from '../controllers/sortingContractController.js';
+
+// AEROBIC (Aerobă)
+import {
+  getAerobicContracts,
+  getAerobicContract,
+  createAerobicContract,
+  updateAerobicContract,
+  deleteAerobicContract,
+  getAerobicContractAmendments,
+  createAerobicContractAmendment,
+  updateAerobicContractAmendment,
+  deleteAerobicContractAmendment
+} from '../controllers/aerobicContractController.js';
+
+// ANAEROBIC (Anaerobă)
+import {
+  getAnaerobicContracts,
+  getAnaerobicContract,
+  createAnaerobicContract,
+  updateAnaerobicContract,
+  deleteAnaerobicContract,
+  getAnaerobicContractAmendments,
+  createAnaerobicContractAmendment,
+  updateAnaerobicContractAmendment,
+  deleteAnaerobicContractAmendment
+} from '../controllers/anaerobicContractController.js';
+
+// TMB
 import {
   validateTMBContract,
   getTMBContracts,
@@ -37,22 +84,7 @@ import {
   deleteTMBContractAmendment,
 } from '../controllers/tmbContractController.js';
 
-import {
-  getWasteOperatorContracts,
-  getWasteOperatorContract,
-  createWasteOperatorContract,
-  updateWasteOperatorContract,
-  deleteWasteOperatorContract
-} from '../controllers/wasteOperatorContractController.js';
-
-import {
-  getSortingContracts,
-  getSortingContract,
-  createSortingContract,
-  updateSortingContract,
-  deleteSortingContract
-} from '../controllers/sortingContractController.js';
-
+// DISPOSAL (Depozitare)
 import {
   getDisposalContracts,
   getDisposalContract,
@@ -90,6 +122,64 @@ router.put('/:id', authorizeRoles(ROLES.PLATFORM_ADMIN), updateInstitution);
 router.delete('/:id', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteInstitution);
 
 // ============================================================================
+// WASTE COLLECTOR (COLECTARE) CONTRACT ROUTES
+// ============================================================================
+
+router.get('/:institutionId/waste-contracts', getWasteOperatorContracts);
+router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContract);
+router.post('/:institutionId/waste-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createWasteOperatorContract);
+router.put('/:institutionId/waste-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateWasteOperatorContract);
+router.delete('/:institutionId/waste-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteWasteOperatorContract);
+
+// ============================================================================
+// SORTING (SORTARE) CONTRACT ROUTES
+// ============================================================================
+
+router.get('/:institutionId/sorting-contracts', getSortingContracts);
+router.get('/:institutionId/sorting-contracts/:contractId', getSortingContract);
+router.post('/:institutionId/sorting-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createSortingContract);
+router.put('/:institutionId/sorting-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateSortingContract);
+router.delete('/:institutionId/sorting-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteSortingContract);
+
+// Sorting Amendments
+router.get('/:institutionId/sorting-contracts/:contractId/amendments', getSortingContractAmendments);
+router.post('/:institutionId/sorting-contracts/:contractId/amendments', authorizeRoles(ROLES.PLATFORM_ADMIN), createSortingContractAmendment);
+router.put('/:institutionId/sorting-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateSortingContractAmendment);
+router.delete('/:institutionId/sorting-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteSortingContractAmendment);
+
+// ============================================================================
+// AEROBIC (AEROBĂ) CONTRACT ROUTES
+// ============================================================================
+
+router.get('/:institutionId/aerobic-contracts', getAerobicContracts);
+router.get('/:institutionId/aerobic-contracts/:contractId', getAerobicContract);
+router.post('/:institutionId/aerobic-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createAerobicContract);
+router.put('/:institutionId/aerobic-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateAerobicContract);
+router.delete('/:institutionId/aerobic-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteAerobicContract);
+
+// Aerobic Amendments
+router.get('/:institutionId/aerobic-contracts/:contractId/amendments', getAerobicContractAmendments);
+router.post('/:institutionId/aerobic-contracts/:contractId/amendments', authorizeRoles(ROLES.PLATFORM_ADMIN), createAerobicContractAmendment);
+router.put('/:institutionId/aerobic-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateAerobicContractAmendment);
+router.delete('/:institutionId/aerobic-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteAerobicContractAmendment);
+
+// ============================================================================
+// ANAEROBIC (ANAEROBĂ) CONTRACT ROUTES
+// ============================================================================
+
+router.get('/:institutionId/anaerobic-contracts', getAnaerobicContracts);
+router.get('/:institutionId/anaerobic-contracts/:contractId', getAnaerobicContract);
+router.post('/:institutionId/anaerobic-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createAnaerobicContract);
+router.put('/:institutionId/anaerobic-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateAnaerobicContract);
+router.delete('/:institutionId/anaerobic-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteAnaerobicContract);
+
+// Anaerobic Amendments
+router.get('/:institutionId/anaerobic-contracts/:contractId/amendments', getAnaerobicContractAmendments);
+router.post('/:institutionId/anaerobic-contracts/:contractId/amendments', authorizeRoles(ROLES.PLATFORM_ADMIN), createAnaerobicContractAmendment);
+router.put('/:institutionId/anaerobic-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateAnaerobicContractAmendment);
+router.delete('/:institutionId/anaerobic-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteAnaerobicContractAmendment);
+
+// ============================================================================
 // TMB CONTRACT ROUTES
 // ============================================================================
 
@@ -100,48 +190,14 @@ router.put('/:institutionId/tmb-contracts/:contractId', authorizeRoles(ROLES.PLA
 router.delete('/:institutionId/tmb-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteTMBContract);
 router.post('/contracts/validate/tmb', validateTMBContract);
 
-// ============================================================================
-// TMB CONTRACT AMENDMENTS ROUTES
-// ============================================================================
-
+// TMB Amendments
 router.get('/:institutionId/tmb-contracts/:contractId/amendments', getTMBContractAmendments);
-router.post(
-  '/:institutionId/tmb-contracts/:contractId/amendments',
-  authorizeRoles(ROLES.PLATFORM_ADMIN),
-  createTMBContractAmendment
-);
-router.put(
-  '/:institutionId/tmb-contracts/:contractId/amendments/:amendmentId',
-  authorizeRoles(ROLES.PLATFORM_ADMIN),
-  updateTMBContractAmendment
-);
-router.delete(
-  '/:institutionId/tmb-contracts/:contractId/amendments/:amendmentId',
-  authorizeRoles(ROLES.PLATFORM_ADMIN),
-  deleteTMBContractAmendment
-);
-// ============================================================================
-// WASTE OPERATOR CONTRACT ROUTES
-// ============================================================================
-
-router.get('/:institutionId/waste-contracts', getWasteOperatorContracts);
-router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContract);
-router.post('/:institutionId/waste-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createWasteOperatorContract);
-router.put('/:institutionId/waste-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateWasteOperatorContract);
-router.delete('/:institutionId/waste-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteWasteOperatorContract);
+router.post('/:institutionId/tmb-contracts/:contractId/amendments', authorizeRoles(ROLES.PLATFORM_ADMIN), createTMBContractAmendment);
+router.put('/:institutionId/tmb-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateTMBContractAmendment);
+router.delete('/:institutionId/tmb-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteTMBContractAmendment);
 
 // ============================================================================
-// SORTING CONTRACT ROUTES
-// ============================================================================
-
-router.get('/:institutionId/sorting-contracts', getSortingContracts);
-router.get('/:institutionId/sorting-contracts/:contractId', getSortingContract);
-router.post('/:institutionId/sorting-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createSortingContract);
-router.put('/:institutionId/sorting-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateSortingContract);
-router.delete('/:institutionId/sorting-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteSortingContract);
-
-// ============================================================================
-// DISPOSAL CONTRACT ROUTES
+// DISPOSAL (DEPOZITARE) CONTRACT ROUTES
 // ============================================================================
 
 router.get('/:institutionId/disposal-contracts', getDisposalContracts);
@@ -151,32 +207,10 @@ router.put('/:institutionId/disposal-contracts/:contractId', authorizeRoles(ROLE
 router.delete('/:institutionId/disposal-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteDisposalContract);
 router.post('/contracts/validate/disposal', validateDisposalContract);
 
-// ============================================================================
-// DISPOSAL CONTRACT AMENDMENTS ROUTES (NEW!)
-// ============================================================================
-
-// Get all amendments for a contract
+// Disposal Amendments
 router.get('/:institutionId/disposal-contracts/:contractId/amendments', getContractAmendments);
-
-// Create new amendment
-router.post(
-  '/:institutionId/disposal-contracts/:contractId/amendments',
-  authorizeRoles(ROLES.PLATFORM_ADMIN),
-  createContractAmendment
-);
-
-// Update amendment
-router.put(
-  '/:institutionId/disposal-contracts/:contractId/amendments/:amendmentId',
-  authorizeRoles(ROLES.PLATFORM_ADMIN),
-  updateContractAmendment
-);
-
-// Delete amendment
-router.delete(
-  '/:institutionId/disposal-contracts/:contractId/amendments/:amendmentId',
-  authorizeRoles(ROLES.PLATFORM_ADMIN),
-  deleteContractAmendment
-);
+router.post('/:institutionId/disposal-contracts/:contractId/amendments', authorizeRoles(ROLES.PLATFORM_ADMIN), createContractAmendment);
+router.put('/:institutionId/disposal-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateContractAmendment);
+router.delete('/:institutionId/disposal-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteContractAmendment);
 
 export default router;
