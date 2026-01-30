@@ -10,7 +10,7 @@ import pool from '../config/database.js';
 // ============================================================================
 // GET ALL AEROBIC CONTRACTS
 // ============================================================================
-export const getAllAerobicContracts = async (req, res) => {
+export const getAerobicContracts = async (req, res) => {
   try {
     const { sector_id, is_active } = req.query;
     
@@ -35,6 +35,7 @@ export const getAllAerobicContracts = async (req, res) => {
     const query = `
       SELECT 
         ac.id,
+        ac.institution_id,
         ac.contract_number,
         ac.contract_date_start,
         ac.contract_date_end,
@@ -57,6 +58,7 @@ export const getAllAerobicContracts = async (req, res) => {
         i.name as institution_name,
         i.short_name as institution_short_name,
         
+        s.id as sector_id,
         s.sector_number,
         s.sector_name,
         
@@ -86,6 +88,20 @@ export const getAllAerobicContracts = async (req, res) => {
            ORDER BY aca.amendment_date DESC LIMIT 1),
           ac.estimated_quantity_tons
         ) as effective_quantity,
+        
+        (COALESCE(
+          (SELECT aca.new_tariff_per_ton 
+           FROM aerobic_contract_amendments aca 
+           WHERE aca.contract_id = ac.id AND aca.new_tariff_per_ton IS NOT NULL AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC LIMIT 1),
+          ac.tariff_per_ton
+        ) * COALESCE(
+          (SELECT aca.new_estimated_quantity_tons 
+           FROM aerobic_contract_amendments aca 
+           WHERE aca.contract_id = ac.id AND aca.new_estimated_quantity_tons IS NOT NULL AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC LIMIT 1),
+          ac.estimated_quantity_tons
+        )) as effective_total_value,
         
         (SELECT COUNT(*)
          FROM aerobic_contract_amendments aca
@@ -118,17 +134,19 @@ export const getAllAerobicContracts = async (req, res) => {
 // ============================================================================
 // GET SINGLE AEROBIC CONTRACT
 // ============================================================================
-export const getAerobicContractById = async (req, res) => {
+export const getAerobicContract = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { contractId } = req.params;
 
     const query = `
       SELECT 
         ac.*,
         i.name as institution_name,
+        i.short_name as institution_short_name,
         s.sector_number,
         s.sector_name,
-        ai.name as associate_name
+        ai.name as associate_name,
+        ai.short_name as associate_short_name
       FROM aerobic_contracts ac
       JOIN institutions i ON ac.institution_id = i.id
       LEFT JOIN sectors s ON ac.sector_id = s.id
@@ -136,7 +154,7 @@ export const getAerobicContractById = async (req, res) => {
       WHERE ac.id = $1 AND ac.deleted_at IS NULL
     `;
 
-    const result = await pool.query(query, [id]);
+    const result = await pool.query(query, [contractId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -220,7 +238,7 @@ export const createAerobicContract = async (req, res) => {
 // ============================================================================
 export const updateAerobicContract = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { contractId } = req.params;
     const {
       contract_number,
       contract_date_start,
@@ -265,7 +283,7 @@ export const updateAerobicContract = async (req, res) => {
       contract_number, contract_date_start, contract_date_end, sector_id,
       tariff_per_ton, estimated_quantity_tons, associate_institution_id,
       indicator_disposal_percent, contract_file_url, contract_file_name,
-      contract_file_size, is_active, notes, award_type, attribution_type, id
+      contract_file_size, is_active, notes, award_type, attribution_type, contractId
     ];
 
     const result = await pool.query(query, values);
@@ -295,7 +313,7 @@ export const updateAerobicContract = async (req, res) => {
 // ============================================================================
 export const deleteAerobicContract = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { contractId } = req.params;
 
     const query = `
       UPDATE aerobic_contracts 
@@ -304,7 +322,7 @@ export const deleteAerobicContract = async (req, res) => {
       RETURNING id
     `;
 
-    const result = await pool.query(query, [id]);
+    const result = await pool.query(query, [contractId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
