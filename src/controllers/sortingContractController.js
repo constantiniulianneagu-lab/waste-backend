@@ -10,7 +10,7 @@ import pool from '../config/database.js';
 // ============================================================================
 // GET ALL SORTING CONTRACTS
 // ============================================================================
-export const getAllSortingContracts = async (req, res) => {
+export const getSortingContracts = async (req, res) => {
   try {
     const { sector_id, is_active } = req.query;
     
@@ -35,6 +35,7 @@ export const getAllSortingContracts = async (req, res) => {
     const query = `
       SELECT 
         sc.id,
+        sc.institution_id,
         sc.contract_number,
         sc.contract_date_start,
         sc.contract_date_end,
@@ -50,9 +51,10 @@ export const getAllSortingContracts = async (req, res) => {
         sc.created_at,
         sc.updated_at,
         
-        i.name as operator_name,
-        i.short_name as operator_short_name,
+        i.name as institution_name,
+        i.short_name as institution_short_name,
         
+        s.id as sector_id,
         s.sector_number,
         s.sector_name,
         
@@ -79,6 +81,20 @@ export const getAllSortingContracts = async (req, res) => {
            ORDER BY sca.amendment_date DESC LIMIT 1),
           sc.estimated_quantity_tons
         ) as effective_quantity,
+        
+        (COALESCE(
+          (SELECT sca.new_tariff_per_ton 
+           FROM sorting_operator_contract_amendments sca 
+           WHERE sca.contract_id = sc.id AND sca.new_tariff_per_ton IS NOT NULL AND sca.deleted_at IS NULL 
+           ORDER BY sca.amendment_date DESC LIMIT 1),
+          sc.tariff_per_ton
+        ) * COALESCE(
+          (SELECT sca.new_estimated_quantity_tons 
+           FROM sorting_operator_contract_amendments sca 
+           WHERE sca.contract_id = sc.id AND sca.new_estimated_quantity_tons IS NOT NULL AND sca.deleted_at IS NULL 
+           ORDER BY sca.amendment_date DESC LIMIT 1),
+          sc.estimated_quantity_tons
+        )) as effective_total_value,
         
         (SELECT COUNT(*)
          FROM sorting_operator_contract_amendments sca
@@ -110,14 +126,15 @@ export const getAllSortingContracts = async (req, res) => {
 // ============================================================================
 // GET SINGLE SORTING CONTRACT
 // ============================================================================
-export const getSortingContractById = async (req, res) => {
+export const getSortingContract = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { contractId } = req.params;
 
     const query = `
       SELECT 
         sc.*,
-        i.name as operator_name,
+        i.name as institution_name,
+        i.short_name as institution_short_name,
         s.sector_number,
         s.sector_name
       FROM sorting_operator_contracts sc
@@ -126,7 +143,7 @@ export const getSortingContractById = async (req, res) => {
       WHERE sc.id = $1 AND sc.deleted_at IS NULL
     `;
 
-    const result = await pool.query(query, [id]);
+    const result = await pool.query(query, [contractId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -205,7 +222,7 @@ export const createSortingContract = async (req, res) => {
 // ============================================================================
 export const updateSortingContract = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { contractId } = req.params;
     const {
       contract_number,
       contract_date_start,
@@ -242,7 +259,7 @@ export const updateSortingContract = async (req, res) => {
       contract_number, contract_date_start, contract_date_end, sector_id,
       tariff_per_ton, estimated_quantity_tons,
       contract_file_url, contract_file_name, contract_file_size,
-      is_active, notes, id
+      is_active, notes, contractId
     ];
 
     const result = await pool.query(query, values);
@@ -272,7 +289,7 @@ export const updateSortingContract = async (req, res) => {
 // ============================================================================
 export const deleteSortingContract = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { contractId } = req.params;
 
     const query = `
       UPDATE sorting_operator_contracts 
@@ -281,7 +298,7 @@ export const deleteSortingContract = async (req, res) => {
       RETURNING id
     `;
 
-    const result = await pool.query(query, [id]);
+    const result = await pool.query(query, [contractId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
