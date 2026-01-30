@@ -14,11 +14,13 @@ import rejectedTicketRoutes from './routes/tickets/rejected.js';
 import tmbDashboardRoutes from './routes/dashboard/tmb.js';
 import reportsRoutes from './routes/reports/index.js';
 import reportTmbRoutes from './routes/reports/tmb.js';
+import reportLandfillRoutes from './routes/reports/landfill.js';
 import tmbRoutes from './routes/tmb/tmb.js';
 import contractFilesRoutes from './routes/contractFiles.js';
 import wasteCodesRoutes from './routes/wasteCodes.js';
-import sectorsRoutes from './routes/sectors.js'; // ✅ ACTUALIZAT
+import sectorsRoutes from './routes/sectors.js';
 import contractExportRoutes from './routes/contractExport.js';
+import statsRoutes from './routes/stats.js';
 
 // Dashboard Routes
 import dashboardLandfillRoutes from './routes/dashboard/landfill.js';
@@ -74,7 +76,8 @@ app.get('/', (req, res) => {
       reports: '/api/reports/*',
       contracts: '/api/contracts/*',
       wasteCodes: '/api/waste-codes/*',
-      sectors: '/api/sectors/*' // ✅ ACTUALIZAT
+      sectors: '/api/sectors/*',
+      stats: '/api/stats/*'
     }
   });
 });
@@ -116,17 +119,23 @@ app.use('/api/reports', reportsRoutes);
 console.log('📍 Mounting TMB reports routes at /api/reports/tmb');
 app.use('/api/reports/tmb', reportTmbRoutes);
 
+console.log('📍 Mounting landfill reports routes at /api/reports/landfill');
+app.use('/api/reports/landfill', reportLandfillRoutes);
+
 console.log('📍 Mounting contract files routes at /api/contracts');
 app.use('/api/contracts', contractFilesRoutes);
 
 console.log('📍 Mounting waste codes routes at /api/waste-codes');
 app.use('/api/waste-codes', wasteCodesRoutes);
 
-console.log('📍 Mounting sectors routes at /api/sectors'); // ✅ ACTUALIZAT
-app.use('/api/sectors', sectorsRoutes); // ✅ ACTUALIZAT
+console.log('📍 Mounting sectors routes at /api/sectors');
+app.use('/api/sectors', sectorsRoutes);
 
 console.log('📍 Mounting contract export routes at /api/contracts');
 app.use('/api/contracts', contractExportRoutes);
+
+console.log('📍 Mounting stats routes at /api/stats');
+app.use('/api/stats', statsRoutes);
 
 // Dashboard Routes
 console.log('📍 Mounting dashboard landfill routes at /api/dashboard/landfill');
