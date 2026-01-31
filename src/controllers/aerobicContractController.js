@@ -3,7 +3,7 @@
  * ============================================================================
  * AEROBIC CONTRACT CONTROLLER (TA-)
  * ============================================================================
- * FIX: Using same pattern as TMB and Disposal (value || null)
+ * FIX: Proper handling - tariff_per_ton is NOT NULL, others can be NULL
  */
 
 import pool from '../config/database.js';
@@ -217,7 +217,7 @@ export const createAerobicContract = async (req, res) => {
       contract_date_start,
       contract_date_end || null,
       sector_id || null,
-      tariff_per_ton || null,
+      tariff_per_ton, // NOT NULL - don't use || null
       estimated_quantity_tons || null,
       associate_institution_id || null,
       indicator_disposal_percent || null,
@@ -298,7 +298,7 @@ export const updateAerobicContract = async (req, res) => {
       contract_date_start,
       contract_date_end || null,
       sector_id || null,
-      tariff_per_ton || null,
+      tariff_per_ton, // NOT NULL - don't use || null
       estimated_quantity_tons || null,
       associate_institution_id || null,
       indicator_disposal_percent || null,
@@ -434,7 +434,7 @@ export const createAerobicContractAmendment = async (req, res) => {
       contractId,
       amendment_number,
       amendment_date,
-      new_tariff_per_ton || null,
+      new_tariff_per_ton || null, // Can be NULL in amendments
       new_estimated_quantity_tons || null,
       new_contract_date_end || null,
       amendment_type || null,
@@ -506,7 +506,7 @@ export const updateAerobicContractAmendment = async (req, res) => {
     const values = [
       amendment_number,
       amendment_date,
-      new_tariff_per_ton || null,
+      new_tariff_per_ton || null, // Can be NULL in amendments
       new_estimated_quantity_tons || null,
       new_contract_date_end || null,
       amendment_type || null,
