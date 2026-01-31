@@ -1,9 +1,16 @@
 // src/routes/anaerobicContract.js
+/**
+ * ============================================================================
+ * ANAEROBIC CONTRACT ROUTES (TAN-)
+ * ============================================================================
+ */
+
 import express from 'express';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
+import { ROLES } from '../constants/roles.js';
 import {
-  getAllAnaerobicContracts,
-  getAnaerobicContractById,
+  getAnaerobicContracts,
+  getAnaerobicContract,
   createAnaerobicContract,
   updateAnaerobicContract,
   deleteAnaerobicContract,
@@ -18,17 +25,39 @@ const router = express.Router();
 // All routes require authentication
 router.use(authenticateToken);
 
-// Contract routes
-router.get('/', getAllAnaerobicContracts);
-router.get('/:id', getAnaerobicContractById);
-router.post('/', createAnaerobicContract);
-router.put('/:id', updateAnaerobicContract);
-router.delete('/:id', deleteAnaerobicContract);
+// ============================================================================
+// CONTRACT ROUTES
+// ============================================================================
 
-// Amendment routes
+// Get all anaerobic contracts
+router.get('/', getAnaerobicContracts);
+
+// Get single anaerobic contract
+router.get('/:contractId', getAnaerobicContract);
+
+// Create anaerobic contract (PLATFORM_ADMIN only)
+router.post('/', authorizeRoles(ROLES.PLATFORM_ADMIN), createAnaerobicContract);
+
+// Update anaerobic contract (PLATFORM_ADMIN only)
+router.put('/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateAnaerobicContract);
+
+// Delete anaerobic contract (PLATFORM_ADMIN only)
+router.delete('/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteAnaerobicContract);
+
+// ============================================================================
+// AMENDMENT ROUTES
+// ============================================================================
+
+// Get all amendments for a contract
 router.get('/:contractId/amendments', getAnaerobicContractAmendments);
-router.post('/:contractId/amendments', createAnaerobicContractAmendment);
-router.put('/:contractId/amendments/:amendmentId', updateAnaerobicContractAmendment);
-router.delete('/:contractId/amendments/:amendmentId', deleteAnaerobicContractAmendment);
+
+// Create amendment (PLATFORM_ADMIN only)
+router.post('/:contractId/amendments', authorizeRoles(ROLES.PLATFORM_ADMIN), createAnaerobicContractAmendment);
+
+// Update amendment (PLATFORM_ADMIN only)
+router.put('/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateAnaerobicContractAmendment);
+
+// Delete amendment (PLATFORM_ADMIN only)
+router.delete('/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteAnaerobicContractAmendment);
 
 export default router;
