@@ -26,7 +26,7 @@ export const getAnaerobicContracts = async (req, res) => {
 
     if (is_active !== undefined) {
       whereConditions.push(`anc.is_active = $${paramCount}`);
-      params.push(is_active === 'true');
+      params.push(is_active === 'true' || is_active === true);
       paramCount++;
     }
 
@@ -211,11 +211,23 @@ export const createAnaerobicContract = async (req, res) => {
     `;
 
     const values = [
-      institution_id, contract_number, contract_date_start, contract_date_end,
-      sector_id, tariff_per_ton, estimated_quantity_tons, associate_institution_id,
-      indicator_disposal_percent, contract_file_url, contract_file_name,
-      contract_file_size, is_active !== undefined ? is_active : true,
-      notes, award_type, attribution_type, req.user.id
+      institution_id,
+      contract_number,
+      contract_date_start,
+      contract_date_end || null,
+      sector_id || null,
+      tariff_per_ton,
+      estimated_quantity_tons || null,
+      associate_institution_id || null,
+      indicator_disposal_percent || null,
+      contract_file_url || null,
+      contract_file_name || null,
+      contract_file_size || null,
+      is_active !== undefined ? is_active : true,
+      notes || null,
+      award_type || null,
+      attribution_type || null,
+      req.user.id
     ];
 
     const result = await pool.query(query, values);
@@ -228,7 +240,8 @@ export const createAnaerobicContract = async (req, res) => {
     console.error('Create anaerobic contract error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la crearea contractului anaerob'
+      message: 'Eroare la crearea contractului anaerob',
+      error: error.message
     });
   }
 };
@@ -280,10 +293,22 @@ export const updateAnaerobicContract = async (req, res) => {
     `;
 
     const values = [
-      contract_number, contract_date_start, contract_date_end, sector_id,
-      tariff_per_ton, estimated_quantity_tons, associate_institution_id,
-      indicator_disposal_percent, contract_file_url, contract_file_name,
-      contract_file_size, is_active, notes, award_type, attribution_type, contractId
+      contract_number,
+      contract_date_start,
+      contract_date_end || null,
+      sector_id || null,
+      tariff_per_ton,
+      estimated_quantity_tons || null,
+      associate_institution_id || null,
+      indicator_disposal_percent || null,
+      contract_file_url || null,
+      contract_file_name || null,
+      contract_file_size || null,
+      is_active,
+      notes || null,
+      award_type || null,
+      attribution_type || null,
+      contractId
     ];
 
     const result = await pool.query(query, values);
@@ -303,7 +328,8 @@ export const updateAnaerobicContract = async (req, res) => {
     console.error('Update anaerobic contract error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la actualizarea contractului anaerob'
+      message: 'Eroare la actualizarea contractului anaerob',
+      error: error.message
     });
   }
 };
@@ -404,10 +430,20 @@ export const createAnaerobicContractAmendment = async (req, res) => {
     `;
 
     const values = [
-      contractId, amendment_number, amendment_date, new_tariff_per_ton,
-      new_estimated_quantity_tons, new_contract_date_end, amendment_type,
-      changes_description, reason, notes, amendment_file_url,
-      amendment_file_name, amendment_file_size, req.user.id
+      contractId,
+      amendment_number,
+      amendment_date,
+      new_tariff_per_ton || null,
+      new_estimated_quantity_tons || null,
+      new_contract_date_end || null,
+      amendment_type || null,
+      changes_description || null,
+      reason || null,
+      notes || null,
+      amendment_file_url || null,
+      amendment_file_name || null,
+      amendment_file_size || null,
+      req.user.id
     ];
 
     const result = await pool.query(query, values);
@@ -420,7 +456,8 @@ export const createAnaerobicContractAmendment = async (req, res) => {
     console.error('Create anaerobic amendment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la crearea actului adițional'
+      message: 'Eroare la crearea actului adițional',
+      error: error.message
     });
   }
 };
@@ -466,10 +503,20 @@ export const updateAnaerobicContractAmendment = async (req, res) => {
     `;
 
     const values = [
-      amendment_number, amendment_date, new_tariff_per_ton,
-      new_estimated_quantity_tons, new_contract_date_end, amendment_type,
-      changes_description, reason, notes, amendment_file_url,
-      amendment_file_name, amendment_file_size, amendmentId, contractId
+      amendment_number,
+      amendment_date,
+      new_tariff_per_ton || null,
+      new_estimated_quantity_tons || null,
+      new_contract_date_end || null,
+      amendment_type || null,
+      changes_description || null,
+      reason || null,
+      notes || null,
+      amendment_file_url || null,
+      amendment_file_name || null,
+      amendment_file_size || null,
+      amendmentId,
+      contractId
     ];
 
     const result = await pool.query(query, values);
@@ -489,7 +536,8 @@ export const updateAnaerobicContractAmendment = async (req, res) => {
     console.error('Update anaerobic amendment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la actualizarea actului adițional'
+      message: 'Eroare la actualizarea actului adițional',
+      error: error.message
     });
   }
 };
