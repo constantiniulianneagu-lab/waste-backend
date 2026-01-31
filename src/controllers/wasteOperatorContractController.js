@@ -5,6 +5,8 @@
  * ============================================================================
  * CRUD operations pentru contracte operatori colectare
  * Include gestionare coduri deșeuri cu tarife
+ * 
+ * FIX: Added sector_id and is_active query params filter support
  * ============================================================================
  */
 
@@ -26,16 +28,48 @@ export const getWasteOperatorContracts = async (req, res) => {
     }
 
     const { institutionId } = req.params;
+    // FIX: Extract filter params from query string
+    const { sector_id, is_active } = req.query;
 
     const isAll = institutionId === "0";
 
     // ------------------------------------------------------------------------
-    // 1) Fetch contracts
+    // 1) Fetch contracts with dynamic filters
     // ------------------------------------------------------------------------
     let contractsResult;
 
+    // Build dynamic WHERE conditions
+    let whereConditions = ['c.deleted_at IS NULL'];
+    const params = [];
+    let paramCount = 1;
+
     if (isAll) {
-      // ✅ ALL waste operator contracts
+      whereConditions.push("i.deleted_at IS NULL");
+      whereConditions.push("i.type = 'WASTE_COLLECTOR'");
+    } else {
+      whereConditions.push(`c.institution_id = $${paramCount}`);
+      params.push(institutionId);
+      paramCount++;
+    }
+
+    // FIX: Add sector_id filter
+    if (sector_id) {
+      whereConditions.push(`c.sector_id = $${paramCount}`);
+      params.push(sector_id);
+      paramCount++;
+    }
+
+    // FIX: Add is_active filter
+    if (is_active !== undefined) {
+      whereConditions.push(`c.is_active = $${paramCount}`);
+      params.push(is_active === 'true' || is_active === true);
+      paramCount++;
+    }
+
+    const whereClause = whereConditions.join(' AND ');
+
+    if (isAll) {
+      // ✅ ALL waste operator contracts with filters
       contractsResult = await pool.query(
         `SELECT 
           c.*,
@@ -54,13 +88,12 @@ export const getWasteOperatorContracts = async (req, res) => {
         FROM waste_collector_contracts c
         LEFT JOIN sectors s ON s.id = c.sector_id
         LEFT JOIN institutions i ON i.id = c.institution_id
-        WHERE c.deleted_at IS NULL
-          AND i.deleted_at IS NULL
-          AND i.type = 'WASTE_OPERATOR'
-        ORDER BY c.contract_date_start DESC`
+        WHERE ${whereClause}
+        ORDER BY c.contract_date_start DESC`,
+        params
       );
     } else {
-      // 1. Verifică că instituția există și e WASTE_OPERATOR
+      // 1. Verifică că instituția există și e WASTE_COLLECTOR
       const institutionCheck = await pool.query(
         "SELECT id, type, name, short_name FROM institutions WHERE id = $1 AND deleted_at IS NULL",
         [institutionId]
@@ -73,14 +106,14 @@ export const getWasteOperatorContracts = async (req, res) => {
         });
       }
 
-      if (institutionCheck.rows[0].type !== "WASTE_OPERATOR") {
+      if (institutionCheck.rows[0].type !== "WASTE_COLLECTOR") {
         return res.json({
           success: true,
           data: [],
         });
       }
 
-      // 2. Get contracts cu sector + institution info
+      // 2. Get contracts cu sector + institution info + filters
       contractsResult = await pool.query(
         `SELECT 
           c.*,
@@ -99,10 +132,9 @@ export const getWasteOperatorContracts = async (req, res) => {
         FROM waste_collector_contracts c
         LEFT JOIN sectors s ON s.id = c.sector_id
         LEFT JOIN institutions i ON i.id = c.institution_id
-        WHERE c.institution_id = $1
-          AND c.deleted_at IS NULL
+        WHERE ${whereClause}
         ORDER BY c.contract_date_start DESC`,
-        [institutionId]
+        params
       );
     }
 
