@@ -14,6 +14,17 @@ import ExcelJS from "exceljs";
 // ============================================================================
 // HELPER: Get Contracts Data
 // ============================================================================
+const getTableAlias = (contractType) => {
+  switch(contractType) {
+    case 'DISPOSAL': return 'dc';
+    case 'TMB': return 'tc';
+    case 'AEROBIC': return 'ac';
+    case 'ANAEROBIC': return 'anc';
+    case 'WASTE_COLLECTOR': return 'wc';
+    default: return 'wc';
+  }
+};
+
 const getContractsData = async (contractType, filters = {}) => {
   let query = '';
   const params = [];
@@ -80,6 +91,66 @@ const getContractsData = async (contractType, filters = {}) => {
       `;
       break;
 
+    case 'AEROBIC':
+      query = `
+        SELECT 
+          ac.contract_number,
+          ac.contract_date_start,
+          ac.contract_date_end,
+          ac.is_active,
+          i.name as operator_name,
+          s.sector_number,
+          ac.tariff_per_ton,
+          ac.estimated_quantity_tons as contracted_quantity_tons,
+          (ac.estimated_quantity_tons * ac.tariff_per_ton) as total_value,
+          ac.attribution_type,
+          ac.indicator_disposal_percent,
+          ai.name as associate_name,
+          COALESCE(
+            (SELECT aca.new_contract_date_end 
+             FROM aerobic_contract_amendments aca 
+             WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL 
+             ORDER BY aca.amendment_date DESC LIMIT 1),
+            ac.contract_date_end
+          ) as effective_date_end
+        FROM aerobic_contracts ac
+        LEFT JOIN institutions i ON ac.institution_id = i.id
+        LEFT JOIN sectors s ON ac.sector_id = s.id
+        LEFT JOIN institutions ai ON ac.associate_institution_id = ai.id
+        WHERE ac.deleted_at IS NULL
+      `;
+      break;
+
+    case 'ANAEROBIC':
+      query = `
+        SELECT 
+          anc.contract_number,
+          anc.contract_date_start,
+          anc.contract_date_end,
+          anc.is_active,
+          i.name as operator_name,
+          s.sector_number,
+          anc.tariff_per_ton,
+          anc.estimated_quantity_tons as contracted_quantity_tons,
+          (anc.estimated_quantity_tons * anc.tariff_per_ton) as total_value,
+          anc.attribution_type,
+          anc.indicator_disposal_percent,
+          ai.name as associate_name,
+          COALESCE(
+            (SELECT anca.new_contract_date_end 
+             FROM anaerobic_contract_amendments anca 
+             WHERE anca.contract_id = anc.id AND anca.deleted_at IS NULL 
+             ORDER BY anca.amendment_date DESC LIMIT 1),
+            anc.contract_date_end
+          ) as effective_date_end
+        FROM anaerobic_contracts anc
+        LEFT JOIN institutions i ON anc.institution_id = i.id
+        LEFT JOIN sectors s ON anc.sector_id = s.id
+        LEFT JOIN institutions ai ON anc.associate_institution_id = ai.id
+        WHERE anc.deleted_at IS NULL
+      `;
+      break;
+
     case 'WASTE_COLLECTOR':
       query = `
         SELECT 
@@ -119,7 +190,8 @@ const getContractsData = async (contractType, filters = {}) => {
 
   if (filters.is_active !== undefined) {
     const isActive = filters.is_active === 'true' || filters.is_active === true;
-    whereConditions.push(`${contractType === 'DISPOSAL' ? 'dc' : contractType === 'TMB' ? 'tc' : 'wc'}.is_active = $${paramCount}`);
+    const alias = getTableAlias(contractType);
+    whereConditions.push(`${alias}.is_active = $${paramCount}`);
     params.push(isActive);
     paramCount++;
   }
@@ -128,7 +200,8 @@ const getContractsData = async (contractType, filters = {}) => {
     query += ' AND ' + whereConditions.join(' AND ');
   }
 
-  query += ` ORDER BY s.sector_number, ${contractType === 'DISPOSAL' ? 'dc' : contractType === 'TMB' ? 'tc' : 'wc'}.contract_date_start DESC`;
+  const alias = getTableAlias(contractType);
+  query += ` ORDER BY s.sector_number, ${alias}.contract_date_start DESC`;
 
   const result = await pool.query(query, params);
   return result.rows;
@@ -163,14 +236,16 @@ export const exportContractsPDF = async (req, res) => {
     const startY = doc.y;
     const colWidths = contractType === 'DISPOSAL' 
       ? [80, 100, 60, 60, 80, 80, 80, 80, 80]  // 9 columns for DISPOSAL
-      : [100, 120, 80, 80, 80, 80, 80];        // 7 columns for others
+      : (contractType === 'TMB' || contractType === 'AEROBIC' || contractType === 'ANAEROBIC')
+      ? [100, 120, 80, 80, 80, 80, 80]        // 7 columns for TMB, AEROBIC, ANAEROBIC
+      : [100, 120, 80, 80, 80, 80, 80];        // 7 columns for WASTE_COLLECTOR
 
     doc.fontSize(9).font('Helvetica-Bold');
     
     let x = 40;
     const headers = contractType === 'DISPOSAL'
       ? ['Nr. Contract', 'Operator', 'Sector', 'Start', 'Sfârșit', 'Tarif (RON/t)', 'CEC (RON/t)', 'Cantitate (t)', 'Valoare (RON)']
-      : contractType === 'TMB'
+      : (contractType === 'TMB' || contractType === 'AEROBIC' || contractType === 'ANAEROBIC')
       ? ['Nr. Contract', 'Operator', 'Sector', 'Start', 'Sfârșit', 'Tarif (RON/t)', 'Valoare (RON)']
       : ['Nr. Contract', 'Operator', 'Sector', 'Start', 'Sfârșit', 'Status', 'Atribuire'];
 
@@ -218,7 +293,7 @@ export const exportContractsPDF = async (req, res) => {
         doc.text(contract.contract_date_start ? new Date(contract.contract_date_start).toLocaleDateString('ro-RO') : '-', x, rowY, { width: colWidths[3] }); x += colWidths[3];
         doc.text(contract.effective_date_end ? new Date(contract.effective_date_end).toLocaleDateString('ro-RO') : '-', x, rowY, { width: colWidths[4] }); x += colWidths[4];
         
-        if (contractType === 'TMB') {
+        if (contractType === 'TMB' || contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
           doc.text(formatNum(contract.tariff_per_ton), x, rowY, { width: colWidths[5] }); x += colWidths[5];
           doc.text(formatNum(contract.total_value), x, rowY, { width: colWidths[6] });
         } else {
@@ -266,7 +341,7 @@ export const exportContractsExcel = async (req, res) => {
         { header: 'Status', key: 'is_active', width: 12 },
         { header: 'Tip Atribuire', key: 'attribution_type', width: 20 },
       ];
-    } else if (contractType === 'TMB') {
+    } else if (contractType === 'TMB' || contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
       worksheet.columns = [
         { header: 'Nr. Contract', key: 'contract_number', width: 20 },
         { header: 'Operator', key: 'operator_name', width: 30 },
@@ -276,10 +351,15 @@ export const exportContractsExcel = async (req, res) => {
         { header: 'Tarif (RON/t)', key: 'tariff_per_ton', width: 15 },
         { header: 'Cantitate (tone)', key: 'contracted_quantity_tons', width: 18 },
         { header: 'Valoare Totală (RON)', key: 'total_value', width: 20 },
-        { header: 'Reciclare (%)', key: 'indicator_recycling_percent', width: 15 },
-        { header: 'Valorificare Energetică (%)', key: 'indicator_energy_recovery_percent', width: 25 },
+        ...(contractType === 'TMB' ? [
+          { header: 'Reciclare (%)', key: 'indicator_recycling_percent', width: 15 },
+          { header: 'Valorificare Energetică (%)', key: 'indicator_energy_recovery_percent', width: 25 },
+        ] : []),
         { header: 'Depozitare (%)', key: 'indicator_disposal_percent', width: 15 },
         { header: 'Status', key: 'is_active', width: 12 },
+        ...(contractType !== 'TMB' ? [
+          { header: 'Asociat', key: 'associate_name', width: 30 },
+        ] : []),
       ];
     } else {
       worksheet.columns = [
@@ -326,13 +406,18 @@ export const exportContractsExcel = async (req, res) => {
         row.contracted_quantity_tons = safeNumber(contract.contracted_quantity_tons);
         row.total_value = safeNumber(contract.total_value);
         row.attribution_type = contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație deschisă' : 'Negociere fără publicare';
-      } else if (contractType === 'TMB') {
+      } else if (contractType === 'TMB' || contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
         row.tariff_per_ton = safeNumber(contract.tariff_per_ton);
         row.contracted_quantity_tons = safeNumber(contract.contracted_quantity_tons);
         row.total_value = safeNumber(contract.total_value);
-        row.indicator_recycling_percent = safeNumber(contract.indicator_recycling_percent);
-        row.indicator_energy_recovery_percent = safeNumber(contract.indicator_energy_recovery_percent);
+        if (contractType === 'TMB') {
+          row.indicator_recycling_percent = safeNumber(contract.indicator_recycling_percent);
+          row.indicator_energy_recovery_percent = safeNumber(contract.indicator_energy_recovery_percent);
+        }
         row.indicator_disposal_percent = safeNumber(contract.indicator_disposal_percent);
+        if (contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
+          row.associate_name = contract.associate_name || '-';
+        }
       } else {
         row.attribution_type = contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație deschisă' : 'Negociere fără publicare';
       }
@@ -364,6 +449,8 @@ export const exportContractsCSV = async (req, res) => {
       headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Tarif (RON/t)', 'Taxa CEC (RON/t)', 'Cantitate (tone)', 'Valoare Totală (RON)', 'Status', 'Tip Atribuire'];
     } else if (contractType === 'TMB') {
       headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Tarif (RON/t)', 'Cantitate (tone)', 'Valoare Totală (RON)', 'Reciclare (%)', 'Valorificare Energetică (%)', 'Depozitare (%)', 'Status'];
+    } else if (contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
+      headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Tarif (RON/t)', 'Cantitate (tone)', 'Valoare Totală (RON)', 'Depozitare (%)', 'Asociat', 'Status'];
     } else {
       headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Status', 'Tip Atribuire'];
     }
@@ -403,6 +490,15 @@ export const exportContractsCSV = async (req, res) => {
           formatNum(contract.indicator_recycling_percent),
           formatNum(contract.indicator_energy_recovery_percent),
           formatNum(contract.indicator_disposal_percent),
+          contract.is_active ? 'Activ' : 'Inactiv'
+        );
+      } else if (contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
+        values.push(
+          formatNum(contract.tariff_per_ton),
+          formatNum(contract.contracted_quantity_tons),
+          formatNum(contract.total_value),
+          formatNum(contract.indicator_disposal_percent),
+          `"${contract.associate_name || '-'}"`,
           contract.is_active ? 'Activ' : 'Inactiv'
         );
       } else {
