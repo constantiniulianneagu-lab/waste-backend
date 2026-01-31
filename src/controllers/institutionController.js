@@ -325,18 +325,27 @@ export const createInstitution = async (req, res) => {
       });
     }
 
-    // Verifică dacă numele există
-    const existingInstitution = await pool.query(
-      'SELECT id FROM institutions WHERE name = $1 AND deleted_at IS NULL',
-      [name]
-    );
+    // Verifică dacă există aceeași instituție pentru același TIP
+// (permite același nume dacă tipul este diferit: ex. TMB_OPERATOR vs AEROBIC_OPERATOR)
+const existingInstitution = await pool.query(
+  `
+  SELECT id
+  FROM institutions
+  WHERE deleted_at IS NULL
+    AND lower(name) = lower($1)
+    AND type = $2
+  LIMIT 1
+  `,
+  [name, type]
+);
 
-    if (existingInstitution.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'O instituție cu acest nume există deja'
-      });
-    }
+if (existingInstitution.rows.length > 0) {
+  return res.status(400).json({
+    success: false,
+    message: 'O instituție cu acest nume există deja pentru tipul selectat'
+  });
+}
+
 
     // Inserează instituție cu TOATE câmpurile inclusiv representative
     const result = await pool.query(
@@ -460,6 +469,28 @@ export const updateInstitution = async (req, res) => {
         message: 'Instituție negăsită'
       });
     }
+// Dacă se trimite name și type, verificăm să nu existe deja altă instituție cu același (name + type)
+if (name !== undefined && type !== undefined) {
+  const dup = await pool.query(
+    `
+    SELECT id
+    FROM institutions
+    WHERE deleted_at IS NULL
+      AND lower(name) = lower($1)
+      AND type = $2
+      AND id <> $3
+    LIMIT 1
+    `,
+    [name, type, id]
+  );
+
+  if (dup.rows.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Există deja o instituție cu acest nume pentru tipul selectat'
+    });
+  }
+}
 
     // Construiește query-ul de update dinamic
     const updateFields = [];
