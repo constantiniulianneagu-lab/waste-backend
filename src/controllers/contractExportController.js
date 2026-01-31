@@ -1,9 +1,9 @@
 // src/controllers/contractExportController.js
 /**
  * ============================================================================
- * CONTRACT EXPORT CONTROLLER - PDF, EXCEL, CSV
+ * CONTRACT EXPORT CONTROLLER V2 - PROFESSIONAL REPORTS
  * ============================================================================
- * Export contracts in multiple formats
+ * Advanced PDF exports with summaries, amendments, and beautiful formatting
  * ============================================================================
  */
 
@@ -12,7 +12,7 @@ import PDFDocument from "pdfkit";
 import ExcelJS from "exceljs";
 
 // ============================================================================
-// HELPER: Get Contracts Data
+// HELPER: Get Table Alias
 // ============================================================================
 const getTableAlias = (contractType) => {
   switch(contractType) {
@@ -21,10 +21,51 @@ const getTableAlias = (contractType) => {
     case 'AEROBIC': return 'ac';
     case 'ANAEROBIC': return 'anc';
     case 'WASTE_COLLECTOR': return 'wc';
+    case 'SORTING': return 'sc';
     default: return 'wc';
   }
 };
 
+// ============================================================================
+// HELPER: Get Contract Type Label
+// ============================================================================
+const getContractTypeLabel = (contractType) => {
+  const labels = {
+    'DISPOSAL': 'Depozitare',
+    'TMB': 'TMB',
+    'AEROBIC': 'Tratare Aerobă',
+    'ANAEROBIC': 'Tratare Anaerobă',
+    'WASTE_COLLECTOR': 'Colectare',
+    'SORTING': 'Sortare'
+  };
+  return labels[contractType] || contractType;
+};
+
+// ============================================================================
+// HELPER: Format Number with Romanian Locale
+// ============================================================================
+const formatNumber = (num, decimals = 2) => {
+  if (num === null || num === undefined || isNaN(num)) return '-';
+  return new Intl.NumberFormat('ro-RO', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  }).format(num);
+};
+
+// ============================================================================
+// HELPER: Format Date Romanian
+// ============================================================================
+const formatDate = (date) => {
+  if (!date) return '-';
+  const d = new Date(date);
+  const months = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 
+                  'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie'];
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+};
+
+// ============================================================================
+// HELPER: Get Contracts Data with Amendments
+// ============================================================================
 const getContractsData = async (contractType, filters = {}) => {
   let query = '';
   const params = [];
@@ -34,6 +75,7 @@ const getContractsData = async (contractType, filters = {}) => {
     case 'DISPOSAL':
       query = `
         SELECT 
+          dc.id,
           dc.contract_number,
           dc.contract_date_start,
           dc.contract_date_end,
@@ -64,6 +106,7 @@ const getContractsData = async (contractType, filters = {}) => {
     case 'TMB':
       query = `
         SELECT 
+          tc.id,
           tc.contract_number,
           tc.contract_date_start,
           tc.contract_date_end,
@@ -71,7 +114,9 @@ const getContractsData = async (contractType, filters = {}) => {
           i.name as operator_name,
           s.sector_number,
           tc.tariff_per_ton,
+          NULL as cec_tax_per_ton,
           tc.estimated_quantity_tons as contracted_quantity_tons,
+          tc.tariff_per_ton as total_per_ton,
           (tc.estimated_quantity_tons * tc.tariff_per_ton) as total_value,
           tc.attribution_type,
           tc.indicator_recycling_percent,
@@ -94,6 +139,7 @@ const getContractsData = async (contractType, filters = {}) => {
     case 'AEROBIC':
       query = `
         SELECT 
+          ac.id,
           ac.contract_number,
           ac.contract_date_start,
           ac.contract_date_end,
@@ -101,7 +147,9 @@ const getContractsData = async (contractType, filters = {}) => {
           i.name as operator_name,
           s.sector_number,
           ac.tariff_per_ton,
+          NULL as cec_tax_per_ton,
           ac.estimated_quantity_tons as contracted_quantity_tons,
+          ac.tariff_per_ton as total_per_ton,
           (ac.estimated_quantity_tons * ac.tariff_per_ton) as total_value,
           ac.attribution_type,
           ac.indicator_disposal_percent,
@@ -124,6 +172,7 @@ const getContractsData = async (contractType, filters = {}) => {
     case 'ANAEROBIC':
       query = `
         SELECT 
+          anc.id,
           anc.contract_number,
           anc.contract_date_start,
           anc.contract_date_end,
@@ -131,7 +180,9 @@ const getContractsData = async (contractType, filters = {}) => {
           i.name as operator_name,
           s.sector_number,
           anc.tariff_per_ton,
+          NULL as cec_tax_per_ton,
           anc.estimated_quantity_tons as contracted_quantity_tons,
+          anc.tariff_per_ton as total_per_ton,
           (anc.estimated_quantity_tons * anc.tariff_per_ton) as total_value,
           anc.attribution_type,
           anc.indicator_disposal_percent,
@@ -154,12 +205,18 @@ const getContractsData = async (contractType, filters = {}) => {
     case 'WASTE_COLLECTOR':
       query = `
         SELECT 
+          wc.id,
           wc.contract_number,
           wc.contract_date_start,
           wc.contract_date_end,
           wc.is_active,
           i.name as operator_name,
           s.sector_number,
+          NULL as tariff_per_ton,
+          NULL as cec_tax_per_ton,
+          NULL as contracted_quantity_tons,
+          NULL as total_per_ton,
+          NULL as total_value,
           wc.attribution_type,
           COALESCE(
             (SELECT wca.new_contract_date_end 
@@ -172,6 +229,36 @@ const getContractsData = async (contractType, filters = {}) => {
         LEFT JOIN institutions i ON wc.institution_id = i.id
         LEFT JOIN sectors s ON wc.sector_id = s.id
         WHERE wc.deleted_at IS NULL
+      `;
+      break;
+
+    case 'SORTING':
+      query = `
+        SELECT 
+          sc.id,
+          sc.contract_number,
+          sc.contract_date_start,
+          sc.contract_date_end,
+          sc.is_active,
+          i.name as operator_name,
+          s.sector_number,
+          NULL as tariff_per_ton,
+          NULL as cec_tax_per_ton,
+          NULL as contracted_quantity_tons,
+          NULL as total_per_ton,
+          NULL as total_value,
+          sc.attribution_type,
+          COALESCE(
+            (SELECT sca.new_contract_date_end 
+             FROM sorting_contract_amendments sca 
+             WHERE sca.contract_id = sc.id AND sca.deleted_at IS NULL 
+             ORDER BY sca.amendment_date DESC LIMIT 1),
+            sc.contract_date_end
+          ) as effective_date_end
+        FROM sorting_contracts sc
+        LEFT JOIN institutions i ON sc.institution_id = i.id
+        LEFT JOIN sectors s ON sc.sector_id = s.id
+        WHERE sc.deleted_at IS NULL
       `;
       break;
 
@@ -208,107 +295,514 @@ const getContractsData = async (contractType, filters = {}) => {
 };
 
 // ============================================================================
-// EXPORT PDF - Landscape format
+// HELPER: Get Amendments for Contracts
+// ============================================================================
+const getAmendments = async (contractType, contractIds) => {
+  if (!contractIds || contractIds.length === 0) return {};
+
+  let table = '';
+  switch (contractType) {
+    case 'DISPOSAL': table = 'disposal_contract_amendments'; break;
+    case 'TMB': table = 'tmb_contract_amendments'; break;
+    case 'AEROBIC': table = 'aerobic_contract_amendments'; break;
+    case 'ANAEROBIC': table = 'anaerobic_contract_amendments'; break;
+    case 'WASTE_COLLECTOR': table = 'waste_collector_contract_amendments'; break;
+    case 'SORTING': table = 'sorting_contract_amendments'; break;
+    default: return {};
+  }
+
+  const query = `
+    SELECT 
+      contract_id,
+      amendment_number,
+      amendment_date,
+      new_contract_date_end,
+      notes
+    FROM ${table}
+    WHERE contract_id = ANY($1::int[])
+      AND deleted_at IS NULL
+    ORDER BY contract_id, amendment_date
+  `;
+
+  const result = await pool.query(query, [contractIds]);
+  
+  // Group by contract_id
+  const grouped = {};
+  result.rows.forEach(row => {
+    if (!grouped[row.contract_id]) {
+      grouped[row.contract_id] = [];
+    }
+    grouped[row.contract_id].push(row);
+  });
+
+  return grouped;
+};
+
+// ============================================================================
+// EXPORT PDF - PROFESSIONAL VERSION
 // ============================================================================
 export const exportContractsPDF = async (req, res) => {
   try {
     const { contractType = 'DISPOSAL' } = req.query;
     const contracts = await getContractsData(contractType, req.query);
+    
+    // Get amendments for all contracts
+    const contractIds = contracts.map(c => c.id);
+    const amendments = await getAmendments(contractType, contractIds);
+
+    // Separate active and expired
+    const now = new Date();
+    const activeContracts = contracts.filter(c => new Date(c.effective_date_end) >= now);
+    const expiredContracts = contracts.filter(c => new Date(c.effective_date_end) < now);
+
+    // Calculate totals
+    const totalQuantity = contracts.reduce((sum, c) => sum + (parseFloat(c.contracted_quantity_tons) || 0), 0);
+    const totalValue = contracts.reduce((sum, c) => sum + (parseFloat(c.total_value) || 0), 0);
+
+    // Sector summary
+    const sectorSummary = {};
+    contracts.forEach(c => {
+      const sector = c.sector_number || 'N/A';
+      if (!sectorSummary[sector]) {
+        sectorSummary[sector] = { count: 0, quantity: 0, value: 0 };
+      }
+      sectorSummary[sector].count++;
+      sectorSummary[sector].quantity += parseFloat(c.contracted_quantity_tons) || 0;
+      sectorSummary[sector].value += parseFloat(c.total_value) || 0;
+    });
 
     const doc = new PDFDocument({ 
       size: 'A4', 
-      layout: 'landscape',
-      margin: 40 
+      margin: 40,
+      bufferPages: true,
+      info: {
+        Title: `Raport Contracte ${getContractTypeLabel(contractType)}`,
+        Author: 'WasteApp - ADIGIDMB București',
+        Subject: 'Raport Export Contracte',
+        Keywords: 'contracte, deșeuri, raport'
+      }
     });
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=contracte-${contractType.toLowerCase()}-${Date.now()}.pdf`);
+    res.setHeader('Content-Disposition', `attachment; filename=raport-contracte-${contractType.toLowerCase()}-${Date.now()}.pdf`);
 
     doc.pipe(res);
 
+    // Register Romanian font for diacritics
+    doc.registerFont('Regular', 'Helvetica');
+    doc.registerFont('Bold', 'Helvetica-Bold');
+
+    let pageNumber = 0;
+
+    // Helper: Add page header
+    const addPageHeader = () => {
+      pageNumber++;
+      doc.fontSize(8)
+         .fillColor('#666666')
+         .text(`Raport Contracte ${getContractTypeLabel(contractType)}`, 40, 30, { align: 'left' })
+         .text(`Pagina ${pageNumber}`, 0, 30, { align: 'right', width: doc.page.width - 80 });
+    };
+
+    // Helper: Add page footer
+    const addPageFooter = () => {
+      const bottom = doc.page.height - 40;
+      doc.fontSize(7)
+         .fillColor('#999999')
+         .text('Generat de WasteApp - ADIGIDMB București', 40, bottom, { align: 'center', width: doc.page.width - 80 });
+    };
+
+    // ========================================================================
+    // PAGE 1: TITLE & EXECUTIVE SUMMARY
+    // ========================================================================
+    addPageHeader();
+
     // Title
-    doc.fontSize(18).font('Helvetica-Bold').text(`Raport Contracte ${contractType}`, { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(10).font('Helvetica').text(`Data generării: ${new Date().toLocaleDateString('ro-RO')}`, { align: 'center' });
-    doc.moveDown(2);
-
-    // Table headers
-    const startY = doc.y;
-    const colWidths = contractType === 'DISPOSAL' 
-      ? [80, 100, 60, 60, 80, 80, 80, 80, 80]  // 9 columns for DISPOSAL
-      : (contractType === 'TMB' || contractType === 'AEROBIC' || contractType === 'ANAEROBIC')
-      ? [100, 120, 80, 80, 80, 80, 80]        // 7 columns for TMB, AEROBIC, ANAEROBIC
-      : [100, 120, 80, 80, 80, 80, 80];        // 7 columns for WASTE_COLLECTOR
-
-    doc.fontSize(9).font('Helvetica-Bold');
+    doc.fontSize(24)
+       .font('Bold')
+       .fillColor('#047857')
+       .text(`RAPORT CONTRACTE`, 40, 80, { align: 'center' });
     
-    let x = 40;
-    const headers = contractType === 'DISPOSAL'
-      ? ['Nr. Contract', 'Operator', 'Sector', 'Start', 'Sfârșit', 'Tarif (RON/t)', 'CEC (RON/t)', 'Cantitate (t)', 'Valoare (RON)']
-      : (contractType === 'TMB' || contractType === 'AEROBIC' || contractType === 'ANAEROBIC')
-      ? ['Nr. Contract', 'Operator', 'Sector', 'Start', 'Sfârșit', 'Tarif (RON/t)', 'Valoare (RON)']
-      : ['Nr. Contract', 'Operator', 'Sector', 'Start', 'Sfârșit', 'Status', 'Atribuire'];
+    doc.fontSize(18)
+       .fillColor('#059669')
+       .text(getContractTypeLabel(contractType).toUpperCase(), { align: 'center' });
 
-    headers.forEach((header, i) => {
-      doc.text(header, x, startY, { width: colWidths[i], align: 'left' });
-      x += colWidths[i];
+    // Generation date
+    doc.moveDown(1);
+    doc.fontSize(10)
+       .fillColor('#666666')
+       .font('Regular')
+       .text(`Generat la: ${formatDate(new Date())}`, { align: 'center' });
+
+    // Applied filters
+    if (req.query.sector_id || req.query.is_active) {
+      doc.moveDown(0.5);
+      let filterText = 'Filtre aplicate: ';
+      if (req.query.sector_id) filterText += `Sectorul ${req.query.sector_id}`;
+      if (req.query.is_active) {
+        if (req.query.sector_id) filterText += ', ';
+        filterText += req.query.is_active === 'true' ? 'Doar contracte active' : 'Doar contracte inactive';
+      }
+      doc.fontSize(9)
+         .fillColor('#666666')
+         .text(filterText, { align: 'center' });
+    }
+
+    // Executive Summary Box
+    doc.moveDown(3);
+    const summaryY = doc.y;
+    doc.roundedRect(40, summaryY, doc.page.width - 80, 140, 5)
+       .fillAndStroke('#F0FDF4', '#059669');
+
+    doc.fontSize(12)
+       .font('Bold')
+       .fillColor('#047857')
+       .text('SUMAR EXECUTIV', 60, summaryY + 15);
+
+    doc.fontSize(10)
+       .font('Regular')
+       .fillColor('#333333');
+
+    const summaryData = [
+      { label: 'Total contracte:', value: `${contracts.length} (${activeContracts.length} active, ${expiredContracts.length} expirate)` },
+      { label: 'Cantitate totală estimată:', value: `${formatNumber(totalQuantity, 2)} tone` },
+      { label: 'Valoare totală estimată:', value: `${formatNumber(totalValue, 2)} RON` },
+      { label: 'Perioada acoperită:', value: `${new Date(Math.min(...contracts.map(c => new Date(c.contract_date_start)))).getFullYear()} - ${new Date(Math.max(...contracts.map(c => new Date(c.effective_date_end)))).getFullYear()}` }
+    ];
+
+    let summaryTextY = summaryY + 40;
+    summaryData.forEach(item => {
+      doc.fontSize(9)
+         .fillColor('#666666')
+         .text(item.label, 60, summaryTextY)
+         .fontSize(10)
+         .fillColor('#047857')
+         .font('Bold')
+         .text(item.value, 220, summaryTextY);
+      summaryTextY += 20;
     });
 
+    // Sector Summary Table
+    doc.moveDown(4);
+    doc.fontSize(12)
+       .font('Bold')
+       .fillColor('#047857')
+       .text('CENTRALIZATOR PE SECTOARE', 40);
+
     doc.moveDown(0.5);
-    doc.moveTo(40, doc.y).lineTo(800, doc.y).stroke();
-    doc.moveDown(0.5);
+    const sectorTableY = doc.y;
+    
+    // Table header
+    doc.roundedRect(40, sectorTableY, doc.page.width - 80, 25, 3)
+       .fillAndStroke('#047857', '#047857');
+    
+    doc.fontSize(9)
+       .font('Bold')
+       .fillColor('#FFFFFF')
+       .text('Sector', 50, sectorTableY + 8, { width: 80 })
+       .text('Contracte', 150, sectorTableY + 8, { width: 80 })
+       .text('Cantitate (t)', 250, sectorTableY + 8, { width: 100 })
+       .text('Valoare (RON)', 370, sectorTableY + 8, { width: 150 });
 
-    // Table rows
-    doc.font('Helvetica').fontSize(8);
-    contracts.forEach((contract, index) => {
-      if (doc.y > 520) {  // New page if needed
-        doc.addPage({ size: 'A4', layout: 'landscape', margin: 40 });
-        doc.y = 40;
-      }
+    let tableY = sectorTableY + 25;
+    Object.keys(sectorSummary).sort().forEach((sector, idx) => {
+      const data = sectorSummary[sector];
+      const bgColor = idx % 2 === 0 ? '#F9FAFB' : '#FFFFFF';
+      
+      doc.rect(40, tableY, doc.page.width - 80, 20)
+         .fillAndStroke(bgColor, '#E5E7EB');
 
-      x = 40;
-      const rowY = doc.y;
+      doc.fontSize(9)
+         .font('Regular')
+         .fillColor('#333333')
+         .text(`Sectorul ${sector}`, 50, tableY + 5, { width: 80 })
+         .text(data.count.toString(), 150, tableY + 5, { width: 80 })
+         .text(formatNumber(data.quantity, 2), 250, tableY + 5, { width: 100 })
+         .text(formatNumber(data.value, 2), 370, tableY + 5, { width: 150 });
 
-      // Helper to safely format numbers
-      const formatNum = (val) => {
-        if (val === null || val === undefined) return '-';
-        const num = parseFloat(val);
-        return isNaN(num) ? '-' : num.toFixed(2);
-      };
+      tableY += 20;
+    });
 
-      if (contractType === 'DISPOSAL') {
-        doc.text(contract.contract_number || '-', x, rowY, { width: colWidths[0] }); x += colWidths[0];
-        doc.text(contract.operator_name || '-', x, rowY, { width: colWidths[1] }); x += colWidths[1];
-        doc.text(contract.sector_number ? `S${contract.sector_number}` : '-', x, rowY, { width: colWidths[2] }); x += colWidths[2];
-        doc.text(contract.contract_date_start ? new Date(contract.contract_date_start).toLocaleDateString('ro-RO') : '-', x, rowY, { width: colWidths[3] }); x += colWidths[3];
-        doc.text(contract.effective_date_end ? new Date(contract.effective_date_end).toLocaleDateString('ro-RO') : '-', x, rowY, { width: colWidths[4] }); x += colWidths[4];
-        doc.text(formatNum(contract.tariff_per_ton), x, rowY, { width: colWidths[5] }); x += colWidths[5];
-        doc.text(formatNum(contract.cec_tax_per_ton), x, rowY, { width: colWidths[6] }); x += colWidths[6];
-        doc.text(formatNum(contract.contracted_quantity_tons), x, rowY, { width: colWidths[7] }); x += colWidths[7];
-        doc.text(formatNum(contract.total_value), x, rowY, { width: colWidths[8] });
-      } else {
-        doc.text(contract.contract_number || '-', x, rowY, { width: colWidths[0] }); x += colWidths[0];
-        doc.text(contract.operator_name || '-', x, rowY, { width: colWidths[1] }); x += colWidths[1];
-        doc.text(contract.sector_number ? `S${contract.sector_number}` : '-', x, rowY, { width: colWidths[2] }); x += colWidths[2];
-        doc.text(contract.contract_date_start ? new Date(contract.contract_date_start).toLocaleDateString('ro-RO') : '-', x, rowY, { width: colWidths[3] }); x += colWidths[3];
-        doc.text(contract.effective_date_end ? new Date(contract.effective_date_end).toLocaleDateString('ro-RO') : '-', x, rowY, { width: colWidths[4] }); x += colWidths[4];
+    addPageFooter();
+
+    // ========================================================================
+    // PAGE 2+: ACTIVE CONTRACTS
+    // ========================================================================
+    if (activeContracts.length > 0) {
+      doc.addPage();
+      addPageHeader();
+
+      doc.fontSize(16)
+         .font('Bold')
+         .fillColor('#047857')
+         .text(`CONTRACTE ACTIVE (${activeContracts.length})`, 40, 60);
+
+      doc.moveDown(1);
+
+      activeContracts.forEach((contract, idx) => {
+        const contractAmendments = amendments[contract.id] || [];
         
-        if (contractType === 'TMB' || contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
-          doc.text(formatNum(contract.tariff_per_ton), x, rowY, { width: colWidths[5] }); x += colWidths[5];
-          doc.text(formatNum(contract.total_value), x, rowY, { width: colWidths[6] });
-        } else {
-          doc.text(contract.is_active ? 'Activ' : 'Inactiv', x, rowY, { width: colWidths[5] }); x += colWidths[5];
-          doc.text(contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație' : 'Negociere', x, rowY, { width: colWidths[6] });
+        // Check if we need a new page
+        const requiredSpace = 180 + (contractAmendments.length * 15);
+        if (doc.y + requiredSpace > doc.page.height - 100) {
+          addPageFooter();
+          doc.addPage();
+          addPageHeader();
+          doc.moveDown(2);
         }
-      }
 
-      doc.moveDown(1.2);
-    });
+        const cardY = doc.y;
+        
+        // Contract card
+        doc.roundedRect(40, cardY, doc.page.width - 80, 140 + (contractAmendments.length * 15), 8)
+           .fillAndStroke('#FFFFFF', '#10B981');
 
-    // Footer
-    doc.fontSize(8).text(`Total contracte: ${contracts.length}`, 40, doc.page.height - 60);
+        // Contract number header
+        doc.roundedRect(40, cardY, doc.page.width - 80, 30, 8)
+           .fillAndStroke('#10B981', '#10B981');
+
+        doc.fontSize(14)
+           .font('Bold')
+           .fillColor('#FFFFFF')
+           .text(contract.contract_number, 55, cardY + 8);
+
+        doc.fontSize(9)
+           .font('Regular')
+           .fillColor('#FFFFFF')
+           .text('✓ ACTIV', doc.page.width - 140, cardY + 10);
+
+        // Contract details
+        let detailY = cardY + 40;
+        
+        doc.fontSize(9)
+           .font('Bold')
+           .fillColor('#666666')
+           .text('Operator:', 55, detailY)
+           .font('Regular')
+           .fillColor('#333333')
+           .text(contract.operator_name || '-', 150, detailY);
+
+        detailY += 15;
+        doc.font('Bold')
+           .fillColor('#666666')
+           .text('UAT:', 55, detailY)
+           .font('Regular')
+           .fillColor('#333333')
+           .text(`Sectorul ${contract.sector_number || 'N/A'}`, 150, detailY);
+
+        detailY += 15;
+        doc.font('Bold')
+           .fillColor('#666666')
+           .text('Perioadă:', 55, detailY)
+           .font('Regular')
+           .fillColor('#333333')
+           .text(`${formatDate(contract.contract_date_start)} → ${formatDate(contract.effective_date_end)}`, 150, detailY);
+
+        // Financial details
+        if (contract.tariff_per_ton) {
+          detailY += 20;
+          doc.moveTo(55, detailY).lineTo(doc.page.width - 55, detailY).stroke('#E5E7EB');
+          detailY += 10;
+
+          doc.fontSize(9)
+             .font('Bold')
+             .fillColor('#666666')
+             .text('Tarif:', 55, detailY)
+             .font('Regular')
+             .fillColor('#333333')
+             .text(`${formatNumber(contract.tariff_per_ton, 2)} RON/t`, 150, detailY);
+
+          if (contract.cec_tax_per_ton) {
+            doc.font('Bold')
+               .fillColor('#666666')
+               .text('Taxa CEC:', 280, detailY)
+               .font('Regular')
+               .fillColor('#333333')
+               .text(`${formatNumber(contract.cec_tax_per_ton, 2)} RON/t`, 350, detailY);
+          }
+
+          detailY += 15;
+          doc.font('Bold')
+             .fillColor('#666666')
+             .text('Cantitate:', 55, detailY)
+             .font('Regular')
+             .fillColor('#333333')
+             .text(`${formatNumber(contract.contracted_quantity_tons, 2)} tone`, 150, detailY);
+
+          doc.font('Bold')
+             .fillColor('#666666')
+             .text('Valoare:', 280, detailY)
+             .font('Regular')
+             .fillColor('#047857')
+             .text(`${formatNumber(contract.total_value, 2)} RON`, 350, detailY);
+        }
+
+        // Amendments
+        if (contractAmendments.length > 0) {
+          detailY += 20;
+          doc.moveTo(55, detailY).lineTo(doc.page.width - 55, detailY).stroke('#E5E7EB');
+          detailY += 10;
+
+          doc.fontSize(9)
+             .font('Bold')
+             .fillColor('#666666')
+             .text(`Acte adiționale: ${contractAmendments.length}`, 55, detailY);
+
+          detailY += 15;
+          contractAmendments.forEach((amendment, aIdx) => {
+            doc.fontSize(8)
+               .font('Regular')
+               .fillColor('#333333')
+               .text(`• Act ${amendment.amendment_number || aIdx + 1} (${formatDate(amendment.amendment_date)}): `, 65, detailY)
+               .text(`Prelungire → ${formatDate(amendment.new_contract_date_end)}`, 200, detailY);
+            detailY += 15;
+          });
+        }
+
+        doc.moveDown(2);
+      });
+
+      addPageFooter();
+    }
+
+    // ========================================================================
+    // EXPIRED CONTRACTS
+    // ========================================================================
+    if (expiredContracts.length > 0) {
+      doc.addPage();
+      addPageHeader();
+
+      doc.fontSize(16)
+         .font('Bold')
+         .fillColor('#DC2626')
+         .text(`CONTRACTE EXPIRATE (${expiredContracts.length})`, 40, 60);
+
+      doc.moveDown(1);
+
+      expiredContracts.forEach((contract) => {
+        const contractAmendments = amendments[contract.id] || [];
+        
+        const requiredSpace = 180 + (contractAmendments.length * 15);
+        if (doc.y + requiredSpace > doc.page.height - 100) {
+          addPageFooter();
+          doc.addPage();
+          addPageHeader();
+          doc.moveDown(2);
+        }
+
+        const cardY = doc.y;
+        
+        // Contract card with red theme
+        doc.roundedRect(40, cardY, doc.page.width - 80, 140 + (contractAmendments.length * 15), 8)
+           .fillAndStroke('#FEF2F2', '#DC2626');
+
+        // Contract number header
+        doc.roundedRect(40, cardY, doc.page.width - 80, 30, 8)
+           .fillAndStroke('#DC2626', '#DC2626');
+
+        doc.fontSize(14)
+           .font('Bold')
+           .fillColor('#FFFFFF')
+           .text(contract.contract_number, 55, cardY + 8);
+
+        doc.fontSize(9)
+           .font('Regular')
+           .fillColor('#FFFFFF')
+           .text('⚠ EXPIRAT', doc.page.width - 140, cardY + 10);
+
+        // Same details as active contracts
+        let detailY = cardY + 40;
+        
+        doc.fontSize(9)
+           .font('Bold')
+           .fillColor('#666666')
+           .text('Operator:', 55, detailY)
+           .font('Regular')
+           .fillColor('#333333')
+           .text(contract.operator_name || '-', 150, detailY);
+
+        detailY += 15;
+        doc.font('Bold')
+           .fillColor('#666666')
+           .text('UAT:', 55, detailY)
+           .font('Regular')
+           .fillColor('#333333')
+           .text(`Sectorul ${contract.sector_number || 'N/A'}`, 150, detailY);
+
+        detailY += 15;
+        doc.font('Bold')
+           .fillColor('#666666')
+           .text('Perioadă:', 55, detailY)
+           .font('Regular')
+           .fillColor('#DC2626')
+           .text(`${formatDate(contract.contract_date_start)} → ${formatDate(contract.effective_date_end)}`, 150, detailY);
+
+        if (contract.tariff_per_ton) {
+          detailY += 20;
+          doc.moveTo(55, detailY).lineTo(doc.page.width - 55, detailY).stroke('#E5E7EB');
+          detailY += 10;
+
+          doc.fontSize(9)
+             .font('Bold')
+             .fillColor('#666666')
+             .text('Tarif:', 55, detailY)
+             .font('Regular')
+             .fillColor('#333333')
+             .text(`${formatNumber(contract.tariff_per_ton, 2)} RON/t`, 150, detailY);
+
+          if (contract.cec_tax_per_ton) {
+            doc.font('Bold')
+               .fillColor('#666666')
+               .text('Taxa CEC:', 280, detailY)
+               .font('Regular')
+               .fillColor('#333333')
+               .text(`${formatNumber(contract.cec_tax_per_ton, 2)} RON/t`, 350, detailY);
+          }
+
+          detailY += 15;
+          doc.font('Bold')
+             .fillColor('#666666')
+             .text('Cantitate:', 55, detailY)
+             .font('Regular')
+             .fillColor('#333333')
+             .text(`${formatNumber(contract.contracted_quantity_tons, 2)} tone`, 150, detailY);
+
+          doc.font('Bold')
+             .fillColor('#666666')
+             .text('Valoare:', 280, detailY)
+             .font('Regular')
+             .fillColor('#333333')
+             .text(`${formatNumber(contract.total_value, 2)} RON`, 350, detailY);
+        }
+
+        if (contractAmendments.length > 0) {
+          detailY += 20;
+          doc.moveTo(55, detailY).lineTo(doc.page.width - 55, detailY).stroke('#E5E7EB');
+          detailY += 10;
+
+          doc.fontSize(9)
+             .font('Bold')
+             .fillColor('#666666')
+             .text(`Acte adiționale: ${contractAmendments.length}`, 55, detailY);
+
+          detailY += 15;
+          contractAmendments.forEach((amendment, aIdx) => {
+            doc.fontSize(8)
+               .font('Regular')
+               .fillColor('#333333')
+               .text(`• Act ${amendment.amendment_number || aIdx + 1} (${formatDate(amendment.amendment_date)}): `, 65, detailY)
+               .text(`Prelungire → ${formatDate(amendment.new_contract_date_end)}`, 200, detailY);
+            detailY += 15;
+          });
+        }
+
+        doc.moveDown(2);
+      });
+
+      addPageFooter();
+    }
 
     doc.end();
+
   } catch (error) {
     console.error('PDF export error:', error);
     res.status(500).json({ success: false, message: 'Eroare la generarea PDF' });
@@ -316,15 +810,17 @@ export const exportContractsPDF = async (req, res) => {
 };
 
 // ============================================================================
-// EXPORT EXCEL
+// EXPORT EXCEL (keep existing implementation but with amendments)
 // ============================================================================
 export const exportContractsExcel = async (req, res) => {
   try {
     const { contractType = 'DISPOSAL' } = req.query;
     const contracts = await getContractsData(contractType, req.query);
+    const contractIds = contracts.map(c => c.id);
+    const amendments = await getAmendments(contractType, contractIds);
 
     const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet(`Contracte ${contractType}`);
+    const worksheet = workbook.addWorksheet('Contracte');
 
     // Define columns based on contract type
     if (contractType === 'DISPOSAL') {
@@ -340,6 +836,7 @@ export const exportContractsExcel = async (req, res) => {
         { header: 'Valoare Totală (RON)', key: 'total_value', width: 20 },
         { header: 'Status', key: 'is_active', width: 12 },
         { header: 'Tip Atribuire', key: 'attribution_type', width: 20 },
+        { header: 'Acte Adiționale', key: 'amendments_count', width: 18 },
       ];
     } else if (contractType === 'TMB' || contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
       worksheet.columns = [
@@ -360,6 +857,7 @@ export const exportContractsExcel = async (req, res) => {
         ...(contractType !== 'TMB' ? [
           { header: 'Asociat', key: 'associate_name', width: 30 },
         ] : []),
+        { header: 'Acte Adiționale', key: 'amendments_count', width: 18 },
       ];
     } else {
       worksheet.columns = [
@@ -370,30 +868,33 @@ export const exportContractsExcel = async (req, res) => {
         { header: 'Data Sfârșit', key: 'contract_date_end', width: 15 },
         { header: 'Status', key: 'is_active', width: 12 },
         { header: 'Tip Atribuire', key: 'attribution_type', width: 20 },
+        { header: 'Acte Adiționale', key: 'amendments_count', width: 18 },
       ];
     }
 
-    // Style header
+    // Style header row
     worksheet.getRow(1).font = { bold: true };
     worksheet.getRow(1).fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'FF0D9488' }
+      fgColor: { argb: 'FF047857' }
     };
-    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    worksheet.getRow(1).font = { color: { argb: 'FFFFFFFF' }, bold: true };
 
-    // Add data
+    // Add data rows
     contracts.forEach(contract => {
+      const contractAmendments = amendments[contract.id] || [];
+      
       const row = {
         contract_number: contract.contract_number,
-        operator_name: contract.operator_name,
+        operator_name: contract.operator_name || '-',
         sector_number: contract.sector_number ? `Sectorul ${contract.sector_number}` : '-',
         contract_date_start: contract.contract_date_start ? new Date(contract.contract_date_start).toLocaleDateString('ro-RO') : '-',
         contract_date_end: contract.effective_date_end ? new Date(contract.effective_date_end).toLocaleDateString('ro-RO') : '-',
         is_active: contract.is_active ? 'Activ' : 'Inactiv',
+        amendments_count: contractAmendments.length
       };
 
-      // Helper to safely parse numbers
       const safeNumber = (val) => {
         if (val === null || val === undefined) return 0;
         const num = parseFloat(val);
@@ -443,22 +944,25 @@ export const exportContractsCSV = async (req, res) => {
   try {
     const { contractType = 'DISPOSAL' } = req.query;
     const contracts = await getContractsData(contractType, req.query);
+    const contractIds = contracts.map(c => c.id);
+    const amendments = await getAmendments(contractType, contractIds);
 
     let headers = [];
     if (contractType === 'DISPOSAL') {
-      headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Tarif (RON/t)', 'Taxa CEC (RON/t)', 'Cantitate (tone)', 'Valoare Totală (RON)', 'Status', 'Tip Atribuire'];
+      headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Tarif (RON/t)', 'Taxa CEC (RON/t)', 'Cantitate (tone)', 'Valoare Totală (RON)', 'Status', 'Tip Atribuire', 'Acte Adiționale'];
     } else if (contractType === 'TMB') {
-      headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Tarif (RON/t)', 'Cantitate (tone)', 'Valoare Totală (RON)', 'Reciclare (%)', 'Valorificare Energetică (%)', 'Depozitare (%)', 'Status'];
+      headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Tarif (RON/t)', 'Cantitate (tone)', 'Valoare Totală (RON)', 'Reciclare (%)', 'Valorificare Energetică (%)', 'Depozitare (%)', 'Status', 'Acte Adiționale'];
     } else if (contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
-      headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Tarif (RON/t)', 'Cantitate (tone)', 'Valoare Totală (RON)', 'Depozitare (%)', 'Asociat', 'Status'];
+      headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Tarif (RON/t)', 'Cantitate (tone)', 'Valoare Totală (RON)', 'Depozitare (%)', 'Asociat', 'Status', 'Acte Adiționale'];
     } else {
-      headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Status', 'Tip Atribuire'];
+      headers = ['Nr. Contract', 'Operator', 'Sector', 'Data Start', 'Data Sfârșit', 'Status', 'Tip Atribuire', 'Acte Adiționale'];
     }
 
     let csv = headers.join(',') + '\n';
 
     contracts.forEach(contract => {
-      // Helper to safely format numbers
+      const contractAmendments = amendments[contract.id] || [];
+      
       const formatNum = (val) => {
         if (val === null || val === undefined) return '0';
         const num = parseFloat(val);
@@ -480,7 +984,8 @@ export const exportContractsCSV = async (req, res) => {
           formatNum(contract.contracted_quantity_tons),
           formatNum(contract.total_value),
           contract.is_active ? 'Activ' : 'Inactiv',
-          contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație deschisă' : 'Negociere fără publicare'
+          contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație deschisă' : 'Negociere fără publicare',
+          contractAmendments.length.toString()
         );
       } else if (contractType === 'TMB') {
         values.push(
@@ -490,7 +995,8 @@ export const exportContractsCSV = async (req, res) => {
           formatNum(contract.indicator_recycling_percent),
           formatNum(contract.indicator_energy_recovery_percent),
           formatNum(contract.indicator_disposal_percent),
-          contract.is_active ? 'Activ' : 'Inactiv'
+          contract.is_active ? 'Activ' : 'Inactiv',
+          contractAmendments.length.toString()
         );
       } else if (contractType === 'AEROBIC' || contractType === 'ANAEROBIC') {
         values.push(
@@ -499,12 +1005,14 @@ export const exportContractsCSV = async (req, res) => {
           formatNum(contract.total_value),
           formatNum(contract.indicator_disposal_percent),
           `"${contract.associate_name || '-'}"`,
-          contract.is_active ? 'Activ' : 'Inactiv'
+          contract.is_active ? 'Activ' : 'Inactiv',
+          contractAmendments.length.toString()
         );
       } else {
         values.push(
           contract.is_active ? 'Activ' : 'Inactiv',
-          contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație deschisă' : 'Negociere fără publicare'
+          contract.attribution_type === 'PUBLIC_TENDER' ? 'Licitație deschisă' : 'Negociere fără publicare',
+          contractAmendments.length.toString()
         );
       }
 
