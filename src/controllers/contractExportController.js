@@ -53,7 +53,7 @@ const formatNumber = (num, decimals = 2) => {
 };
 
 // ============================================================================
-// HELPER: Format Date Romanian
+// HELPER: Format Date Romanian with Diacritics
 // ============================================================================
 const formatDate = (date) => {
   if (!date) return '-';
@@ -61,6 +61,20 @@ const formatDate = (date) => {
   const months = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 
                   'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie'];
   return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+};
+
+// ============================================================================
+// HELPER: Safe Text for PDF (handles Romanian diacritics)
+// ============================================================================
+const safeText = (text) => {
+  if (!text) return '';
+  // Replace problematic Romanian characters with safe equivalents for WinAnsiEncoding
+  return text
+    .replace(/ă/g, 'a').replace(/Ă/g, 'A')
+    .replace(/â/g, 'a').replace(/Â/g, 'A')
+    .replace(/î/g, 'i').replace(/Î/g, 'I')
+    .replace(/ș/g, 's').replace(/Ș/g, 'S')
+    .replace(/ț/g, 't').replace(/Ț/g, 'T');
 };
 
 // ============================================================================
@@ -359,9 +373,9 @@ export const exportContractsPDF = async (req, res) => {
     const totalQuantity = contracts.reduce((sum, c) => sum + (parseFloat(c.contracted_quantity_tons) || 0), 0);
     const totalValue = contracts.reduce((sum, c) => sum + (parseFloat(c.total_value) || 0), 0);
 
-    // Sector summary
+    // Sector summary - ONLY ACTIVE CONTRACTS
     const sectorSummary = {};
-    contracts.forEach(c => {
+    activeContracts.forEach(c => {
       const sector = c.sector_number || 'N/A';
       if (!sectorSummary[sector]) {
         sectorSummary[sector] = { count: 0, quantity: 0, value: 0 };
@@ -463,10 +477,10 @@ export const exportContractsPDF = async (req, res) => {
        .fillColor('#333333');
 
     const summaryData = [
-      { label: 'Total contracte:', value: `${contracts.length} (${activeContracts.length} active, ${expiredContracts.length} expirate)` },
-      { label: 'Cantitate totală estimată:', value: `${formatNumber(totalQuantity, 2)} tone` },
-      { label: 'Valoare totală estimată:', value: `${formatNumber(totalValue, 2)} RON` },
-      { label: 'Perioada acoperită:', value: `${new Date(Math.min(...contracts.map(c => new Date(c.contract_date_start)))).getFullYear()} - ${new Date(Math.max(...contracts.map(c => new Date(c.effective_date_end)))).getFullYear()}` }
+      { label: safeText('Total contracte:'), value: `${contracts.length} (${activeContracts.length} active, ${expiredContracts.length} expirate)` },
+      { label: safeText('Cantitate totala estimata:'), value: `${formatNumber(totalQuantity, 2)} tone` },
+      { label: safeText('Valoare totala estimata:'), value: `${formatNumber(totalValue, 2)} RON` },
+      { label: safeText('Perioada acoperita:'), value: `${new Date(Math.min(...contracts.map(c => new Date(c.contract_date_start)))).getFullYear()} - ${new Date(Math.max(...contracts.map(c => new Date(c.effective_date_end)))).getFullYear()}` }
     ];
 
     let summaryTextY = summaryY + 40;
@@ -522,8 +536,6 @@ export const exportContractsPDF = async (req, res) => {
       tableY += 20;
     });
 
-    addPageFooter();
-
     // ========================================================================
     // PAGE 2+: ACTIVE CONTRACTS
     // ========================================================================
@@ -544,7 +556,6 @@ export const exportContractsPDF = async (req, res) => {
         // Check if we need a new page
         const requiredSpace = 180 + (contractAmendments.length * 15);
         if (doc.y + requiredSpace > doc.page.height - 100) {
-          addPageFooter();
           doc.addPage();
           addPageHeader();
           doc.moveDown(2);
@@ -588,6 +599,17 @@ export const exportContractsPDF = async (req, res) => {
            .font('Regular')
            .fillColor('#333333')
            .text(`Sectorul ${contract.sector_number || 'N/A'}`, 150, detailY);
+
+        // Associate field for AEROBIC/ANAEROBIC
+        if (contract.associate_name && (contractType === 'AEROBIC' || contractType === 'ANAEROBIC')) {
+          detailY += 15;
+          doc.font('Bold')
+             .fillColor('#666666')
+             .text('Asociat:', 55, detailY)
+             .font('Regular')
+             .fillColor('#333333')
+             .text(safeText(contract.associate_name), 150, detailY);
+        }
 
         detailY += 15;
         doc.font('Bold')
@@ -649,19 +671,17 @@ export const exportContractsPDF = async (req, res) => {
 
           detailY += 15;
           contractAmendments.forEach((amendment, aIdx) => {
+            const amendmentText = `• Act ${safeText(amendment.amendment_number || (aIdx + 1).toString())} (${formatDate(amendment.amendment_date)}): Prelungire → ${formatDate(amendment.new_contract_date_end)}`;
             doc.fontSize(8)
                .font('Regular')
                .fillColor('#333333')
-               .text(`• Act ${amendment.amendment_number || aIdx + 1} (${formatDate(amendment.amendment_date)}): `, 65, detailY)
-               .text(`Prelungire → ${formatDate(amendment.new_contract_date_end)}`, 200, detailY);
+               .text(amendmentText, 65, detailY, { width: doc.page.width - 120 });
             detailY += 15;
           });
         }
 
         doc.moveDown(2);
       });
-
-      addPageFooter();
     }
 
     // ========================================================================
@@ -683,7 +703,6 @@ export const exportContractsPDF = async (req, res) => {
         
         const requiredSpace = 180 + (contractAmendments.length * 15);
         if (doc.y + requiredSpace > doc.page.height - 100) {
-          addPageFooter();
           doc.addPage();
           addPageHeader();
           doc.moveDown(2);
@@ -727,6 +746,17 @@ export const exportContractsPDF = async (req, res) => {
            .font('Regular')
            .fillColor('#333333')
            .text(`Sectorul ${contract.sector_number || 'N/A'}`, 150, detailY);
+
+        // Associate field for AEROBIC/ANAEROBIC
+        if (contract.associate_name && (contractType === 'AEROBIC' || contractType === 'ANAEROBIC')) {
+          detailY += 15;
+          doc.font('Bold')
+             .fillColor('#666666')
+             .text('Asociat:', 55, detailY)
+             .font('Regular')
+             .fillColor('#333333')
+             .text(safeText(contract.associate_name), 150, detailY);
+        }
 
         detailY += 15;
         doc.font('Bold')
@@ -786,11 +816,11 @@ export const exportContractsPDF = async (req, res) => {
 
           detailY += 15;
           contractAmendments.forEach((amendment, aIdx) => {
+            const amendmentText = `• Act ${safeText(amendment.amendment_number || (aIdx + 1).toString())} (${formatDate(amendment.amendment_date)}): Prelungire → ${formatDate(amendment.new_contract_date_end)}`;
             doc.fontSize(8)
                .font('Regular')
                .fillColor('#333333')
-               .text(`• Act ${amendment.amendment_number || aIdx + 1} (${formatDate(amendment.amendment_date)}): `, 65, detailY)
-               .text(`Prelungire → ${formatDate(amendment.new_contract_date_end)}`, 200, detailY);
+               .text(amendmentText, 65, detailY, { width: doc.page.width - 120 });
             detailY += 15;
           });
         }
