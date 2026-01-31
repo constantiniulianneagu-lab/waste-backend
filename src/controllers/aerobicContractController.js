@@ -3,6 +3,7 @@
  * ============================================================================
  * AEROBIC CONTRACT CONTROLLER (TA-)
  * ============================================================================
+ * FIX: Added proper NULL handling for numeric fields to fix save issues
  */
 
 import pool from '../config/database.js';
@@ -26,7 +27,7 @@ export const getAerobicContracts = async (req, res) => {
 
     if (is_active !== undefined) {
       whereConditions.push(`ac.is_active = $${paramCount}`);
-      params.push(is_active === 'true');
+      params.push(is_active === 'true' || is_active === true);
       paramCount++;
     }
 
@@ -200,6 +201,14 @@ export const createAerobicContract = async (req, res) => {
       attribution_type
     } = req.body;
 
+    // FIX: Convert empty strings to NULL for numeric fields
+    const cleanedValues = {
+      estimated_quantity_tons: estimated_quantity_tons === '' || estimated_quantity_tons === null ? null : estimated_quantity_tons,
+      indicator_disposal_percent: indicator_disposal_percent === '' || indicator_disposal_percent === null ? null : indicator_disposal_percent,
+      associate_institution_id: associate_institution_id === '' || associate_institution_id === null ? null : associate_institution_id,
+      contract_file_size: contract_file_size === '' || contract_file_size === null ? null : contract_file_size,
+    };
+
     const query = `
       INSERT INTO aerobic_contracts (
         institution_id, contract_number, contract_date_start, contract_date_end,
@@ -211,11 +220,23 @@ export const createAerobicContract = async (req, res) => {
     `;
 
     const values = [
-      institution_id, contract_number, contract_date_start, contract_date_end,
-      sector_id, tariff_per_ton, estimated_quantity_tons, associate_institution_id,
-      indicator_disposal_percent, contract_file_url, contract_file_name,
-      contract_file_size, is_active !== undefined ? is_active : true,
-      notes, award_type, attribution_type, req.user.id
+      institution_id, 
+      contract_number, 
+      contract_date_start, 
+      contract_date_end || null,
+      sector_id || null, 
+      tariff_per_ton, 
+      cleanedValues.estimated_quantity_tons, 
+      cleanedValues.associate_institution_id,
+      cleanedValues.indicator_disposal_percent, 
+      contract_file_url || null, 
+      contract_file_name || null,
+      cleanedValues.contract_file_size, 
+      is_active !== undefined ? is_active : true,
+      notes || null, 
+      award_type || null, 
+      attribution_type || null, 
+      req.user.id
     ];
 
     const result = await pool.query(query, values);
@@ -228,7 +249,8 @@ export const createAerobicContract = async (req, res) => {
     console.error('Create aerobic contract error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la crearea contractului aerob'
+      message: 'Eroare la crearea contractului aerob',
+      error: error.message
     });
   }
 };
@@ -257,6 +279,14 @@ export const updateAerobicContract = async (req, res) => {
       attribution_type
     } = req.body;
 
+    // FIX: Convert empty strings to NULL for numeric fields
+    const cleanedValues = {
+      estimated_quantity_tons: estimated_quantity_tons === '' || estimated_quantity_tons === null ? null : estimated_quantity_tons,
+      indicator_disposal_percent: indicator_disposal_percent === '' || indicator_disposal_percent === null ? null : indicator_disposal_percent,
+      associate_institution_id: associate_institution_id === '' || associate_institution_id === null ? null : associate_institution_id,
+      contract_file_size: contract_file_size === '' || contract_file_size === null ? null : contract_file_size,
+    };
+
     const query = `
       UPDATE aerobic_contracts SET
         contract_number = $1,
@@ -280,10 +310,22 @@ export const updateAerobicContract = async (req, res) => {
     `;
 
     const values = [
-      contract_number, contract_date_start, contract_date_end, sector_id,
-      tariff_per_ton, estimated_quantity_tons, associate_institution_id,
-      indicator_disposal_percent, contract_file_url, contract_file_name,
-      contract_file_size, is_active, notes, award_type, attribution_type, contractId
+      contract_number, 
+      contract_date_start, 
+      contract_date_end || null, 
+      sector_id || null,
+      tariff_per_ton, 
+      cleanedValues.estimated_quantity_tons, 
+      cleanedValues.associate_institution_id,
+      cleanedValues.indicator_disposal_percent, 
+      contract_file_url || null, 
+      contract_file_name || null,
+      cleanedValues.contract_file_size, 
+      is_active, 
+      notes || null, 
+      award_type || null, 
+      attribution_type || null, 
+      contractId
     ];
 
     const result = await pool.query(query, values);
@@ -303,7 +345,8 @@ export const updateAerobicContract = async (req, res) => {
     console.error('Update aerobic contract error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la actualizarea contractului aerob'
+      message: 'Eroare la actualizarea contractului aerob',
+      error: error.message
     });
   }
 };
@@ -393,6 +436,13 @@ export const createAerobicContractAmendment = async (req, res) => {
       amendment_file_size
     } = req.body;
 
+    // FIX: Convert empty strings to NULL for numeric fields
+    const cleanedValues = {
+      new_tariff_per_ton: new_tariff_per_ton === '' || new_tariff_per_ton === null ? null : new_tariff_per_ton,
+      new_estimated_quantity_tons: new_estimated_quantity_tons === '' || new_estimated_quantity_tons === null ? null : new_estimated_quantity_tons,
+      amendment_file_size: amendment_file_size === '' || amendment_file_size === null ? null : amendment_file_size,
+    };
+
     const query = `
       INSERT INTO aerobic_contract_amendments (
         contract_id, amendment_number, amendment_date, new_tariff_per_ton,
@@ -404,10 +454,20 @@ export const createAerobicContractAmendment = async (req, res) => {
     `;
 
     const values = [
-      contractId, amendment_number, amendment_date, new_tariff_per_ton,
-      new_estimated_quantity_tons, new_contract_date_end, amendment_type,
-      changes_description, reason, notes, amendment_file_url,
-      amendment_file_name, amendment_file_size, req.user.id
+      contractId, 
+      amendment_number, 
+      amendment_date, 
+      cleanedValues.new_tariff_per_ton,
+      cleanedValues.new_estimated_quantity_tons, 
+      new_contract_date_end || null, 
+      amendment_type,
+      changes_description || null, 
+      reason || null, 
+      notes || null, 
+      amendment_file_url || null,
+      amendment_file_name || null, 
+      cleanedValues.amendment_file_size, 
+      req.user.id
     ];
 
     const result = await pool.query(query, values);
@@ -420,7 +480,8 @@ export const createAerobicContractAmendment = async (req, res) => {
     console.error('Create aerobic amendment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la crearea actului adițional'
+      message: 'Eroare la crearea actului adițional',
+      error: error.message
     });
   }
 };
@@ -446,6 +507,13 @@ export const updateAerobicContractAmendment = async (req, res) => {
       amendment_file_size
     } = req.body;
 
+    // FIX: Convert empty strings to NULL for numeric fields
+    const cleanedValues = {
+      new_tariff_per_ton: new_tariff_per_ton === '' || new_tariff_per_ton === null ? null : new_tariff_per_ton,
+      new_estimated_quantity_tons: new_estimated_quantity_tons === '' || new_estimated_quantity_tons === null ? null : new_estimated_quantity_tons,
+      amendment_file_size: amendment_file_size === '' || amendment_file_size === null ? null : amendment_file_size,
+    };
+
     const query = `
       UPDATE aerobic_contract_amendments SET
         amendment_number = $1,
@@ -466,10 +534,20 @@ export const updateAerobicContractAmendment = async (req, res) => {
     `;
 
     const values = [
-      amendment_number, amendment_date, new_tariff_per_ton,
-      new_estimated_quantity_tons, new_contract_date_end, amendment_type,
-      changes_description, reason, notes, amendment_file_url,
-      amendment_file_name, amendment_file_size, amendmentId, contractId
+      amendment_number, 
+      amendment_date, 
+      cleanedValues.new_tariff_per_ton,
+      cleanedValues.new_estimated_quantity_tons, 
+      new_contract_date_end || null, 
+      amendment_type,
+      changes_description || null, 
+      reason || null, 
+      notes || null, 
+      amendment_file_url || null,
+      amendment_file_name || null, 
+      cleanedValues.amendment_file_size, 
+      amendmentId, 
+      contractId
     ];
 
     const result = await pool.query(query, values);
@@ -489,7 +567,8 @@ export const updateAerobicContractAmendment = async (req, res) => {
     console.error('Update aerobic amendment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la actualizarea actului adițional'
+      message: 'Eroare la actualizarea actului adițional',
+      error: error.message
     });
   }
 };
