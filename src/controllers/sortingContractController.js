@@ -1,11 +1,12 @@
 // src/controllers/sortingContractController.js
 /**
  * ============================================================================
- * SORTING CONTRACT CONTROLLER (S-)
+ * SORTING CONTRACT CONTROLLER (S-) + AUTO-TERMINATION
  * ============================================================================
  */
 
 import pool from '../config/database.js';
+import ContractTerminationService from '../services/ContractTerminationService.js';
 
 // ============================================================================
 // GET ALL SORTING CONTRACTS
@@ -175,6 +176,9 @@ export const createSortingContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end,
+      service_start_date,
+      associate_institution_id,
+      attribution_type,
       sector_id,
       tariff_per_ton,
       estimated_quantity_tons,
@@ -188,25 +192,41 @@ export const createSortingContract = async (req, res) => {
     const query = `
       INSERT INTO sorting_operator_contracts (
         institution_id, contract_number, contract_date_start, contract_date_end,
+        service_start_date, associate_institution_id, attribution_type,
         sector_id, tariff_per_ton, estimated_quantity_tons,
         contract_file_url, contract_file_name, contract_file_size,
         is_active, notes, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *
     `;
 
     const values = [
       institution_id, contract_number, contract_date_start, contract_date_end,
+      service_start_date || null, associate_institution_id || null, attribution_type || null,
       sector_id, tariff_per_ton, estimated_quantity_tons,
       contract_file_url, contract_file_name, contract_file_size,
       is_active !== undefined ? is_active : true, notes, req.user.id
     ];
 
     const result = await pool.query(query, values);
+    
+    let terminationResult = null;
+    if (result.rows[0].service_start_date) {
+      try {
+        terminationResult = await ContractTerminationService.processAutomaticTerminations(
+          'SORTING',
+          result.rows[0],
+          req.user.id
+        );
+      } catch (termError) {
+        console.error('⚠️ Auto-termination failed:', termError);
+      }
+    }
 
     res.status(201).json({
       success: true,
-      data: result.rows[0]
+      data: result.rows[0],
+      autoTerminations: terminationResult
     });
   } catch (error) {
     console.error('Create sorting contract error:', error);

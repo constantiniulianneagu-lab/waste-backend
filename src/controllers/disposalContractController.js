@@ -1,16 +1,17 @@
 // controllers/disposalContractController.js
 /**
  * ============================================================================
- * DISPOSAL CONTRACT CONTROLLER - COMPLETE WITH AMENDMENTS
+ * DISPOSAL CONTRACT CONTROLLER - COMPLETE WITH AMENDMENTS + AUTO-TERMINATION
  * ============================================================================
  * CRUD operations pentru contracte depozitare + acte adiționale
  * 
  * Fix: institutionId = "0" means ALL contracts (no filter)
- * Updated: 2025-01-24
+ * Updated: 2026-02-01
  * ============================================================================
  */
 
 import pool from "../config/database.js";
+import ContractTerminationService from '../services/ContractTerminationService.js';
 
 // ============================================================================
 // GET ALL DISPOSAL CONTRACTS
@@ -423,6 +424,8 @@ export const createDisposalContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end,
+      service_start_date,
+      associate_institution_id,
       contract_file_url,
       contract_file_name,
       contract_file_size,
@@ -457,6 +460,8 @@ export const createDisposalContract = async (req, res) => {
           contract_number,
           contract_date_start,
           contract_date_end,
+          service_start_date,
+          associate_institution_id,
           contract_file_url,
           contract_file_name,
           contract_file_size,
@@ -466,7 +471,7 @@ export const createDisposalContract = async (req, res) => {
           is_active,
           attribution_type,
           created_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING *
       `;
 
@@ -475,6 +480,8 @@ export const createDisposalContract = async (req, res) => {
         contract_number,
         contract_date_start,
         contract_date_end || null,
+        service_start_date || null,
+        associate_institution_id || null,
         contract_file_url || null,
         contract_file_name || null,
         contract_file_size || null,
@@ -531,10 +538,24 @@ export const createDisposalContract = async (req, res) => {
         [contractId]
       );
 
+      let terminationResult = null;
+      if (fullContract.rows[0].service_start_date) {
+        try {
+          terminationResult = await ContractTerminationService.processAutomaticTerminations(
+            'DISPOSAL',
+            { ...fullContract.rows[0], sector_id },
+            req.user?.id
+          );
+        } catch (termError) {
+          console.error('⚠️ Auto-termination failed:', termError);
+        }
+      }
+
       res.status(201).json({
         success: true,
         message: "Contract creat cu succes",
         data: fullContract.rows[0],
+        autoTerminations: terminationResult,
       });
     } catch (err) {
       await client.query("ROLLBACK");
