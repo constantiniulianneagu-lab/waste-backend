@@ -1,275 +1,157 @@
 // src/controllers/tmbContractController.js
 /**
  * ============================================================================
- * TMB CONTRACT CONTROLLER - COMPLETE WITH VALIDATION
+ * TMB CONTRACT CONTROLLER (TMB-)
  * ============================================================================
  */
 
 import pool from '../config/database.js';
 
 // ============================================================================
-// VALIDATE TMB CONTRACT (before save)
-// ============================================================================
-export const validateTMBContract = async (req, res) => {
-  try {
-    const {
-      id,
-      institution_id,
-      sector_id,
-      contract_number,
-      contract_date_start,
-      contract_date_end,
-    } = req.body;
-
-    const warnings = [];
-    const errors = [];
-
-    // 1. CHECK DUPLICATE CONTRACT NUMBER
-    if (contract_number) {
-      const duplicateNumberQuery = `
-        SELECT id, contract_number
-        FROM tmb_contracts
-        WHERE contract_number = $1 
-          AND deleted_at IS NULL
-          ${id ? 'AND id != $2' : ''}
-      `;
-      const duplicateParams = id ? [contract_number, id] : [contract_number];
-      const duplicateResult = await pool.query(duplicateNumberQuery, duplicateParams);
-      
-      if (duplicateResult.rows.length > 0) {
-        errors.push({
-          type: 'DUPLICATE_NUMBER',
-          message: `Există deja un contract cu numărul "${contract_number}"`,
-        });
-      }
-    }
-
-    // 2. CHECK EXISTING CONTRACT FOR SAME OPERATOR + SECTOR
-    if (institution_id && sector_id) {
-      const existingContractQuery = `
-        SELECT tc.id, tc.contract_number, tc.contract_date_start, tc.contract_date_end,
-               i.name as institution_name, s.sector_number
-        FROM tmb_contracts tc
-        LEFT JOIN institutions i ON tc.institution_id = i.id
-        LEFT JOIN sectors s ON tc.sector_id = s.id
-        WHERE tc.institution_id = $1 
-          AND tc.sector_id = $2
-          AND tc.is_active = true
-          AND tc.deleted_at IS NULL
-          ${id ? 'AND tc.id != $3' : ''}
-      `;
-      const existingParams = id 
-        ? [institution_id, sector_id, id] 
-        : [institution_id, sector_id];
-      const existingResult = await pool.query(existingContractQuery, existingParams);
-
-      if (existingResult.rows.length > 0) {
-        const existing = existingResult.rows[0];
-        const existingPeriod = `${existing.contract_date_start ? new Date(existing.contract_date_start).toLocaleDateString('ro-RO') : '?'} - ${existing.contract_date_end ? new Date(existing.contract_date_end).toLocaleDateString('ro-RO') : 'nedefinit'}`;
-        
-        warnings.push({
-          type: 'EXISTING_CONTRACT',
-          message: `Există deja un contract activ pentru acest operator și sector`,
-          details: {
-            contract_number: existing.contract_number,
-            period: existingPeriod,
-          },
-        });
-
-        // 3. CHECK OVERLAPPING PERIODS
-        if (contract_date_start) {
-          for (const exist of existingResult.rows) {
-            const newStart = new Date(contract_date_start);
-            const existStart = new Date(exist.contract_date_start);
-            
-            if (exist.contract_date_end && contract_date_end) {
-              const newEnd = new Date(contract_date_end);
-              const existEnd = new Date(exist.contract_date_end);
-
-              if (newStart <= existEnd && newEnd >= existStart) {
-                const overlapStart = newStart > existStart ? newStart : existStart;
-                const overlapEnd = newEnd < existEnd ? newEnd : existEnd;
-                const overlapDays = Math.ceil((overlapEnd - overlapStart) / (1000 * 60 * 60 * 24));
-                
-                warnings.push({
-                  type: 'OVERLAPPING_PERIOD',
-                  message: `Perioada se suprapune cu contractul ${exist.contract_number} (${overlapDays} zile)`,
-                  details: {
-                    contract_number: exist.contract_number,
-                    period: `${existStart.toLocaleDateString('ro-RO')} - ${existEnd.toLocaleDateString('ro-RO')}`,
-                    overlap_days: overlapDays,
-                  },
-                });
-              }
-            } else if (!exist.contract_date_end) {
-              warnings.push({
-                type: 'OVERLAPPING_PERIOD',
-                message: `Contractul ${exist.contract_number} nu are dată de sfârșit (perioadă nedefinită)`,
-                details: {
-                  contract_number: exist.contract_number,
-                  period: `${existStart.toLocaleDateString('ro-RO')} - nedefinit`,
-                },
-              });
-            }
-          }
-        }
-      }
-    }
-
-    // 4. CHECK IF CONTRACT IS ALREADY EXPIRED
-    if (contract_date_end) {
-      const endDate = new Date(contract_date_end);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      
-      if (endDate < today) {
-        warnings.push({
-          type: 'EXPIRED_CONTRACT',
-          message: 'Contractul va fi creat ca expirat (data sfârșit este în trecut)',
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      valid: errors.length === 0,
-      errors,
-      warnings,
-    });
-  } catch (err) {
-    console.error("Error validating TMB contract:", err);
-    res.status(500).json({
-      success: false,
-      message: "Eroare la validarea contractului",
-    });
-  }
-};
-
-// ============================================================================
 // GET ALL TMB CONTRACTS
 // ============================================================================
-export const getTMBContracts = async (req, res) => {
+export const getTmbContracts = async (req, res) => {
   try {
-    const { scopes } = req.userAccess;
-    if (scopes?.contracts === "NONE") {
-      return res.status(403).json({
-        success: false,
-        message: "Nu aveți permisiune să accesați contractele",
-      });
-    }
-
-    const { institutionId } = req.params;
     const { sector_id, is_active } = req.query;
 
-    let whereConditions = ["tc.deleted_at IS NULL"];
+    let whereConditions = ['tc.deleted_at IS NULL'];
     const params = [];
     let paramCount = 1;
 
-    // institutionId = "0" means ALL (no filter)
-    const useInstitutionFilter = institutionId && institutionId !== "0";
-    if (useInstitutionFilter) {
-      whereConditions.push(`tc.institution_id = $${paramCount}`);
-      params.push(institutionId);
-      paramCount++;
-    }
-
-    // Filter by sector
     if (sector_id) {
       whereConditions.push(`tc.sector_id = $${paramCount}`);
       params.push(sector_id);
       paramCount++;
     }
 
-    // Filter by active status
     if (is_active !== undefined) {
       whereConditions.push(`tc.is_active = $${paramCount}`);
-      params.push(is_active === "true");
+      params.push(is_active === 'true' || is_active === true);
       paramCount++;
     }
 
-    const whereClause = whereConditions.join(" AND ");
+    const whereClause = whereConditions.join(' AND ');
 
     const query = `
-      SELECT 
+      SELECT
         tc.id,
         tc.institution_id,
         tc.sector_id,
         tc.contract_number,
         tc.contract_date_start,
         tc.contract_date_end,
+        tc.service_start_date,
         tc.tariff_per_ton,
         tc.estimated_quantity_tons,
+        tc.contract_value,
+        tc.currency,
+        tc.notes,
+        tc.is_active,
+        tc.contract_file_url,
+        tc.contract_file_name,
+        tc.contract_file_size,
+        tc.contract_file_type,
+        tc.contract_file_uploaded_at,
         tc.associate_institution_id,
         tc.indicator_recycling_percent,
         tc.indicator_energy_recovery_percent,
         tc.indicator_disposal_percent,
-        tc.contract_file_url,
-        tc.contract_file_name,
-        tc.notes,
-        tc.is_active,
+        tc.attribution_type,
+        tc.created_by,
         tc.created_at,
         tc.updated_at,
-        tc.attribution_type,
-        
-        -- Calculated total value
-        COALESCE(tc.tariff_per_ton, 0) * COALESCE(tc.estimated_quantity_tons, 0) as total_value,
-        
-        -- Sector info (U.A.T.)
+
         s.sector_number,
         s.sector_name,
-        
-        -- Main operator (institution) info
+
         i.name as institution_name,
         i.short_name as institution_short_name,
-        i.type as institution_type,
-        
-        -- Associate institution info
+
         ai.name as associate_name,
         ai.short_name as associate_short_name,
-        
-        -- Count of amendments
-        (
-          SELECT COUNT(*)
-          FROM tmb_contract_amendments tca
-          WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL
-        ) as amendments_count,
-        
-        -- Effective values (considering amendments)
+
+        -- Effective fields (din amendments dacă există)
         COALESCE(
-          (SELECT tca.new_contract_date_end 
-           FROM tmb_contract_amendments tca 
-           WHERE tca.contract_id = tc.id 
-             AND tca.deleted_at IS NULL 
-             AND tca.new_contract_date_end IS NOT NULL
-           ORDER BY tca.amendment_date DESC, tca.id DESC 
+          (SELECT tca.new_contract_date_end
+           FROM tmb_contract_amendments tca
+           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL
+           ORDER BY tca.amendment_date DESC, tca.id DESC
            LIMIT 1),
           tc.contract_date_end
         ) as effective_date_end,
-        
+
         COALESCE(
-          (SELECT tca.new_tariff_per_ton 
-           FROM tmb_contract_amendments tca 
-           WHERE tca.contract_id = tc.id 
-             AND tca.deleted_at IS NULL 
-             AND tca.new_tariff_per_ton IS NOT NULL
-           ORDER BY tca.amendment_date DESC, tca.id DESC 
+          (SELECT tca.new_tariff_per_ton
+           FROM tmb_contract_amendments tca
+           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL
+           ORDER BY tca.amendment_date DESC, tca.id DESC
            LIMIT 1),
           tc.tariff_per_ton
         ) as effective_tariff,
-        
+
         COALESCE(
-          (SELECT tca.new_estimated_quantity_tons 
-           FROM tmb_contract_amendments tca 
-           WHERE tca.contract_id = tc.id 
-             AND tca.deleted_at IS NULL 
-             AND tca.new_estimated_quantity_tons IS NOT NULL
-           ORDER BY tca.amendment_date DESC, tca.id DESC 
+          (SELECT tca.new_estimated_quantity_tons
+           FROM tmb_contract_amendments tca
+           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL
+           ORDER BY tca.amendment_date DESC, tca.id DESC
            LIMIT 1),
           tc.estimated_quantity_tons
-        ) as effective_quantity
+        ) as effective_quantity,
+
+        COALESCE(
+          (SELECT tca.new_indicator_recycling_percent
+           FROM tmb_contract_amendments tca
+           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_indicator_recycling_percent IS NOT NULL
+           ORDER BY tca.amendment_date DESC, tca.id DESC
+           LIMIT 1),
+          tc.indicator_recycling_percent
+        ) as effective_indicator_recycling_percent,
+
+        COALESCE(
+          (SELECT tca.new_indicator_energy_recovery_percent
+           FROM tmb_contract_amendments tca
+           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_indicator_energy_recovery_percent IS NOT NULL
+           ORDER BY tca.amendment_date DESC, tca.id DESC
+           LIMIT 1),
+          tc.indicator_energy_recovery_percent
+        ) as effective_indicator_energy_recovery_percent,
+
+        COALESCE(
+          (SELECT tca.new_indicator_disposal_percent
+           FROM tmb_contract_amendments tca
+           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_indicator_disposal_percent IS NOT NULL
+           ORDER BY tca.amendment_date DESC, tca.id DESC
+           LIMIT 1),
+          tc.indicator_disposal_percent
+        ) as effective_indicator_disposal_percent,
+
+        (
+          COALESCE(
+            (SELECT tca.new_tariff_per_ton
+             FROM tmb_contract_amendments tca
+             WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL
+             ORDER BY tca.amendment_date DESC, tca.id DESC
+             LIMIT 1),
+            tc.tariff_per_ton
+          )
+          *
+          COALESCE(
+            (SELECT tca.new_estimated_quantity_tons
+             FROM tmb_contract_amendments tca
+             WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL
+             ORDER BY tca.amendment_date DESC, tca.id DESC
+             LIMIT 1),
+            tc.estimated_quantity_tons
+          )
+        ) as effective_total_value,
+
+        (SELECT COUNT(*)
+         FROM tmb_contract_amendments tca
+         WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL
+        ) as amendments_count
 
       FROM tmb_contracts tc
-      LEFT JOIN sectors s ON tc.sector_id = s.id
+      JOIN sectors s ON tc.sector_id = s.id
       LEFT JOIN institutions i ON tc.institution_id = i.id
       LEFT JOIN institutions ai ON tc.associate_institution_id = ai.id
       WHERE ${whereClause}
@@ -278,26 +160,12 @@ export const getTMBContracts = async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Calculate effective total value for each contract
-    const contracts = result.rows.map((contract) => {
-      const effectiveTariff = parseFloat(contract.effective_tariff) || 0;
-      const effectiveQuantity = parseFloat(contract.effective_quantity) || 0;
-
-      return {
-        ...contract,
-        effective_total_value: effectiveTariff * effectiveQuantity,
-      };
-    });
-
-    res.json({
-      success: true,
-      data: contracts,
-    });
-  } catch (err) {
-    console.error("Error fetching TMB contracts:", err);
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    console.error('Get TMB contracts error:', error);
     res.status(500).json({
       success: false,
-      message: "Eroare la încărcarea contractelor TMB",
+      message: 'Eroare la obținerea contractelor TMB',
     });
   }
 };
@@ -305,22 +173,21 @@ export const getTMBContracts = async (req, res) => {
 // ============================================================================
 // GET SINGLE TMB CONTRACT
 // ============================================================================
-export const getTMBContract = async (req, res) => {
+export const getTmbContract = async (req, res) => {
   try {
     const { contractId } = req.params;
 
     const query = `
-      SELECT 
+      SELECT
         tc.*,
         s.sector_number,
         s.sector_name,
         i.name as institution_name,
         i.short_name as institution_short_name,
         ai.name as associate_name,
-        ai.short_name as associate_short_name,
-        COALESCE(tc.tariff_per_ton, 0) * COALESCE(tc.estimated_quantity_tons, 0) as total_value
+        ai.short_name as associate_short_name
       FROM tmb_contracts tc
-      LEFT JOIN sectors s ON tc.sector_id = s.id
+      JOIN sectors s ON tc.sector_id = s.id
       LEFT JOIN institutions i ON tc.institution_id = i.id
       LEFT JOIN institutions ai ON tc.associate_institution_id = ai.id
       WHERE tc.id = $1 AND tc.deleted_at IS NULL
@@ -331,19 +198,16 @@ export const getTMBContract = async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "Contract TMB negăsit",
+        message: 'Contract TMB negăsit',
       });
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0],
-    });
-  } catch (err) {
-    console.error("Error fetching TMB contract:", err);
+    res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    console.error('Get TMB contract error:', error);
     res.status(500).json({
       success: false,
-      message: "Eroare la încărcarea contractului TMB",
+      message: 'Eroare la obținerea contractului TMB',
     });
   }
 };
@@ -351,23 +215,17 @@ export const getTMBContract = async (req, res) => {
 // ============================================================================
 // CREATE TMB CONTRACT
 // ============================================================================
-export const createTMBContract = async (req, res) => {
+export const createTmbContract = async (req, res) => {
   try {
-    const { canCreateData } = req.userAccess;
-    if (!canCreateData) {
-      return res.status(403).json({
-        success: false,
-        message: "Nu aveți permisiune să creați contracte",
-      });
-    }
-
     const {
-      institution_id,
       sector_id,
+      institution_id,
       contract_number,
       contract_date_start,
       contract_date_end,
+      service_start_date,
       tariff_per_ton,
+      currency,
       estimated_quantity_tons,
       associate_institution_id,
       indicator_recycling_percent,
@@ -375,27 +233,24 @@ export const createTMBContract = async (req, res) => {
       indicator_disposal_percent,
       contract_file_url,
       contract_file_name,
+      contract_file_size,
+      contract_file_type,
+      contract_file_uploaded_at,
+      is_active,
       notes,
-      is_active = true,
       attribution_type,
     } = req.body;
 
-    // Validation
-    if (!contract_number || !contract_date_start || !sector_id || !institution_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Câmpuri obligatorii: institution_id, contract_number, contract_date_start, sector_id",
-      });
-    }
-
     const query = `
       INSERT INTO tmb_contracts (
-        institution_id,
         sector_id,
+        institution_id,
         contract_number,
         contract_date_start,
         contract_date_end,
+        service_start_date,
         tariff_per_ton,
+        currency,
         estimated_quantity_tons,
         associate_institution_id,
         indicator_recycling_percent,
@@ -403,68 +258,53 @@ export const createTMBContract = async (req, res) => {
         indicator_disposal_percent,
         contract_file_url,
         contract_file_name,
-        notes,
+        contract_file_size,
+        contract_file_type,
+        contract_file_uploaded_at,
         is_active,
+        notes,
         attribution_type,
         created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
+      )
       RETURNING *
     `;
 
-    const result = await pool.query(query, [
-      institution_id,
+    const values = [
       sector_id,
+      institution_id || null,
       contract_number,
       contract_date_start,
       contract_date_end || null,
-      tariff_per_ton || null,
-      estimated_quantity_tons || null,
+      service_start_date || null,
+      tariff_per_ton,
+      currency || 'RON',
+      estimated_quantity_tons === '' ? null : estimated_quantity_tons,
       associate_institution_id || null,
-      indicator_recycling_percent || null,
-      indicator_energy_recovery_percent || null,
-      indicator_disposal_percent || null,
+      indicator_recycling_percent === '' ? null : indicator_recycling_percent,
+      indicator_energy_recovery_percent === '' ? null : indicator_energy_recovery_percent,
+      indicator_disposal_percent === '' ? null : indicator_disposal_percent,
       contract_file_url || null,
       contract_file_name || null,
+      contract_file_size || null,
+      contract_file_type || 'application/pdf',
+      contract_file_uploaded_at || null,
+      is_active !== undefined ? is_active : true,
       notes || null,
-      is_active,
       attribution_type || null,
-      req.user?.id || null,
-    ]);
+      req.user.id,
+    ];
 
-    // Get full contract with joins
-    const fullContract = await pool.query(
-      `
-      SELECT tc.*, 
-             s.sector_number, s.sector_name,
-             i.name as institution_name, i.short_name as institution_short_name,
-             ai.name as associate_name, ai.short_name as associate_short_name
-      FROM tmb_contracts tc
-      LEFT JOIN sectors s ON tc.sector_id = s.id
-      LEFT JOIN institutions i ON tc.institution_id = i.id
-      LEFT JOIN institutions ai ON tc.associate_institution_id = ai.id
-      WHERE tc.id = $1
-    `,
-      [result.rows[0].id]
-    );
+    const result = await pool.query(query, values);
 
-    res.status(201).json({
-      success: true,
-      message: "Contract TMB creat cu succes",
-      data: fullContract.rows[0],
-    });
-  } catch (err) {
-    console.error("Error creating TMB contract:", err);
-
-    if (err.code === "23505") {
-      return res.status(400).json({
-        success: false,
-        message: "Există deja un contract TMB cu acest număr",
-      });
-    }
-
+    res.status(201).json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    console.error('Create TMB contract error:', error);
     res.status(500).json({
       success: false,
-      message: "Eroare la crearea contractului TMB",
+      message: 'Eroare la crearea contractului TMB',
+      error: error.message,
     });
   }
 };
@@ -472,24 +312,19 @@ export const createTMBContract = async (req, res) => {
 // ============================================================================
 // UPDATE TMB CONTRACT
 // ============================================================================
-export const updateTMBContract = async (req, res) => {
+export const updateTmbContract = async (req, res) => {
   try {
-    const { canEditData } = req.userAccess;
-    if (!canEditData) {
-      return res.status(403).json({
-        success: false,
-        message: "Nu aveți permisiune să editați contracte",
-      });
-    }
-
     const { contractId } = req.params;
+
     const {
-      institution_id,
       sector_id,
+      institution_id,
       contract_number,
       contract_date_start,
       contract_date_end,
+      service_start_date,
       tariff_per_ton,
+      currency,
       estimated_quantity_tons,
       associate_institution_id,
       indicator_recycling_percent,
@@ -497,131 +332,115 @@ export const updateTMBContract = async (req, res) => {
       indicator_disposal_percent,
       contract_file_url,
       contract_file_name,
-      notes,
+      contract_file_size,
+      contract_file_type,
+      contract_file_uploaded_at,
       is_active,
+      notes,
       attribution_type,
     } = req.body;
 
     const query = `
       UPDATE tmb_contracts SET
-        institution_id = COALESCE($1, institution_id),
-        sector_id = COALESCE($2, sector_id),
-        contract_number = COALESCE($3, contract_number),
-        contract_date_start = COALESCE($4, contract_date_start),
+        sector_id = $1,
+        institution_id = $2,
+        contract_number = $3,
+        contract_date_start = $4,
         contract_date_end = $5,
-        tariff_per_ton = $6,
-        estimated_quantity_tons = $7,
-        associate_institution_id = $8,
-        indicator_recycling_percent = $9,
-        indicator_energy_recovery_percent = $10,
-        indicator_disposal_percent = $11,
-        contract_file_url = $12,
-        contract_file_name = $13,
-        notes = $14,
-        is_active = COALESCE($15, is_active),
-        attribution_type = COALESCE($17, attribution_type),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $16 AND deleted_at IS NULL
+        service_start_date = $6,
+        tariff_per_ton = $7,
+        currency = $8,
+        estimated_quantity_tons = $9,
+        associate_institution_id = $10,
+        indicator_recycling_percent = $11,
+        indicator_energy_recovery_percent = $12,
+        indicator_disposal_percent = $13,
+        contract_file_url = $14,
+        contract_file_name = $15,
+        contract_file_size = $16,
+        contract_file_type = $17,
+        contract_file_uploaded_at = $18,
+        is_active = $19,
+        notes = $20,
+        attribution_type = $21,
+        updated_at = NOW()
+      WHERE id = $22 AND deleted_at IS NULL
       RETURNING *
     `;
 
-    const result = await pool.query(query, [
-      institution_id,
+    const values = [
       sector_id,
+      institution_id || null,
       contract_number,
       contract_date_start,
       contract_date_end || null,
-      tariff_per_ton || null,
-      estimated_quantity_tons || null,
+      service_start_date || null,
+      tariff_per_ton,
+      currency || 'RON',
+      estimated_quantity_tons === '' ? null : estimated_quantity_tons,
       associate_institution_id || null,
-      indicator_recycling_percent || null,
-      indicator_energy_recovery_percent || null,
-      indicator_disposal_percent || null,
+      indicator_recycling_percent === '' ? null : indicator_recycling_percent,
+      indicator_energy_recovery_percent === '' ? null : indicator_energy_recovery_percent,
+      indicator_disposal_percent === '' ? null : indicator_disposal_percent,
       contract_file_url || null,
       contract_file_name || null,
-      notes || null,
+      contract_file_size || null,
+      contract_file_type || 'application/pdf',
+      contract_file_uploaded_at || null,
       is_active,
-      contractId,
+      notes || null,
       attribution_type || null,
-    ]);
+      contractId,
+    ];
+
+    const result = await pool.query(query, values);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Contract TMB negăsit",
-      });
+      return res.status(404).json({ success: false, message: 'Contract TMB negăsit' });
     }
 
-    res.json({
-      success: true,
-      message: "Contract TMB actualizat cu succes",
-      data: result.rows[0],
-    });
-  } catch (err) {
-    console.error("Error updating TMB contract:", err);
+    res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    console.error('Update TMB contract error:', error);
     res.status(500).json({
       success: false,
-      message: "Eroare la actualizarea contractului TMB",
+      message: 'Eroare la actualizarea contractului TMB',
+      error: error.message,
     });
   }
 };
 
 // ============================================================================
-// DELETE TMB CONTRACT (soft delete)
+// DELETE TMB CONTRACT
 // ============================================================================
-export const deleteTMBContract = async (req, res) => {
+export const deleteTmbContract = async (req, res) => {
   try {
-    const { canDeleteData } = req.userAccess;
-    if (!canDeleteData) {
-      return res.status(403).json({
-        success: false,
-        message: "Nu aveți permisiune să ștergeți contracte",
-      });
-    }
-
     const { contractId } = req.params;
 
-    // Soft delete contract
-    const result = await pool.query(
-      `UPDATE tmb_contracts 
-       SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1 AND deleted_at IS NULL
-       RETURNING id`,
-      [contractId]
-    );
+    const query = `
+      UPDATE tmb_contracts
+      SET deleted_at = NOW()
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id
+    `;
+
+    const result = await pool.query(query, [contractId]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Contract TMB negăsit",
-      });
+      return res.status(404).json({ success: false, message: 'Contract TMB negăsit' });
     }
 
-    // Soft delete amendments
-    await pool.query(
-      `UPDATE tmb_contract_amendments 
-       SET deleted_at = CURRENT_TIMESTAMP
-       WHERE contract_id = $1 AND deleted_at IS NULL`,
-      [contractId]
-    );
-
-    res.json({
-      success: true,
-      message: "Contract TMB șters cu succes",
-    });
-  } catch (err) {
-    console.error("Error deleting TMB contract:", err);
-    res.status(500).json({
-      success: false,
-      message: "Eroare la ștergerea contractului TMB",
-    });
+    res.json({ success: true, message: 'Contract TMB șters cu succes' });
+  } catch (error) {
+    console.error('Delete TMB contract error:', error);
+    res.status(500).json({ success: false, message: 'Eroare la ștergerea contractului TMB' });
   }
 };
 
 // ============================================================================
-// GET TMB CONTRACT AMENDMENTS
+// GET AMENDMENTS FOR TMB CONTRACT
 // ============================================================================
-export const getTMBContractAmendments = async (req, res) => {
+export const getTmbContractAmendments = async (req, res) => {
   try {
     const { contractId } = req.params;
 
@@ -634,255 +453,227 @@ export const getTMBContractAmendments = async (req, res) => {
 
     const result = await pool.query(query, [contractId]);
 
-    res.json({
-      success: true,
-      data: result.rows,
-    });
-  } catch (err) {
-    console.error("Error fetching TMB amendments:", err);
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    console.error('Get TMB amendments error:', error);
     res.status(500).json({
       success: false,
-      message: "Eroare la încărcarea actelor adiționale",
+      message: 'Eroare la obținerea actelor adiționale TMB',
     });
   }
 };
 
 // ============================================================================
-// CREATE TMB CONTRACT AMENDMENT
+// CREATE AMENDMENT FOR TMB CONTRACT
 // ============================================================================
-export const createTMBContractAmendment = async (req, res) => {
+export const createTmbContractAmendment = async (req, res) => {
   try {
-    const { canCreateData } = req.userAccess;
-    if (!canCreateData) {
-      return res.status(403).json({
-        success: false,
-        message: "Nu aveți permisiune să creați acte adiționale",
-      });
-    }
-
     const { contractId } = req.params;
+
     const {
       amendment_number,
       amendment_date,
-      amendment_type,
-      new_contract_date_end,
       new_tariff_per_ton,
       new_estimated_quantity_tons,
+      new_contract_date_end,
+      amendment_type,
       changes_description,
       reason,
       notes,
       amendment_file_url,
       amendment_file_name,
+      amendment_file_size,
+      reference_contract_id,
+      quantity_adjustment_auto,
+      new_indicator_recycling_percent,
+      new_indicator_energy_recovery_percent,
+      new_indicator_disposal_percent,
+      new_contract_date_start,
     } = req.body;
-
-    // Check contract exists
-    const contractCheck = await pool.query(
-      "SELECT id FROM tmb_contracts WHERE id = $1 AND deleted_at IS NULL",
-      [contractId]
-    );
-
-    if (contractCheck.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Contract TMB negăsit",
-      });
-    }
-
-    // Auto-determine amendment type if not provided
-    let finalAmendmentType = amendment_type;
-    if (!finalAmendmentType) {
-      const changes = [];
-      if (new_contract_date_end) changes.push("EXTENSION");
-      if (new_tariff_per_ton) changes.push("TARIFF_CHANGE");
-      if (new_estimated_quantity_tons) changes.push("QUANTITY_CHANGE");
-
-      if (changes.length > 1) {
-        finalAmendmentType = "MULTIPLE";
-      } else if (changes.length === 1) {
-        finalAmendmentType = changes[0];
-      } else {
-        finalAmendmentType = "EXTENSION";
-      }
-    }
 
     const query = `
       INSERT INTO tmb_contract_amendments (
         contract_id,
         amendment_number,
         amendment_date,
-        amendment_type,
-        new_contract_date_end,
         new_tariff_per_ton,
         new_estimated_quantity_tons,
+        new_contract_date_end,
+        amendment_type,
         changes_description,
         reason,
         notes,
         amendment_file_url,
         amendment_file_name,
+        amendment_file_size,
+        reference_contract_id,
+        quantity_adjustment_auto,
+        new_indicator_recycling_percent,
+        new_indicator_energy_recovery_percent,
+        new_indicator_disposal_percent,
+        new_contract_date_start,
         created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
+      )
       RETURNING *
     `;
 
-    const result = await pool.query(query, [
+    const values = [
       contractId,
       amendment_number,
       amendment_date,
-      finalAmendmentType,
+      new_tariff_per_ton === '' ? null : new_tariff_per_ton,
+      new_estimated_quantity_tons === '' ? null : new_estimated_quantity_tons,
       new_contract_date_end || null,
-      new_tariff_per_ton || null,
-      new_estimated_quantity_tons || null,
+      amendment_type || null,
       changes_description || null,
       reason || null,
       notes || null,
       amendment_file_url || null,
       amendment_file_name || null,
-      req.user?.id || null,
-    ]);
+      amendment_file_size || null,
+      reference_contract_id || null,
+      quantity_adjustment_auto === '' ? null : quantity_adjustment_auto,
+      new_indicator_recycling_percent === '' ? null : new_indicator_recycling_percent,
+      new_indicator_energy_recovery_percent === '' ? null : new_indicator_energy_recovery_percent,
+      new_indicator_disposal_percent === '' ? null : new_indicator_disposal_percent,
+      new_contract_date_start || null,
+      req.user.id,
+    ];
 
-    res.status(201).json({
-      success: true,
-      message: "Act adițional creat cu succes",
-      data: result.rows[0],
-    });
-  } catch (err) {
-    console.error("Error creating TMB amendment:", err);
+    const result = await pool.query(query, values);
 
-    if (err.code === "23505") {
-      return res.status(400).json({
-        success: false,
-        message: "Există deja un act adițional cu acest număr pentru acest contract",
-      });
-    }
-
+    res.status(201).json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    console.error('Create TMB amendment error:', error);
     res.status(500).json({
       success: false,
-      message: "Eroare la crearea actului adițional",
+      message: 'Eroare la crearea actului adițional TMB',
+      error: error.message,
     });
   }
 };
 
 // ============================================================================
-// UPDATE TMB CONTRACT AMENDMENT
+// UPDATE AMENDMENT FOR TMB CONTRACT
 // ============================================================================
-export const updateTMBContractAmendment = async (req, res) => {
+export const updateTmbContractAmendment = async (req, res) => {
   try {
-    const { canEditData } = req.userAccess;
-    if (!canEditData) {
-      return res.status(403).json({
-        success: false,
-        message: "Nu aveți permisiune să editați acte adiționale",
-      });
-    }
+    const { contractId, amendmentId } = req.params;
 
-    const { amendmentId } = req.params;
     const {
       amendment_number,
       amendment_date,
-      amendment_type,
-      new_contract_date_end,
       new_tariff_per_ton,
       new_estimated_quantity_tons,
+      new_contract_date_end,
+      amendment_type,
       changes_description,
       reason,
       notes,
       amendment_file_url,
       amendment_file_name,
+      amendment_file_size,
+      reference_contract_id,
+      quantity_adjustment_auto,
+      new_indicator_recycling_percent,
+      new_indicator_energy_recovery_percent,
+      new_indicator_disposal_percent,
+      new_contract_date_start,
     } = req.body;
 
     const query = `
       UPDATE tmb_contract_amendments SET
-        amendment_number = COALESCE($1, amendment_number),
-        amendment_date = COALESCE($2, amendment_date),
-        amendment_type = COALESCE($3, amendment_type),
-        new_contract_date_end = $4,
-        new_tariff_per_ton = $5,
-        new_estimated_quantity_tons = $6,
+        amendment_number = $1,
+        amendment_date = $2,
+        new_tariff_per_ton = $3,
+        new_estimated_quantity_tons = $4,
+        new_contract_date_end = $5,
+        amendment_type = $6,
         changes_description = $7,
         reason = $8,
         notes = $9,
         amendment_file_url = $10,
         amendment_file_name = $11,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $12 AND deleted_at IS NULL
+        amendment_file_size = $12,
+        reference_contract_id = $13,
+        quantity_adjustment_auto = $14,
+        new_indicator_recycling_percent = $15,
+        new_indicator_energy_recovery_percent = $16,
+        new_indicator_disposal_percent = $17,
+        new_contract_date_start = $18,
+        updated_at = NOW()
+      WHERE id = $19 AND contract_id = $20 AND deleted_at IS NULL
       RETURNING *
     `;
 
-    const result = await pool.query(query, [
+    const values = [
       amendment_number,
       amendment_date,
-      amendment_type,
+      new_tariff_per_ton === '' ? null : new_tariff_per_ton,
+      new_estimated_quantity_tons === '' ? null : new_estimated_quantity_tons,
       new_contract_date_end || null,
-      new_tariff_per_ton || null,
-      new_estimated_quantity_tons || null,
+      amendment_type || null,
       changes_description || null,
       reason || null,
       notes || null,
       amendment_file_url || null,
       amendment_file_name || null,
+      amendment_file_size || null,
+      reference_contract_id || null,
+      quantity_adjustment_auto === '' ? null : quantity_adjustment_auto,
+      new_indicator_recycling_percent === '' ? null : new_indicator_recycling_percent,
+      new_indicator_energy_recovery_percent === '' ? null : new_indicator_energy_recovery_percent,
+      new_indicator_disposal_percent === '' ? null : new_indicator_disposal_percent,
+      new_contract_date_start || null,
       amendmentId,
-    ]);
+      contractId,
+    ];
+
+    const result = await pool.query(query, values);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Act adițional negăsit",
-      });
+      return res.status(404).json({ success: false, message: 'Act adițional TMB negăsit' });
     }
 
-    res.json({
-      success: true,
-      message: "Act adițional actualizat cu succes",
-      data: result.rows[0],
-    });
-  } catch (err) {
-    console.error("Error updating TMB amendment:", err);
+    res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    console.error('Update TMB amendment error:', error);
     res.status(500).json({
       success: false,
-      message: "Eroare la actualizarea actului adițional",
+      message: 'Eroare la actualizarea actului adițional TMB',
+      error: error.message,
     });
   }
 };
 
 // ============================================================================
-// DELETE TMB CONTRACT AMENDMENT (soft delete)
+// DELETE AMENDMENT FOR TMB CONTRACT
 // ============================================================================
-export const deleteTMBContractAmendment = async (req, res) => {
+export const deleteTmbContractAmendment = async (req, res) => {
   try {
-    const { canDeleteData } = req.userAccess;
-    if (!canDeleteData) {
-      return res.status(403).json({
-        success: false,
-        message: "Nu aveți permisiune să ștergeți acte adiționale",
-      });
-    }
+    const { contractId, amendmentId } = req.params;
 
-    const { amendmentId } = req.params;
+    const query = `
+      UPDATE tmb_contract_amendments
+      SET deleted_at = NOW()
+      WHERE id = $1 AND contract_id = $2 AND deleted_at IS NULL
+      RETURNING id
+    `;
 
-    const result = await pool.query(
-      `UPDATE tmb_contract_amendments 
-       SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1 AND deleted_at IS NULL
-       RETURNING id`,
-      [amendmentId]
-    );
+    const result = await pool.query(query, [amendmentId, contractId]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Act adițional negăsit",
-      });
+      return res.status(404).json({ success: false, message: 'Act adițional TMB negăsit' });
     }
 
-    res.json({
-      success: true,
-      message: "Act adițional șters cu succes",
-    });
-  } catch (err) {
-    console.error("Error deleting TMB amendment:", err);
+    res.json({ success: true, message: 'Act adițional TMB șters cu succes' });
+  } catch (error) {
+    console.error('Delete TMB amendment error:', error);
     res.status(500).json({
       success: false,
-      message: "Eroare la ștergerea actului adițional",
+      message: 'Eroare la ștergerea actului adițional TMB',
     });
   }
 };
