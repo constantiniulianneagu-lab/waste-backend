@@ -6,8 +6,8 @@
 // Date: 1 Februarie 2026
 // ============================================================================
 
-const pool = require('../config/database');
-const { calculateProportionalQuantity } = require('../utils/QuantityCalculationHelper');
+import pool from '../config/database.js';
+import { calculateProportionalQuantity } from '../utils/QuantityCalculationHelper.js';
 
 class ContractTerminationService {
   
@@ -319,4 +319,4 @@ class ContractTerminationService {
   }
 }
 
-module.exports = ContractTerminationService;
+export default ContractTerminationService;
