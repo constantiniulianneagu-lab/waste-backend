@@ -1,11 +1,12 @@
 // src/controllers/tmbContractController.js
 /**
  * ============================================================================
- * TMB CONTRACT CONTROLLER - COMPLETE WITH VALIDATION
+ * TMB CONTRACT CONTROLLER - COMPLETE WITH VALIDATION + AUTO-TERMINATION
  * ============================================================================
  */
 
 import pool from '../config/database.js';
+import ContractTerminationService from '../services/ContractTerminationService.js';
 
 // ============================================================================
 // VALIDATE TMB CONTRACT (before save)
@@ -367,6 +368,7 @@ export const createTMBContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end,
+      service_start_date,      // ← NOU CÂMP
       tariff_per_ton,
       estimated_quantity_tons,
       associate_institution_id,
@@ -395,6 +397,7 @@ export const createTMBContract = async (req, res) => {
         contract_number,
         contract_date_start,
         contract_date_end,
+        service_start_date,
         tariff_per_ton,
         estimated_quantity_tons,
         associate_institution_id,
@@ -407,7 +410,7 @@ export const createTMBContract = async (req, res) => {
         is_active,
         attribution_type,
         created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING *
     `;
 
@@ -417,6 +420,7 @@ export const createTMBContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end || null,
+      service_start_date || null,  // ← NOU PARAMETRU
       tariff_per_ton || null,
       estimated_quantity_tons || null,
       associate_institution_id || null,
@@ -447,10 +451,31 @@ export const createTMBContract = async (req, res) => {
       [result.rows[0].id]
     );
 
+    // ====================================================================
+    // AUTO-TERMINATION: Închide contracte vechi dacă există service_start_date
+    // ====================================================================
+    let terminationResult = null;
+    
+    if (fullContract.rows[0].service_start_date) {
+      try {
+        terminationResult = await ContractTerminationService.processAutomaticTerminations(
+          'TMB',
+          fullContract.rows[0],
+          req.user?.id
+        );
+        console.log('✓ Auto-termination completă:', terminationResult.message);
+      } catch (termError) {
+        console.error('⚠️ Auto-termination failed:', termError);
+        // Nu oprește flow-ul - contractul a fost deja creat
+      }
+    }
+    // ====================================================================
+
     res.status(201).json({
       success: true,
       message: "Contract TMB creat cu succes",
       data: fullContract.rows[0],
+      autoTerminations: terminationResult, // Include info despre contracte închise
     });
   } catch (err) {
     console.error("Error creating TMB contract:", err);
