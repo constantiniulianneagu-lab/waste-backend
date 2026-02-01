@@ -369,20 +369,21 @@ export const exportContractsPDF = async (req, res) => {
     const activeContracts = contracts.filter(c => new Date(c.effective_date_end) >= now);
     const expiredContracts = contracts.filter(c => new Date(c.effective_date_end) < now);
 
-    // Calculate totals
-    const totalQuantity = contracts.reduce((sum, c) => sum + (parseFloat(c.contracted_quantity_tons) || 0), 0);
-    const totalValue = contracts.reduce((sum, c) => sum + (parseFloat(c.total_value) || 0), 0);
+    // Calculate totals - ONLY ACTIVE CONTRACTS
+    const totalQuantity = activeContracts.reduce((sum, c) => sum + (parseFloat(c.contracted_quantity_tons) || 0), 0);
+    const totalValue = activeContracts.reduce((sum, c) => sum + (parseFloat(c.total_value) || 0), 0);
 
     // Sector summary - ONLY ACTIVE CONTRACTS
     const sectorSummary = {};
     activeContracts.forEach(c => {
       const sector = c.sector_number || 'N/A';
       if (!sectorSummary[sector]) {
-        sectorSummary[sector] = { count: 0, quantity: 0, value: 0 };
+        sectorSummary[sector] = { count: 0, quantity: 0, value: 0, amendments: 0 };
       }
       sectorSummary[sector].count++;
       sectorSummary[sector].quantity += parseFloat(c.contracted_quantity_tons) || 0;
       sectorSummary[sector].value += parseFloat(c.total_value) || 0;
+      sectorSummary[sector].amendments += (amendments[c.id] || []).length;
     });
 
     const doc = new PDFDocument({ 
@@ -447,6 +448,12 @@ export const exportContractsPDF = async (req, res) => {
        .font('Regular')
        .text(`Generat la: ${formatDate(new Date())}`, { align: 'center' });
 
+    // SAMD Source
+    doc.moveDown(0.3);
+    doc.fontSize(8)
+       .fillColor('#999999')
+       .text(safeText('Date din SAMD - Sistem Avansat de Monitorizare Deseuri'), { align: 'center' });
+
     // Applied filters
     if (req.query.sector_id || req.query.is_active) {
       doc.moveDown(0.5);
@@ -478,9 +485,9 @@ export const exportContractsPDF = async (req, res) => {
 
     const summaryData = [
       { label: safeText('Total contracte:'), value: `${contracts.length} (${activeContracts.length} active, ${expiredContracts.length} expirate)` },
-      { label: safeText('Cantitate totala estimata:'), value: `${formatNumber(totalQuantity, 2)} tone` },
-      { label: safeText('Valoare totala estimata:'), value: `${formatNumber(totalValue, 2)} RON` },
-      { label: safeText('Perioada acoperita:'), value: `${new Date(Math.min(...contracts.map(c => new Date(c.contract_date_start)))).getFullYear()} - ${new Date(Math.max(...contracts.map(c => new Date(c.effective_date_end)))).getFullYear()}` }
+      { label: safeText('Cantitate totala estimata (active):'), value: `${formatNumber(totalQuantity, 2)} tone` },
+      { label: safeText('Valoare totala estimata (active):'), value: `${formatNumber(totalValue, 2)} RON` },
+      { label: safeText('Perioada acoperita (active):'), value: activeContracts.length > 0 ? `${new Date(Math.min(...activeContracts.map(c => new Date(c.contract_date_start)))).getFullYear()} - ${new Date(Math.max(...activeContracts.map(c => new Date(c.effective_date_end)))).getFullYear()}` : 'N/A' }
     ];
 
     let summaryTextY = summaryY + 40;
@@ -512,10 +519,11 @@ export const exportContractsPDF = async (req, res) => {
     doc.fontSize(9)
        .font('Bold')
        .fillColor('#FFFFFF')
-       .text('Sector', 50, sectorTableY + 8, { width: 80 })
-       .text('Contracte', 150, sectorTableY + 8, { width: 80 })
-       .text('Cantitate (t)', 250, sectorTableY + 8, { width: 100 })
-       .text('Valoare (RON)', 370, sectorTableY + 8, { width: 150 });
+       .text('Sector', 50, sectorTableY + 8, { width: 70 })
+       .text('Contracte', 130, sectorTableY + 8, { width: 60 })
+       .text(safeText('Acte aditionale'), 200, sectorTableY + 8, { width: 80 })
+       .text('Cantitate (t)', 290, sectorTableY + 8, { width: 90 })
+       .text('Valoare (RON)', 390, sectorTableY + 8, { width: 130 });
 
     let tableY = sectorTableY + 25;
     Object.keys(sectorSummary).sort().forEach((sector, idx) => {
@@ -528,10 +536,11 @@ export const exportContractsPDF = async (req, res) => {
       doc.fontSize(9)
          .font('Regular')
          .fillColor('#333333')
-         .text(`Sectorul ${sector}`, 50, tableY + 5, { width: 80 })
-         .text(data.count.toString(), 150, tableY + 5, { width: 80 })
-         .text(formatNumber(data.quantity, 2), 250, tableY + 5, { width: 100 })
-         .text(formatNumber(data.value, 2), 370, tableY + 5, { width: 150 });
+         .text(`Sectorul ${sector}`, 50, tableY + 5, { width: 70 })
+         .text(data.count.toString(), 130, tableY + 5, { width: 60, align: 'center' })
+         .text(data.amendments.toString(), 200, tableY + 5, { width: 80, align: 'center' })
+         .text(formatNumber(data.quantity, 2), 290, tableY + 5, { width: 90 })
+         .text(formatNumber(data.value, 2), 390, tableY + 5, { width: 130 });
 
       tableY += 20;
     });
@@ -563,26 +572,22 @@ export const exportContractsPDF = async (req, res) => {
 
         const cardY = doc.y;
         
-        // Contract card
-        doc.roundedRect(40, cardY, doc.page.width - 80, 140 + (contractAmendments.length * 15), 8)
-           .fillAndStroke('#FFFFFF', '#10B981');
-
-        // Contract number header
-        doc.roundedRect(40, cardY, doc.page.width - 80, 30, 8)
+        // Contract number header (colored bar only - no full card border)
+        doc.roundedRect(40, cardY, doc.page.width - 80, 35, 8)
            .fillAndStroke('#10B981', '#10B981');
 
         doc.fontSize(14)
            .font('Bold')
            .fillColor('#FFFFFF')
-           .text(contract.contract_number, 55, cardY + 8);
+           .text(safeText(contract.contract_number), 55, cardY + 10);
 
         doc.fontSize(9)
            .font('Regular')
            .fillColor('#FFFFFF')
-           .text('✓ ACTIV', doc.page.width - 140, cardY + 10);
+           .text(safeText('ACTIV'), doc.page.width - 130, cardY + 12);
 
-        // Contract details
-        let detailY = cardY + 40;
+        // Contract details (no border, just content)
+        let detailY = cardY + 45;
         
         doc.fontSize(9)
            .font('Bold')
@@ -590,7 +595,7 @@ export const exportContractsPDF = async (req, res) => {
            .text('Operator:', 55, detailY)
            .font('Regular')
            .fillColor('#333333')
-           .text(contract.operator_name || '-', 150, detailY);
+           .text(safeText(contract.operator_name || '-'), 150, detailY);
 
         detailY += 15;
         doc.font('Bold')
@@ -598,7 +603,7 @@ export const exportContractsPDF = async (req, res) => {
            .text('UAT:', 55, detailY)
            .font('Regular')
            .fillColor('#333333')
-           .text(`Sectorul ${contract.sector_number || 'N/A'}`, 150, detailY);
+           .text(safeText(`Sectorul ${contract.sector_number || 'N/A'}`), 150, detailY);
 
         // Associate field for AEROBIC/ANAEROBIC
         if (contract.associate_name && (contractType === 'AEROBIC' || contractType === 'ANAEROBIC')) {
@@ -614,10 +619,10 @@ export const exportContractsPDF = async (req, res) => {
         detailY += 15;
         doc.font('Bold')
            .fillColor('#666666')
-           .text('Perioadă:', 55, detailY)
+           .text(safeText('Perioada:'), 55, detailY)
            .font('Regular')
            .fillColor('#333333')
-           .text(`${formatDate(contract.contract_date_start)} → ${formatDate(contract.effective_date_end)}`, 150, detailY);
+           .text(`${formatDate(contract.contract_date_start)} - ${formatDate(contract.effective_date_end)}`, 150, detailY);
 
         // Financial details
         if (contract.tariff_per_ton) {
@@ -667,20 +672,51 @@ export const exportContractsPDF = async (req, res) => {
           doc.fontSize(9)
              .font('Bold')
              .fillColor('#666666')
-             .text(`Acte adiționale: ${contractAmendments.length}`, 55, detailY);
+             .text(safeText(`Acte aditionale (${contractAmendments.length}):`), 55, detailY);
 
-          detailY += 15;
+          detailY += 18;
           contractAmendments.forEach((amendment, aIdx) => {
-            const amendmentText = `• Act ${safeText(amendment.amendment_number || (aIdx + 1).toString())} (${formatDate(amendment.amendment_date)}): Prelungire → ${formatDate(amendment.new_contract_date_end)}`;
+            // Amendment header
             doc.fontSize(8)
+               .font('Bold')
+               .fillColor('#047857')
+               .text(safeText(`Act ${amendment.amendment_number || (aIdx + 1).toString()}`), 65, detailY);
+            
+            doc.fontSize(7)
                .font('Regular')
-               .fillColor('#333333')
-               .text(amendmentText, 65, detailY, { width: doc.page.width - 120 });
-            detailY += 15;
+               .fillColor('#666666')
+               .text(`(${formatDate(amendment.amendment_date)})`, 120, detailY + 1);
+            
+            detailY += 12;
+            
+            // Amendment details
+            const hasEndDate = amendment.new_contract_date_end && amendment.new_contract_date_end !== contract.contract_date_end;
+            
+            if (hasEndDate) {
+              doc.fontSize(8)
+                 .font('Regular')
+                 .fillColor('#333333')
+                 .text(safeText('Tip: Prelungire'), 70, detailY);
+              detailY += 10;
+              doc.text(safeText(`Data noua: ${formatDate(amendment.new_contract_date_end)}`), 70, detailY);
+              detailY += 10;
+            }
+            
+            if (amendment.notes) {
+              doc.fontSize(7)
+                 .font('Regular')
+                 .fillColor('#666666')
+                 .text(safeText(`Observatii: ${amendment.notes}`), 70, detailY, { width: doc.page.width - 130 });
+              detailY += 12;
+            }
+            
+            detailY += 8;
           });
         }
 
-        doc.moveDown(2);
+        // Bottom separator
+        doc.moveTo(40, doc.y + 10).lineTo(doc.page.width - 40, doc.y + 10).stroke('#E5E7EB');
+        doc.moveDown(3);
       });
     }
 
@@ -710,26 +746,22 @@ export const exportContractsPDF = async (req, res) => {
 
         const cardY = doc.y;
         
-        // Contract card with red theme
-        doc.roundedRect(40, cardY, doc.page.width - 80, 140 + (contractAmendments.length * 15), 8)
-           .fillAndStroke('#FEF2F2', '#DC2626');
-
-        // Contract number header
-        doc.roundedRect(40, cardY, doc.page.width - 80, 30, 8)
+        // Contract number header (red bar - no full card border)
+        doc.roundedRect(40, cardY, doc.page.width - 80, 35, 8)
            .fillAndStroke('#DC2626', '#DC2626');
 
         doc.fontSize(14)
            .font('Bold')
            .fillColor('#FFFFFF')
-           .text(contract.contract_number, 55, cardY + 8);
+           .text(safeText(contract.contract_number), 55, cardY + 10);
 
         doc.fontSize(9)
            .font('Regular')
            .fillColor('#FFFFFF')
-           .text('⚠ EXPIRAT', doc.page.width - 140, cardY + 10);
+           .text(safeText('EXPIRAT'), doc.page.width - 130, cardY + 12);
 
-        // Same details as active contracts
-        let detailY = cardY + 40;
+        // Contract details (no border)
+        let detailY = cardY + 45;
         
         doc.fontSize(9)
            .font('Bold')
@@ -737,7 +769,7 @@ export const exportContractsPDF = async (req, res) => {
            .text('Operator:', 55, detailY)
            .font('Regular')
            .fillColor('#333333')
-           .text(contract.operator_name || '-', 150, detailY);
+           .text(safeText(contract.operator_name || '-'), 150, detailY);
 
         detailY += 15;
         doc.font('Bold')
@@ -761,10 +793,10 @@ export const exportContractsPDF = async (req, res) => {
         detailY += 15;
         doc.font('Bold')
            .fillColor('#666666')
-           .text('Perioadă:', 55, detailY)
+           .text(safeText('Perioada:'), 55, detailY)
            .font('Regular')
            .fillColor('#DC2626')
-           .text(`${formatDate(contract.contract_date_start)} → ${formatDate(contract.effective_date_end)}`, 150, detailY);
+           .text(`${formatDate(contract.contract_date_start)} - ${formatDate(contract.effective_date_end)}`, 150, detailY);
 
         if (contract.tariff_per_ton) {
           detailY += 20;
@@ -812,20 +844,51 @@ export const exportContractsPDF = async (req, res) => {
           doc.fontSize(9)
              .font('Bold')
              .fillColor('#666666')
-             .text(`Acte adiționale: ${contractAmendments.length}`, 55, detailY);
+             .text(safeText(`Acte aditionale (${contractAmendments.length}):`), 55, detailY);
 
-          detailY += 15;
+          detailY += 18;
           contractAmendments.forEach((amendment, aIdx) => {
-            const amendmentText = `• Act ${safeText(amendment.amendment_number || (aIdx + 1).toString())} (${formatDate(amendment.amendment_date)}): Prelungire → ${formatDate(amendment.new_contract_date_end)}`;
+            // Amendment header
             doc.fontSize(8)
+               .font('Bold')
+               .fillColor('#DC2626')
+               .text(safeText(`Act ${amendment.amendment_number || (aIdx + 1).toString()}`), 65, detailY);
+            
+            doc.fontSize(7)
                .font('Regular')
-               .fillColor('#333333')
-               .text(amendmentText, 65, detailY, { width: doc.page.width - 120 });
-            detailY += 15;
+               .fillColor('#666666')
+               .text(`(${formatDate(amendment.amendment_date)})`, 120, detailY + 1);
+            
+            detailY += 12;
+            
+            // Amendment details
+            const hasEndDate = amendment.new_contract_date_end && amendment.new_contract_date_end !== contract.contract_date_end;
+            
+            if (hasEndDate) {
+              doc.fontSize(8)
+                 .font('Regular')
+                 .fillColor('#333333')
+                 .text(safeText('Tip: Prelungire'), 70, detailY);
+              detailY += 10;
+              doc.text(safeText(`Data noua: ${formatDate(amendment.new_contract_date_end)}`), 70, detailY);
+              detailY += 10;
+            }
+            
+            if (amendment.notes) {
+              doc.fontSize(7)
+                 .font('Regular')
+                 .fillColor('#666666')
+                 .text(safeText(`Observatii: ${amendment.notes}`), 70, detailY, { width: doc.page.width - 130 });
+              detailY += 12;
+            }
+            
+            detailY += 8;
           });
         }
 
-        doc.moveDown(2);
+        // Bottom separator
+        doc.moveTo(40, doc.y + 10).lineTo(doc.page.width - 40, doc.y + 10).stroke('#E5E7EB');
+        doc.moveDown(3);
       });
 
       addPageFooter();
