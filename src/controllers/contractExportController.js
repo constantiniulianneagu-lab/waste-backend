@@ -594,8 +594,14 @@ export const exportContractsPDF = async (req, res) => {
            .fillColor('#666666')
            .text('Operator:', 55, detailY)
            .font('Regular')
-           .fillColor('#333333')
-           .text(safeText(contract.operator_name || '-'), 150, detailY);
+           .fillColor('#333333');
+        
+        // Build operator text with associate (for ALL contract types)
+        let operatorText = safeText(contract.operator_name || '-');
+        if (contract.associate_name) {
+          operatorText += safeText(` - ${contract.associate_name} (asociat)`);
+        }
+        doc.text(operatorText, 150, detailY, { width: doc.page.width - 200 });
 
         detailY += 15;
         doc.font('Bold')
@@ -604,17 +610,6 @@ export const exportContractsPDF = async (req, res) => {
            .font('Regular')
            .fillColor('#333333')
            .text(safeText(`Sectorul ${contract.sector_number || 'N/A'}`), 150, detailY);
-
-        // Associate field for AEROBIC/ANAEROBIC
-        if (contract.associate_name && (contractType === 'AEROBIC' || contractType === 'ANAEROBIC')) {
-          detailY += 15;
-          doc.font('Bold')
-             .fillColor('#666666')
-             .text('Asociat:', 55, detailY)
-             .font('Regular')
-             .fillColor('#333333')
-             .text(safeText(contract.associate_name), 150, detailY);
-        }
 
         detailY += 15;
         doc.font('Bold')
@@ -768,8 +763,14 @@ export const exportContractsPDF = async (req, res) => {
            .fillColor('#666666')
            .text('Operator:', 55, detailY)
            .font('Regular')
-           .fillColor('#333333')
-           .text(safeText(contract.operator_name || '-'), 150, detailY);
+           .fillColor('#333333');
+        
+        // Build operator text with associate (for ALL contract types)
+        let operatorText = safeText(contract.operator_name || '-');
+        if (contract.associate_name) {
+          operatorText += safeText(` - ${contract.associate_name} (asociat)`);
+        }
+        doc.text(operatorText, 150, detailY, { width: doc.page.width - 200 });
 
         detailY += 15;
         doc.font('Bold')
@@ -778,17 +779,6 @@ export const exportContractsPDF = async (req, res) => {
            .font('Regular')
            .fillColor('#333333')
            .text(`Sectorul ${contract.sector_number || 'N/A'}`, 150, detailY);
-
-        // Associate field for AEROBIC/ANAEROBIC
-        if (contract.associate_name && (contractType === 'AEROBIC' || contractType === 'ANAEROBIC')) {
-          detailY += 15;
-          doc.font('Bold')
-             .fillColor('#666666')
-             .text('Asociat:', 55, detailY)
-             .font('Regular')
-             .fillColor('#333333')
-             .text(safeText(contract.associate_name), 150, detailY);
-        }
 
         detailY += 15;
         doc.font('Bold')
