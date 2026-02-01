@@ -1,12 +1,11 @@
 // src/controllers/aerobicContractController.js
 /**
  * ============================================================================
- * AEROBIC CONTRACT CONTROLLER (TA-) + AUTO-TERMINATION
+ * AEROBIC CONTRACT CONTROLLER (TA-)
  * ============================================================================
  */
 
 import pool from '../config/database.js';
-import ContractTerminationService from '../services/ContractTerminationService.js';
 
 // ============================================================================
 // GET ALL AEROBIC CONTRACTS
@@ -187,7 +186,6 @@ export const createAerobicContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end,
-      service_start_date,
       sector_id,
       tariff_per_ton,
       estimated_quantity_tons,
@@ -205,41 +203,38 @@ export const createAerobicContract = async (req, res) => {
     const query = `
       INSERT INTO aerobic_contracts (
         institution_id, contract_number, contract_date_start, contract_date_end,
-        service_start_date, sector_id, tariff_per_ton, estimated_quantity_tons, associate_institution_id,
+        sector_id, tariff_per_ton, estimated_quantity_tons, associate_institution_id,
         indicator_disposal_percent, contract_file_url, contract_file_name,
         contract_file_size, is_active, notes, award_type, attribution_type, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
     `;
 
     const values = [
-      institution_id, contract_number, contract_date_start, contract_date_end || null,
-      service_start_date || null, sector_id || null, tariff_per_ton,
+      institution_id,
+      contract_number,
+      contract_date_start,
+      contract_date_end || null,
+      sector_id || null,
+      tariff_per_ton,
       estimated_quantity_tons === '' ? null : estimated_quantity_tons,
       associate_institution_id || null,
       indicator_disposal_percent === '' ? null : indicator_disposal_percent,
-      contract_file_url || null, contract_file_name || null, contract_file_size || null,
-      is_active !== undefined ? is_active : true, notes || null,
-      award_type || null, attribution_type || null, req.user.id
+      contract_file_url || null,
+      contract_file_name || null,
+      contract_file_size || null,
+      is_active !== undefined ? is_active : true,
+      notes || null,
+      award_type || null,
+      attribution_type || null,
+      req.user.id
     ];
 
     const result = await pool.query(query, values);
-    
-    let terminationResult = null;
-    if (result.rows[0].service_start_date) {
-      try {
-        terminationResult = await ContractTerminationService.processAutomaticTerminations(
-          'AEROBIC', result.rows[0], req.user.id
-        );
-      } catch (termError) {
-        console.error('⚠️ Auto-termination failed:', termError);
-      }
-    }
 
     res.status(201).json({
       success: true,
-      data: result.rows[0],
-      autoTerminations: terminationResult
+      data: result.rows[0]
     });
   } catch (error) {
     console.error('Create aerobic contract error:', error);

@@ -1,7 +1,7 @@
 // src/controllers/wasteOperatorContractController.js
 /**
  * ============================================================================
- * WASTE OPERATOR CONTRACTS CONTROLLER + AUTO-TERMINATION
+ * WASTE OPERATOR CONTRACTS CONTROLLER
  * ============================================================================
  * CRUD operations pentru contracte operatori colectare
  * Include gestionare coduri deșeuri cu tarife
@@ -11,7 +11,6 @@
  */
 
 import pool from "../config/database.js";
-import ContractTerminationService from '../services/ContractTerminationService.js';
 
 // ============================================================================
 // GET ALL CONTRACTS FOR INSTITUTION (or ALL if institutionId = 0)
@@ -322,9 +321,6 @@ export const createWasteOperatorContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end,
-      service_start_date,
-      associate_institution_id,
-      attribution_type,
       currency = "RON",
       notes,
       is_active = true,
@@ -350,11 +346,9 @@ export const createWasteOperatorContract = async (req, res) => {
       const contractInsert = await client.query(
         `INSERT INTO waste_collector_contracts (
           institution_id, sector_id, contract_number, contract_date_start, contract_date_end,
-          service_start_date, associate_institution_id, attribution_type,
           currency, notes, is_active,
-          contract_file_url, contract_file_name, contract_file_size, contract_file_uploaded_at,
-          created_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          contract_file_url, contract_file_name, contract_file_size, contract_file_uploaded_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
         RETURNING *`,
         [
           institutionId,
@@ -362,9 +356,6 @@ export const createWasteOperatorContract = async (req, res) => {
           contract_number,
           contract_date_start,
           contract_date_end || null,
-          service_start_date || null,
-          associate_institution_id || null,
-          attribution_type || null,
           currency,
           notes || null,
           is_active,
@@ -372,7 +363,6 @@ export const createWasteOperatorContract = async (req, res) => {
           contract_file_name || null,
           contract_file_size || null,
           contract_file_uploaded_at || null,
-          req.user?.id || null,
         ]
       );
 
@@ -396,25 +386,11 @@ export const createWasteOperatorContract = async (req, res) => {
       }
 
       await client.query("COMMIT");
-      
-      let terminationResult = null;
-      if (contract.service_start_date) {
-        try {
-          terminationResult = await ContractTerminationService.processAutomaticTerminations(
-            'WASTE_COLLECTOR',
-            contract,
-            req.user?.id
-          );
-        } catch (termError) {
-          console.error('⚠️ Auto-termination failed:', termError);
-        }
-      }
 
       res.status(201).json({
         success: true,
         message: "Contract creat cu succes",
         data: contract,
-        autoTerminations: terminationResult,
       });
     } catch (err) {
       await client.query("ROLLBACK");
