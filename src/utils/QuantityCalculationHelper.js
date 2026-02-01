@@ -12,7 +12,7 @@
  * @param {Date|string} endDate - Data de sfârșit
  * @returns {number} Numărul de zile (inclusiv)
  */
-const calculateDaysBetween = (startDate, endDate) => {
+export const calculateDaysBetween = (startDate, endDate) => {
     const start = new Date(startDate);
     const end = new Date(endDate);
     
@@ -30,7 +30,7 @@ const calculateDaysBetween = (startDate, endDate) => {
    * @param {number} year - Anul
    * @returns {boolean}
    */
-  const isLeapYear = (year) => {
+  export const isLeapYear = (year) => {
     return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
   };
   
@@ -65,7 +65,7 @@ const calculateDaysBetween = (startDate, endDate) => {
    * //   tonsPerDay: 273.97
    * // }
    */
-  const calculateProportionalQuantity = (totalQuantity, contractStart, contractEnd, newEnd) => {
+  export const calculateProportionalQuantity = (totalQuantity, contractStart, contractEnd, newEnd) => {
     // Validare input
     if (!totalQuantity || totalQuantity <= 0) {
       throw new Error('Cantitatea totală trebuie să fie mai mare ca 0');
@@ -127,7 +127,7 @@ const calculateDaysBetween = (startDate, endDate) => {
    * //   totalValue: 66000.00
    * // }
    */
-  const calculateDisposalValue = (quantity, tariffPerTon, cecTaxPerTon = 0) => {
+  export const calculateDisposalValue = (quantity, tariffPerTon, cecTaxPerTon = 0) => {
     if (!quantity || quantity <= 0) {
       throw new Error('Cantitatea trebuie să fie mai mare ca 0');
     }
@@ -154,7 +154,7 @@ const calculateDaysBetween = (startDate, endDate) => {
    * @param {number} tariffPerTon - Tariful pe tonă
    * @returns {number} Valoarea totală
    */
-  const calculateSimpleValue = (quantity, tariffPerTon) => {
+  export const calculateSimpleValue = (quantity, tariffPerTon) => {
     if (!quantity || quantity <= 0) {
       throw new Error('Cantitatea trebuie să fie mai mare ca 0');
     }
@@ -176,7 +176,7 @@ const calculateDaysBetween = (startDate, endDate) => {
    * @param {number} cecTaxPerTon - Taxa CEC (opțional, pentru DISPOSAL)
    * @returns {Object} { oldValue, newValue, valueDifference }
    */
-  const calculateValueDifference = (oldQuantity, newQuantity, tariffPerTon, cecTaxPerTon = 0) => {
+  export const calculateValueDifference = (oldQuantity, newQuantity, tariffPerTon, cecTaxPerTon = 0) => {
     const totalTariff = tariffPerTon + (cecTaxPerTon || 0);
     
     const oldValue = oldQuantity * totalTariff;
@@ -198,7 +198,7 @@ const calculateDaysBetween = (startDate, endDate) => {
    * @param {Object} calculation - Rezultatul din calculateProportionalQuantity
    * @returns {string} Text formatat pentru afișare
    */
-  const formatCalculationSummary = (calculation) => {
+  export const formatCalculationSummary = (calculation) => {
     const { adjustedQuantity, additionalQuantity, daysOriginal, daysNew, tonsPerDay, isProlongation } = calculation;
     
     if (isProlongation) {
@@ -206,14 +206,4 @@ const calculateDaysBetween = (startDate, endDate) => {
     } else {
       return `Încetare după ${daysNew} zile: ${tonsPerDay} t/zi × ${daysNew} zile = ${adjustedQuantity.toLocaleString('ro-RO', { minimumFractionDigits: 2 })} tone (${Math.abs(additionalQuantity).toLocaleString('ro-RO', { minimumFractionDigits: 2 })} tone mai puțin)`;
     }
-  };
-  
-  module.exports = {
-    calculateDaysBetween,
-    isLeapYear,
-    calculateProportionalQuantity,
-    calculateDisposalValue,
-    calculateSimpleValue,
-    calculateValueDifference,
-    formatCalculationSummary
   };
