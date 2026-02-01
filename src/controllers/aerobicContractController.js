@@ -6,6 +6,7 @@
  */
 
 import pool from '../config/database.js';
+import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
 
 // ============================================================================
 // GET ALL AEROBIC CONTRACTS
@@ -13,7 +14,7 @@ import pool from '../config/database.js';
 export const getAerobicContracts = async (req, res) => {
   try {
     const { sector_id, is_active } = req.query;
-    
+
     let whereConditions = ['ac.deleted_at IS NULL'];
     const params = [];
     let paramCount = 1;
@@ -39,6 +40,7 @@ export const getAerobicContracts = async (req, res) => {
         ac.contract_number,
         ac.contract_date_start,
         ac.contract_date_end,
+        ac.service_start_date,
         ac.tariff_per_ton,
         ac.estimated_quantity_tons,
         ac.contract_value,
@@ -50,7 +52,6 @@ export const getAerobicContracts = async (req, res) => {
         ac.contract_file_size,
         ac.is_active,
         ac.notes,
-        ac.award_type,
         ac.attribution_type,
         ac.created_at,
         ac.updated_at,
@@ -68,44 +69,60 @@ export const getAerobicContracts = async (req, res) => {
         COALESCE(
           (SELECT aca.new_contract_date_end 
            FROM aerobic_contract_amendments aca 
-           WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL 
-           ORDER BY aca.amendment_date DESC LIMIT 1),
+           WHERE aca.contract_id = ac.id 
+             AND aca.new_contract_date_end IS NOT NULL
+             AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC, aca.id DESC 
+           LIMIT 1),
           ac.contract_date_end
         ) as effective_date_end,
         
         COALESCE(
           (SELECT aca.new_tariff_per_ton 
            FROM aerobic_contract_amendments aca 
-           WHERE aca.contract_id = ac.id AND aca.new_tariff_per_ton IS NOT NULL AND aca.deleted_at IS NULL 
-           ORDER BY aca.amendment_date DESC LIMIT 1),
+           WHERE aca.contract_id = ac.id 
+             AND aca.new_tariff_per_ton IS NOT NULL 
+             AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC, aca.id DESC 
+           LIMIT 1),
           ac.tariff_per_ton
         ) as effective_tariff,
         
         COALESCE(
           (SELECT aca.new_estimated_quantity_tons 
            FROM aerobic_contract_amendments aca 
-           WHERE aca.contract_id = ac.id AND aca.new_estimated_quantity_tons IS NOT NULL AND aca.deleted_at IS NULL 
-           ORDER BY aca.amendment_date DESC LIMIT 1),
+           WHERE aca.contract_id = ac.id 
+             AND aca.new_estimated_quantity_tons IS NOT NULL 
+             AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC, aca.id DESC 
+           LIMIT 1),
           ac.estimated_quantity_tons
         ) as effective_quantity,
         
         (COALESCE(
           (SELECT aca.new_tariff_per_ton 
            FROM aerobic_contract_amendments aca 
-           WHERE aca.contract_id = ac.id AND aca.new_tariff_per_ton IS NOT NULL AND aca.deleted_at IS NULL 
-           ORDER BY aca.amendment_date DESC LIMIT 1),
+           WHERE aca.contract_id = ac.id 
+             AND aca.new_tariff_per_ton IS NOT NULL 
+             AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC, aca.id DESC 
+           LIMIT 1),
           ac.tariff_per_ton
         ) * COALESCE(
           (SELECT aca.new_estimated_quantity_tons 
            FROM aerobic_contract_amendments aca 
-           WHERE aca.contract_id = ac.id AND aca.new_estimated_quantity_tons IS NOT NULL AND aca.deleted_at IS NULL 
-           ORDER BY aca.amendment_date DESC LIMIT 1),
+           WHERE aca.contract_id = ac.id 
+             AND aca.new_estimated_quantity_tons IS NOT NULL 
+             AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC, aca.id DESC 
+           LIMIT 1),
           ac.estimated_quantity_tons
         )) as effective_total_value,
         
         (SELECT COUNT(*)
          FROM aerobic_contract_amendments aca
-         WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL
+         WHERE aca.contract_id = ac.id 
+           AND aca.deleted_at IS NULL
         ) as amendments_count
         
       FROM aerobic_contracts ac
@@ -196,8 +213,8 @@ export const createAerobicContract = async (req, res) => {
       contract_file_size,
       is_active,
       notes,
-      award_type,
-      attribution_type
+      attribution_type,
+      service_start_date
     } = req.body;
 
     const query = `
@@ -205,7 +222,7 @@ export const createAerobicContract = async (req, res) => {
         institution_id, contract_number, contract_date_start, contract_date_end,
         sector_id, tariff_per_ton, estimated_quantity_tons, associate_institution_id,
         indicator_disposal_percent, contract_file_url, contract_file_name,
-        contract_file_size, is_active, notes, award_type, attribution_type, created_by
+        contract_file_size, is_active, notes, attribution_type, service_start_date, created_by
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
     `;
@@ -225,16 +242,35 @@ export const createAerobicContract = async (req, res) => {
       contract_file_size || null,
       is_active !== undefined ? is_active : true,
       notes || null,
-      award_type || null,
       attribution_type || null,
+      service_start_date || null,
       req.user.id
     ];
 
     const result = await pool.query(query, values);
+    const savedContract = result.rows[0];
+
+    // AUTO-TERMINATION (non-blocking): doar dacă avem service_start_date + sector_id
+    let autoTermination = null;
+    if (service_start_date && sector_id) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'AEROBIC',
+          sectorId: sector_id,
+          serviceStartDate: service_start_date,
+          newContractId: savedContract.id,
+          newContractNumber: contract_number,
+          userId: req.user.id
+        });
+      } catch (e) {
+        console.error('Auto-termination error (aerobic create):', e);
+      }
+    }
 
     res.status(201).json({
       success: true,
-      data: result.rows[0]
+      data: savedContract,
+      auto_termination: autoTermination
     });
   } catch (error) {
     console.error('Create aerobic contract error:', error);
@@ -252,6 +288,18 @@ export const createAerobicContract = async (req, res) => {
 export const updateAerobicContract = async (req, res) => {
   try {
     const { contractId } = req.params;
+
+    // citim vechiul service_start_date/sector_id ca să declanșăm auto-termination doar când se schimbă
+    const prev = await pool.query(
+      `SELECT sector_id, service_start_date FROM aerobic_contracts WHERE id = $1 AND deleted_at IS NULL`,
+      [contractId]
+    );
+    const prevRow = prev.rows?.[0] || null;
+    const prevSector = prevRow?.sector_id || null;
+    const prevService = prevRow?.service_start_date
+      ? String(prevRow.service_start_date).slice(0, 10)
+      : null;
+
     const {
       contract_number,
       contract_date_start,
@@ -266,8 +314,8 @@ export const updateAerobicContract = async (req, res) => {
       contract_file_size,
       is_active,
       notes,
-      award_type,
-      attribution_type
+      attribution_type,
+      service_start_date
     } = req.body;
 
     const query = `
@@ -283,10 +331,10 @@ export const updateAerobicContract = async (req, res) => {
         contract_file_url = $9,
         contract_file_name = $10,
         contract_file_size = $11,
-        is_active = $12,
+        is_active = COALESCE($12, is_active),
         notes = $13,
-        award_type = $14,
-        attribution_type = $15,
+        attribution_type = $14,
+        service_start_date = $15,
         updated_at = NOW()
       WHERE id = $16 AND deleted_at IS NULL
       RETURNING *
@@ -304,10 +352,10 @@ export const updateAerobicContract = async (req, res) => {
       contract_file_url || null,
       contract_file_name || null,
       contract_file_size || null,
-      is_active,
+      is_active === undefined ? null : is_active,
       notes || null,
-      award_type || null,
       attribution_type || null,
+      service_start_date || null,
       contractId
     ];
 
@@ -320,9 +368,37 @@ export const updateAerobicContract = async (req, res) => {
       });
     }
 
+    const updatedContract = result.rows[0];
+
+    // AUTO-TERMINATION (non-blocking)
+    let autoTermination = null;
+
+    const nextSector = sector_id || prevSector;
+    const nextService = service_start_date || prevService;
+
+    const changed =
+      (service_start_date && String(nextService) !== String(prevService)) ||
+      (sector_id && String(nextSector) !== String(prevSector));
+
+    if (changed && nextService && nextSector) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'AEROBIC',
+          sectorId: nextSector,
+          serviceStartDate: nextService,
+          newContractId: updatedContract.id,
+          newContractNumber: updatedContract.contract_number,
+          userId: req.user.id
+        });
+      } catch (e) {
+        console.error('Auto-termination error (aerobic update):', e);
+      }
+    }
+
     res.json({
       success: true,
-      data: result.rows[0]
+      data: updatedContract,
+      auto_termination: autoTermination
     });
   } catch (error) {
     console.error('Update aerobic contract error:', error);
@@ -380,7 +456,7 @@ export const getAerobicContractAmendments = async (req, res) => {
     const query = `
       SELECT * FROM aerobic_contract_amendments
       WHERE contract_id = $1 AND deleted_at IS NULL
-      ORDER BY amendment_date DESC
+      ORDER BY amendment_date DESC, id DESC
     `;
 
     const result = await pool.query(query, [contractId]);
