@@ -1,4 +1,3 @@
-// src/controllers/tmbContractController.js
 /**
  * ============================================================================
  * TMB CONTRACT CONTROLLER (TMB-)
@@ -7,10 +6,37 @@
 
 import pool from '../config/database.js';
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const ALLOWED_TMB_AMENDMENT_TYPES = new Set([
+  'MANUAL',
+  'AUTO_TERMINATION',
+  'PRELUNGIRE',
+  'INCETARE',
+  'MODIFICARE_TARIF',
+  'MODIFICARE_CANTITATE',
+  'MODIFICARE_INDICATORI',
+  'MODIFICARE_VALABILITATE',
+]);
+
+const toNullIfEmpty = (v) => (v === '' ? null : v);
+
+const ensureAllowedAmendmentType = (amendment_type) => {
+  const t = amendment_type ? String(amendment_type) : 'MANUAL';
+  if (!ALLOWED_TMB_AMENDMENT_TYPES.has(t)) {
+    const allowed = Array.from(ALLOWED_TMB_AMENDMENT_TYPES).join(', ');
+    const err = new Error(`amendment_type invalid. Permise: ${allowed}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return t;
+};
+
 // ============================================================================
 // GET ALL TMB CONTRACTS
 // ============================================================================
-export const getTmbContracts = async (req, res) => {
+export const getTMBContracts = async (req, res) => {
   try {
     const { sector_id, is_active } = req.query;
 
@@ -159,7 +185,6 @@ export const getTmbContracts = async (req, res) => {
     `;
 
     const result = await pool.query(query, params);
-
     res.json({ success: true, data: result.rows });
   } catch (error) {
     console.error('Get TMB contracts error:', error);
@@ -173,7 +198,7 @@ export const getTmbContracts = async (req, res) => {
 // ============================================================================
 // GET SINGLE TMB CONTRACT
 // ============================================================================
-export const getTmbContract = async (req, res) => {
+export const getTMBContract = async (req, res) => {
   try {
     const { contractId } = req.params;
 
@@ -215,7 +240,7 @@ export const getTmbContract = async (req, res) => {
 // ============================================================================
 // CREATE TMB CONTRACT
 // ============================================================================
-export const createTmbContract = async (req, res) => {
+export const createTMBContract = async (req, res) => {
   try {
     const {
       sector_id,
@@ -223,7 +248,7 @@ export const createTmbContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end,
-      service_start_date,
+      service_start_date, // ✅ câmp operațional pe contract, NU prin amendments
       tariff_per_ton,
       currency,
       estimated_quantity_tons,
@@ -278,13 +303,13 @@ export const createTmbContract = async (req, res) => {
       contract_date_start,
       contract_date_end || null,
       service_start_date || null,
-      tariff_per_ton,
+      toNullIfEmpty(tariff_per_ton),
       currency || 'RON',
-      estimated_quantity_tons === '' ? null : estimated_quantity_tons,
+      toNullIfEmpty(estimated_quantity_tons),
       associate_institution_id || null,
-      indicator_recycling_percent === '' ? null : indicator_recycling_percent,
-      indicator_energy_recovery_percent === '' ? null : indicator_energy_recovery_percent,
-      indicator_disposal_percent === '' ? null : indicator_disposal_percent,
+      toNullIfEmpty(indicator_recycling_percent),
+      toNullIfEmpty(indicator_energy_recovery_percent),
+      toNullIfEmpty(indicator_disposal_percent),
       contract_file_url || null,
       contract_file_name || null,
       contract_file_size || null,
@@ -312,7 +337,7 @@ export const createTmbContract = async (req, res) => {
 // ============================================================================
 // UPDATE TMB CONTRACT
 // ============================================================================
-export const updateTmbContract = async (req, res) => {
+export const updateTMBContract = async (req, res) => {
   try {
     const { contractId } = req.params;
 
@@ -322,7 +347,7 @@ export const updateTmbContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end,
-      service_start_date,
+      service_start_date, // ✅ operațional, update direct pe contract
       tariff_per_ton,
       currency,
       estimated_quantity_tons,
@@ -375,13 +400,13 @@ export const updateTmbContract = async (req, res) => {
       contract_date_start,
       contract_date_end || null,
       service_start_date || null,
-      tariff_per_ton,
+      toNullIfEmpty(tariff_per_ton),
       currency || 'RON',
-      estimated_quantity_tons === '' ? null : estimated_quantity_tons,
+      toNullIfEmpty(estimated_quantity_tons),
       associate_institution_id || null,
-      indicator_recycling_percent === '' ? null : indicator_recycling_percent,
-      indicator_energy_recovery_percent === '' ? null : indicator_energy_recovery_percent,
-      indicator_disposal_percent === '' ? null : indicator_disposal_percent,
+      toNullIfEmpty(indicator_recycling_percent),
+      toNullIfEmpty(indicator_energy_recovery_percent),
+      toNullIfEmpty(indicator_disposal_percent),
       contract_file_url || null,
       contract_file_name || null,
       contract_file_size || null,
@@ -413,7 +438,7 @@ export const updateTmbContract = async (req, res) => {
 // ============================================================================
 // DELETE TMB CONTRACT
 // ============================================================================
-export const deleteTmbContract = async (req, res) => {
+export const deleteTMBContract = async (req, res) => {
   try {
     const { contractId } = req.params;
 
@@ -440,7 +465,7 @@ export const deleteTmbContract = async (req, res) => {
 // ============================================================================
 // GET AMENDMENTS FOR TMB CONTRACT
 // ============================================================================
-export const getTmbContractAmendments = async (req, res) => {
+export const getTMBContractAmendments = async (req, res) => {
   try {
     const { contractId } = req.params;
 
@@ -452,7 +477,6 @@ export const getTmbContractAmendments = async (req, res) => {
     `;
 
     const result = await pool.query(query, [contractId]);
-
     res.json({ success: true, data: result.rows });
   } catch (error) {
     console.error('Get TMB amendments error:', error);
@@ -466,7 +490,7 @@ export const getTmbContractAmendments = async (req, res) => {
 // ============================================================================
 // CREATE AMENDMENT FOR TMB CONTRACT
 // ============================================================================
-export const createTmbContractAmendment = async (req, res) => {
+export const createTMBContractAmendment = async (req, res) => {
   try {
     const { contractId } = req.params;
 
@@ -489,7 +513,10 @@ export const createTmbContractAmendment = async (req, res) => {
       new_indicator_energy_recovery_percent,
       new_indicator_disposal_percent,
       new_contract_date_start,
+      // IMPORTANT: amendments NU modifică service_start_date
     } = req.body;
+
+    const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
 
     const query = `
       INSERT INTO tmb_contract_amendments (
@@ -523,10 +550,10 @@ export const createTmbContractAmendment = async (req, res) => {
       contractId,
       amendment_number,
       amendment_date,
-      new_tariff_per_ton === '' ? null : new_tariff_per_ton,
-      new_estimated_quantity_tons === '' ? null : new_estimated_quantity_tons,
+      toNullIfEmpty(new_tariff_per_ton),
+      toNullIfEmpty(new_estimated_quantity_tons),
       new_contract_date_end || null,
-      amendment_type || null,
+      finalAmendmentType,
       changes_description || null,
       reason || null,
       notes || null,
@@ -534,20 +561,19 @@ export const createTmbContractAmendment = async (req, res) => {
       amendment_file_name || null,
       amendment_file_size || null,
       reference_contract_id || null,
-      quantity_adjustment_auto === '' ? null : quantity_adjustment_auto,
-      new_indicator_recycling_percent === '' ? null : new_indicator_recycling_percent,
-      new_indicator_energy_recovery_percent === '' ? null : new_indicator_energy_recovery_percent,
-      new_indicator_disposal_percent === '' ? null : new_indicator_disposal_percent,
+      toNullIfEmpty(quantity_adjustment_auto),
+      toNullIfEmpty(new_indicator_recycling_percent),
+      toNullIfEmpty(new_indicator_energy_recovery_percent),
+      toNullIfEmpty(new_indicator_disposal_percent),
       new_contract_date_start || null,
       req.user.id,
     ];
 
     const result = await pool.query(query, values);
-
     res.status(201).json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('Create TMB amendment error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: 'Eroare la crearea actului adițional TMB',
       error: error.message,
@@ -558,7 +584,7 @@ export const createTmbContractAmendment = async (req, res) => {
 // ============================================================================
 // UPDATE AMENDMENT FOR TMB CONTRACT
 // ============================================================================
-export const updateTmbContractAmendment = async (req, res) => {
+export const updateTMBContractAmendment = async (req, res) => {
   try {
     const { contractId, amendmentId } = req.params;
 
@@ -581,7 +607,10 @@ export const updateTmbContractAmendment = async (req, res) => {
       new_indicator_energy_recovery_percent,
       new_indicator_disposal_percent,
       new_contract_date_start,
+      // IMPORTANT: amendments NU modifică service_start_date
     } = req.body;
+
+    const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
 
     const query = `
       UPDATE tmb_contract_amendments SET
@@ -611,10 +640,10 @@ export const updateTmbContractAmendment = async (req, res) => {
     const values = [
       amendment_number,
       amendment_date,
-      new_tariff_per_ton === '' ? null : new_tariff_per_ton,
-      new_estimated_quantity_tons === '' ? null : new_estimated_quantity_tons,
+      toNullIfEmpty(new_tariff_per_ton),
+      toNullIfEmpty(new_estimated_quantity_tons),
       new_contract_date_end || null,
-      amendment_type || null,
+      finalAmendmentType,
       changes_description || null,
       reason || null,
       notes || null,
@@ -622,10 +651,10 @@ export const updateTmbContractAmendment = async (req, res) => {
       amendment_file_name || null,
       amendment_file_size || null,
       reference_contract_id || null,
-      quantity_adjustment_auto === '' ? null : quantity_adjustment_auto,
-      new_indicator_recycling_percent === '' ? null : new_indicator_recycling_percent,
-      new_indicator_energy_recovery_percent === '' ? null : new_indicator_energy_recovery_percent,
-      new_indicator_disposal_percent === '' ? null : new_indicator_disposal_percent,
+      toNullIfEmpty(quantity_adjustment_auto),
+      toNullIfEmpty(new_indicator_recycling_percent),
+      toNullIfEmpty(new_indicator_energy_recovery_percent),
+      toNullIfEmpty(new_indicator_disposal_percent),
       new_contract_date_start || null,
       amendmentId,
       contractId,
@@ -640,7 +669,7 @@ export const updateTmbContractAmendment = async (req, res) => {
     res.json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('Update TMB amendment error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: 'Eroare la actualizarea actului adițional TMB',
       error: error.message,
@@ -651,7 +680,7 @@ export const updateTmbContractAmendment = async (req, res) => {
 // ============================================================================
 // DELETE AMENDMENT FOR TMB CONTRACT
 // ============================================================================
-export const deleteTmbContractAmendment = async (req, res) => {
+export const deleteTMBContractAmendment = async (req, res) => {
   try {
     const { contractId, amendmentId } = req.params;
 
