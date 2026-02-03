@@ -72,7 +72,6 @@ import {
 
 // TMB
 import {
-  validateTMBContract,
   getTMBContracts,
   getTMBContract,
   createTMBContract,
@@ -188,7 +187,6 @@ router.get('/:institutionId/tmb-contracts/:contractId', getTMBContract);
 router.post('/:institutionId/tmb-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createTMBContract);
 router.put('/:institutionId/tmb-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateTMBContract);
 router.delete('/:institutionId/tmb-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteTMBContract);
-router.post('/contracts/validate/tmb', validateTMBContract);
 
 // TMB Amendments
 router.get('/:institutionId/tmb-contracts/:contractId/amendments', getTMBContractAmendments);
