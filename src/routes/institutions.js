@@ -24,24 +24,24 @@ import { ROLES } from '../constants/roles.js';
 
 // WASTE COLLECTOR (Colectare)
 import {
-  getWasteOperatorContracts,
-  getWasteOperatorContract,
-  createWasteOperatorContract,
-  updateWasteOperatorContract,
-  deleteWasteOperatorContract
+  getWasteCollectorContracts as getWasteOperatorContracts,
+  getWasteCollectorContract as getWasteOperatorContract,
+  createWasteCollectorContract as createWasteOperatorContract,
+  updateWasteCollectorContract as updateWasteOperatorContract,
+  deleteWasteCollectorContract as deleteWasteOperatorContract
 } from '../controllers/wasteOperatorContractController.js';
 
 // SORTING (Sortare)
 import {
-  getSortingContracts,
-  getSortingContract,
-  createSortingContract,
-  updateSortingContract,
-  deleteSortingContract,
-  getSortingContractAmendments,
-  createSortingContractAmendment,
-  updateSortingContractAmendment,
-  deleteSortingContractAmendment
+  getSortingOperatorContracts as getSortingContracts,
+  getSortingOperatorContract as getSortingContract,
+  createSortingOperatorContract as createSortingContract,
+  updateSortingOperatorContract as updateSortingContract,
+  deleteSortingOperatorContract as deleteSortingContract,
+  getSortingOperatorContractAmendments as getSortingContractAmendments,
+  createSortingOperatorContractAmendment as createSortingContractAmendment,
+  updateSortingOperatorContractAmendment as updateSortingContractAmendment,
+  deleteSortingOperatorContractAmendment as deleteSortingContractAmendment
 } from '../controllers/sortingContractController.js';
 
 // AEROBIC (Aerobă)
