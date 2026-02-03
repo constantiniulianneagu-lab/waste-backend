@@ -262,30 +262,8 @@ export const createSortingOperatorContract = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
-    const savedContract = result.rows[0];
 
-    // AUTO-TERMINATION (non-blocking): doar dacă avem service_start_date + sector_id
-    let autoTermination = null;
-    if (service_start_date && sector_id) {
-      try {
-        autoTermination = await autoTerminateSimpleContracts({
-          contractType: 'SORTING',
-          sectorId: sector_id,
-          serviceStartDate: service_start_date,
-          newContractId: savedContract.id,
-          newContractNumber: contract_number,
-          userId: req.user.id
-        });
-      } catch (e) {
-        console.error('Auto-termination error (sorting create):', e);
-      }
-    }
-
-    res.status(201).json({
-      success: true,
-      data: savedContract,
-      auto_termination: autoTermination
-    });
+    res.status(201).json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('Create sorting operator contract error:', error);
     res.status(500).json({
@@ -302,6 +280,17 @@ export const createSortingOperatorContract = async (req, res) => {
 export const updateSortingOperatorContract = async (req, res) => {
   try {
     const { contractId } = req.params;
+
+    // Citim vechiul service_start_date/sector_id ca să declanșăm auto-termination doar când se schimbă
+    const prev = await pool.query(
+      `SELECT sector_id, service_start_date FROM sorting_operator_contracts WHERE id = $1 AND deleted_at IS NULL`,
+      [contractId]
+    );
+    const prevRow = prev.rows?.[0] || null;
+    const prevSector = prevRow?.sector_id || null;
+    const prevService = prevRow?.service_start_date
+      ? String(prevRow.service_start_date).slice(0, 10)
+      : null;
 
     const {
       institution_id,

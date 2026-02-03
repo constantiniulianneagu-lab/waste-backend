@@ -134,39 +134,7 @@ export const getWasteCollectorContract = async (req, res) => {
       });
     }
 
-
-    const updatedContract = result.rows[0];
-
-    // AUTO-TERMINATION (non-blocking)
-    let autoTermination = null;
-
-    const nextSector = sector_id || prevSector;
-    const nextService = service_start_date || prevService;
-
-    const changed =
-      (service_start_date && String(nextService) !== String(prevService)) ||
-      (sector_id && String(nextSector) !== String(prevSector));
-
-    if (changed && nextService && nextSector) {
-      try {
-        autoTermination = await autoTerminateSimpleContracts({
-          contractType: 'WASTE_COLLECTOR',
-          sectorId: nextSector,
-          serviceStartDate: nextService,
-          newContractId: updatedContract.id,
-          newContractNumber: updatedContract.contract_number,
-          userId: req.user.id
-        });
-      } catch (e) {
-        console.error('Auto-termination error (waste collector update):', e);
-      }
-    }
-
-    res.json({
-      success: true,
-      data: updatedContract,
-      auto_termination: autoTermination
-    });
+    res.json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('Get waste collector contract error:', error);
     res.status(500).json({
@@ -243,30 +211,8 @@ export const createWasteCollectorContract = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
-    const savedContract = result.rows[0];
 
-    // AUTO-TERMINATION (non-blocking): doar dacă avem service_start_date + sector_id
-    let autoTermination = null;
-    if (service_start_date && sector_id) {
-      try {
-        autoTermination = await autoTerminateSimpleContracts({
-          contractType: 'WASTE_COLLECTOR',
-          sectorId: sector_id,
-          serviceStartDate: service_start_date,
-          newContractId: savedContract.id,
-          newContractNumber: contract_number,
-          userId: req.user.id
-        });
-      } catch (e) {
-        console.error('Auto-termination error (waste collector create):', e);
-      }
-    }
-
-    res.status(201).json({
-      success: true,
-      data: savedContract,
-      auto_termination: autoTermination
-    });
+    res.status(201).json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('Create waste collector contract error:', error);
     res.status(500).json({
