@@ -6,6 +6,10 @@
 
 import pool from '../config/database.js';
 import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
+import { 
+  calculateProportionalQuantity, 
+  getContractDataForProportional 
+} from '../utils/proportionalQuantity.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -583,6 +587,37 @@ export const createTMBContractAmendment = async (req, res) => {
 
     const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
 
+    // ======================================================================
+    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION
+    // ======================================================================
+    let finalQuantity = new_estimated_quantity_tons;
+    let wasAutoCalculated = false;
+
+    if (finalAmendmentType === 'EXTENSION' && !new_estimated_quantity_tons && new_contract_date_end) {
+      const contractData = await getContractDataForProportional(
+        pool,
+        'tmb_contracts',
+        contractId,
+        'estimated_quantity_tons'
+      );
+
+      if (contractData) {
+        const calculated = calculateProportionalQuantity({
+          originalStartDate: contractData.contract_date_start,
+          originalEndDate: contractData.contract_date_end,
+          newEndDate: new_contract_date_end,
+          originalQuantity: contractData.quantity,
+          amendmentType: finalAmendmentType
+        });
+
+        if (calculated !== null) {
+          finalQuantity = calculated;
+          wasAutoCalculated = true;
+          console.log(`✅ TMB Amendment: Proportional quantity auto-calculated: ${finalQuantity} t`);
+        }
+      }
+    }
+
     const query = `
       INSERT INTO tmb_contract_amendments (
         contract_id,
@@ -616,7 +651,7 @@ export const createTMBContractAmendment = async (req, res) => {
       amendment_number,
       amendment_date,
       toNullIfEmpty(new_tariff_per_ton),
-      toNullIfEmpty(new_estimated_quantity_tons),
+      toNullIfEmpty(finalQuantity),
       new_contract_date_end || null,
       finalAmendmentType,
       changes_description || null,
@@ -635,7 +670,11 @@ export const createTMBContractAmendment = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
-    res.status(201).json({ success: true, data: result.rows[0] });
+    res.status(201).json({ 
+      success: true, 
+      data: result.rows[0],
+      quantity_auto_calculated: wasAutoCalculated
+    });
   } catch (error) {
     console.error('Create TMB amendment error:', error);
     res.status(error.statusCode || 500).json({
