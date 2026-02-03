@@ -9,15 +9,15 @@ import express from 'express';
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 import { ROLES } from '../constants/roles.js';
 import {
-  getSortingContracts,
-  getSortingContract,
-  createSortingContract,
-  updateSortingContract,
-  deleteSortingContract,
-  getSortingContractAmendments,
-  createSortingContractAmendment,
-  updateSortingContractAmendment,
-  deleteSortingContractAmendment
+  getSortingOperatorContracts as getSortingContracts,
+  getSortingOperatorContract as getSortingContract,
+  createSortingOperatorContract as createSortingContract,
+  updateSortingOperatorContract as updateSortingContract,
+  deleteSortingOperatorContract as deleteSortingContract,
+  getSortingOperatorContractAmendments as getSortingContractAmendments,
+  createSortingOperatorContractAmendment as createSortingContractAmendment,
+  updateSortingOperatorContractAmendment as updateSortingContractAmendment,
+  deleteSortingOperatorContractAmendment as deleteSortingContractAmendment
 } from '../controllers/sortingContractController.js';
 
 const router = express.Router();
