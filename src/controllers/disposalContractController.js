@@ -11,6 +11,7 @@
  */
 
 import pool from "../config/database.js";
+import { autoTerminateDisposalContracts } from "../utils/autoTermination.js";
 
 // ============================================================================
 // GET ALL DISPOSAL CONTRACTS
@@ -423,6 +424,7 @@ export const createDisposalContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end,
+      service_start_date,
       contract_file_url,
       contract_file_name,
       contract_file_size,
@@ -457,6 +459,7 @@ export const createDisposalContract = async (req, res) => {
           contract_number,
           contract_date_start,
           contract_date_end,
+          service_start_date,
           contract_file_url,
           contract_file_name,
           contract_file_size,
@@ -466,7 +469,7 @@ export const createDisposalContract = async (req, res) => {
           is_active,
           attribution_type,
           created_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING *
       `;
 
@@ -508,6 +511,23 @@ export const createDisposalContract = async (req, res) => {
         contracted_quantity_tons || null,
       ]);
 
+      // AUTO-TERMINATION pentru disposal contracts
+      let autoTermination = null;
+      const sectorIds = sector_id ? [sector_id] : [];
+      if (service_start_date && sectorIds.length > 0) {
+        try {
+          autoTermination = await autoTerminateDisposalContracts({
+            sectorIds,
+            serviceStartDate: service_start_date,
+            newContractId: contractId,
+            newContractNumber: contract_number,
+            userId: req.user.id
+          });
+        } catch (e) {
+          console.error('Auto-termination error (disposal create):', e);
+        }
+      }
+
       await client.query("COMMIT");
 
       // Return the full contract
@@ -535,6 +555,7 @@ export const createDisposalContract = async (req, res) => {
         success: true,
         message: "Contract creat cu succes",
         data: fullContract.rows[0],
+        auto_termination: autoTermination
       });
     } catch (err) {
       await client.query("ROLLBACK");
@@ -574,10 +595,23 @@ export const updateDisposalContract = async (req, res) => {
     }
 
     const { institutionId, contractId } = req.params;
+
+    // Citim vechiul service_start_date și sectoarele
+    const prev = await pool.query(
+      `SELECT service_start_date, 
+        (SELECT ARRAY_AGG(sector_id) FROM disposal_contract_sectors WHERE contract_id = $1 AND deleted_at IS NULL) as sector_ids
+       FROM disposal_contracts WHERE id = $1 AND deleted_at IS NULL`,
+      [contractId]
+    );
+    const prevRow = prev.rows?.[0] || null;
+    const prevService = prevRow?.service_start_date ? String(prevRow.service_start_date).slice(0, 10) : null;
+    const prevSectorIds = prevRow?.sector_ids || [];
+
     const {
       contract_number,
       contract_date_start,
       contract_date_end,
+      service_start_date,
       contract_file_url,
       contract_file_name,
       contract_file_size,
@@ -666,12 +700,36 @@ export const updateDisposalContract = async (req, res) => {
         );
       }
 
+      // AUTO-TERMINATION pentru disposal contracts
+      let autoTermination = null;
+      const currentSectorIds = sector_id ? [sector_id] : prevSectorIds;
+      const nextService = service_start_date || prevService;
+
+      const changed = 
+        (service_start_date && String(nextService) !== String(prevService)) ||
+        (sector_id && currentSectorIds[0] !== prevSectorIds[0]);
+
+      if (changed && nextService && currentSectorIds.length > 0) {
+        try {
+          autoTermination = await autoTerminateDisposalContracts({
+            sectorIds: currentSectorIds,
+            serviceStartDate: nextService,
+            newContractId: contractId,
+            newContractNumber: contract_number,
+            userId: req.user.id
+          });
+        } catch (e) {
+          console.error('Auto-termination error (disposal update):', e);
+        }
+      }
+
       await client.query("COMMIT");
 
       res.json({
         success: true,
         message: "Contract actualizat cu succes",
         data: result.rows[0],
+        auto_termination: autoTermination
       });
     } catch (err) {
       await client.query("ROLLBACK");
