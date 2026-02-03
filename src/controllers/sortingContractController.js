@@ -6,6 +6,7 @@
  */
 
 import pool from '../config/database.js';
+import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
 
 // ============================================================================
 // GET ALL SORTING OPERATOR CONTRACTS
@@ -261,8 +262,30 @@ export const createSortingOperatorContract = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
+    const savedContract = result.rows[0];
 
-    res.status(201).json({ success: true, data: result.rows[0] });
+    // AUTO-TERMINATION (non-blocking): doar dacă avem service_start_date + sector_id
+    let autoTermination = null;
+    if (service_start_date && sector_id) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'SORTING',
+          sectorId: sector_id,
+          serviceStartDate: service_start_date,
+          newContractId: savedContract.id,
+          newContractNumber: contract_number,
+          userId: req.user.id
+        });
+      } catch (e) {
+        console.error('Auto-termination error (sorting create):', e);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      data: savedContract,
+      auto_termination: autoTermination
+    });
   } catch (error) {
     console.error('Create sorting operator contract error:', error);
     res.status(500).json({
