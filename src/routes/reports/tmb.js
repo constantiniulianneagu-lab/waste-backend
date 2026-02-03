@@ -15,7 +15,7 @@ import { authenticateToken, authorizeRoles } from '../../middleware/auth.js';
 import { resolveUserAccess } from '../../middleware/resolveUserAccess.js';
 import { enforceSectorAccess } from '../../middleware/enforceSectorAccess.js';
 
-import { getTMBContracts as getTmbTickets } from '../../controllers/reportTmbController.js';
+import { getTmbTickets } from '../../controllers/reportTmbController.js';
 import { getRecyclingTickets } from '../../controllers/reportRecyclingController.js';
 import { getRecoveryTickets } from '../../controllers/reportRecoveryController.js';
 import { getDisposalTickets } from '../../controllers/reportDisposalController.js';
