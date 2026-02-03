@@ -3,9 +3,14 @@
  * ============================================================================
  * ANAEROBIC CONTRACT CONTROLLER (TAN-)
  * ============================================================================
+ * FIXED: 
+ * - Added IS NOT NULL check for effective_date_end
+ * - Added auto-termination in CREATE and UPDATE
+ * ============================================================================
  */
 
 import pool from '../config/database.js';
+import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
 
 // ============================================================================
 // GET ALL ANAEROBIC CONTRACTS
@@ -68,44 +73,60 @@ export const getAnaerobicContracts = async (req, res) => {
         COALESCE(
           (SELECT anca.new_contract_date_end 
            FROM anaerobic_contract_amendments anca 
-           WHERE anca.contract_id = anc.id AND anca.deleted_at IS NULL 
-           ORDER BY anca.amendment_date DESC LIMIT 1),
+           WHERE anca.contract_id = anc.id 
+             AND anca.new_contract_date_end IS NOT NULL
+             AND anca.deleted_at IS NULL 
+           ORDER BY anca.amendment_date DESC, anca.id DESC 
+           LIMIT 1),
           anc.contract_date_end
         ) as effective_date_end,
         
         COALESCE(
           (SELECT anca.new_tariff_per_ton 
            FROM anaerobic_contract_amendments anca 
-           WHERE anca.contract_id = anc.id AND anca.new_tariff_per_ton IS NOT NULL AND anca.deleted_at IS NULL 
-           ORDER BY anca.amendment_date DESC LIMIT 1),
+           WHERE anca.contract_id = anc.id 
+             AND anca.new_tariff_per_ton IS NOT NULL 
+             AND anca.deleted_at IS NULL 
+           ORDER BY anca.amendment_date DESC, anca.id DESC 
+           LIMIT 1),
           anc.tariff_per_ton
         ) as effective_tariff,
         
         COALESCE(
           (SELECT anca.new_estimated_quantity_tons 
            FROM anaerobic_contract_amendments anca 
-           WHERE anca.contract_id = anc.id AND anca.new_estimated_quantity_tons IS NOT NULL AND anca.deleted_at IS NULL 
-           ORDER BY anca.amendment_date DESC LIMIT 1),
+           WHERE anca.contract_id = anc.id 
+             AND anca.new_estimated_quantity_tons IS NOT NULL 
+             AND anca.deleted_at IS NULL 
+           ORDER BY anca.amendment_date DESC, anca.id DESC 
+           LIMIT 1),
           anc.estimated_quantity_tons
         ) as effective_quantity,
         
         (COALESCE(
           (SELECT anca.new_tariff_per_ton 
            FROM anaerobic_contract_amendments anca 
-           WHERE anca.contract_id = anc.id AND anca.new_tariff_per_ton IS NOT NULL AND anca.deleted_at IS NULL 
-           ORDER BY anca.amendment_date DESC LIMIT 1),
+           WHERE anca.contract_id = anc.id 
+             AND anca.new_tariff_per_ton IS NOT NULL 
+             AND anca.deleted_at IS NULL 
+           ORDER BY anca.amendment_date DESC, anca.id DESC 
+           LIMIT 1),
           anc.tariff_per_ton
         ) * COALESCE(
           (SELECT anca.new_estimated_quantity_tons 
            FROM anaerobic_contract_amendments anca 
-           WHERE anca.contract_id = anc.id AND anca.new_estimated_quantity_tons IS NOT NULL AND anca.deleted_at IS NULL 
-           ORDER BY anca.amendment_date DESC LIMIT 1),
+           WHERE anca.contract_id = anc.id 
+             AND anca.new_estimated_quantity_tons IS NOT NULL 
+             AND anca.deleted_at IS NULL 
+           ORDER BY anca.amendment_date DESC, anca.id DESC 
+           LIMIT 1),
           anc.estimated_quantity_tons
         )) as effective_total_value,
         
         (SELECT COUNT(*)
          FROM anaerobic_contract_amendments anca
-         WHERE anca.contract_id = anc.id AND anca.deleted_at IS NULL
+         WHERE anca.contract_id = anc.id 
+           AND anca.deleted_at IS NULL
         ) as amendments_count
         
       FROM anaerobic_contracts anc
@@ -232,10 +253,29 @@ export const createAnaerobicContract = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
+    const savedContract = result.rows[0];
+
+    // AUTO-TERMINATION (non-blocking): doar dacă avem service_start_date + sector_id
+    let autoTermination = null;
+    if (service_start_date && sector_id) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'ANAEROBIC',
+          sectorId: sector_id,
+          serviceStartDate: service_start_date,
+          newContractId: savedContract.id,
+          newContractNumber: contract_number,
+          userId: req.user.id
+        });
+      } catch (e) {
+        console.error('Auto-termination error (anaerobic create):', e);
+      }
+    }
 
     res.status(201).json({
       success: true,
-      data: result.rows[0],
+      data: savedContract,
+      auto_termination: autoTermination
     });
   } catch (error) {
     console.error('Create anaerobic contract error:', error);
@@ -253,6 +293,18 @@ export const createAnaerobicContract = async (req, res) => {
 export const updateAnaerobicContract = async (req, res) => {
   try {
     const { contractId } = req.params;
+
+    // Citim vechiul service_start_date/sector_id ca să declanșăm auto-termination doar când se schimbă
+    const prev = await pool.query(
+      `SELECT sector_id, service_start_date FROM anaerobic_contracts WHERE id = $1 AND deleted_at IS NULL`,
+      [contractId]
+    );
+    const prevRow = prev.rows?.[0] || null;
+    const prevSector = prevRow?.sector_id || null;
+    const prevService = prevRow?.service_start_date
+      ? String(prevRow.service_start_date).slice(0, 10)
+      : null;
+
     const {
       contract_number,
       contract_date_start,
@@ -285,7 +337,7 @@ export const updateAnaerobicContract = async (req, res) => {
         contract_file_url = $10,
         contract_file_name = $11,
         contract_file_size = $12,
-        is_active = $13,
+        is_active = COALESCE($13, is_active),
         notes = $14,
         attribution_type = $15,
         updated_at = NOW()
@@ -306,7 +358,7 @@ export const updateAnaerobicContract = async (req, res) => {
       contract_file_url || null,
       contract_file_name || null,
       contract_file_size || null,
-      is_active,
+      is_active === undefined ? null : is_active,
       notes || null,
       attribution_type || null,
       contractId,
@@ -321,9 +373,37 @@ export const updateAnaerobicContract = async (req, res) => {
       });
     }
 
+    const updatedContract = result.rows[0];
+
+    // AUTO-TERMINATION (non-blocking)
+    let autoTermination = null;
+
+    const nextSector = sector_id || prevSector;
+    const nextService = service_start_date || prevService;
+
+    const changed =
+      (service_start_date && String(nextService) !== String(prevService)) ||
+      (sector_id && String(nextSector) !== String(prevSector));
+
+    if (changed && nextService && nextSector) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'ANAEROBIC',
+          sectorId: nextSector,
+          serviceStartDate: nextService,
+          newContractId: updatedContract.id,
+          newContractNumber: updatedContract.contract_number,
+          userId: req.user.id
+        });
+      } catch (e) {
+        console.error('Auto-termination error (anaerobic update):', e);
+      }
+    }
+
     res.json({
       success: true,
-      data: result.rows[0],
+      data: updatedContract,
+      auto_termination: autoTermination
     });
   } catch (error) {
     console.error('Update anaerobic contract error:', error);
@@ -381,7 +461,7 @@ export const getAnaerobicContractAmendments = async (req, res) => {
     const query = `
       SELECT * FROM anaerobic_contract_amendments
       WHERE contract_id = $1 AND deleted_at IS NULL
-      ORDER BY amendment_date DESC
+      ORDER BY amendment_date DESC, id DESC
     `;
 
     const result = await pool.query(query, [contractId]);

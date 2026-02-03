@@ -2,9 +2,14 @@
  * ============================================================================
  * TMB CONTRACT CONTROLLER (TMB-)
  * ============================================================================
+ * FIXED:
+ * - effective_date_end query already has IS NOT NULL (OK!)
+ * - Added auto-termination in CREATE and UPDATE
+ * ============================================================================
  */
 
 import pool from '../config/database.js';
+import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -26,7 +31,7 @@ const ensureAllowedAmendmentType = (amendment_type) => {
   const t = amendment_type ? String(amendment_type) : 'MANUAL';
   if (!ALLOWED_TMB_AMENDMENT_TYPES.has(t)) {
     const allowed = Array.from(ALLOWED_TMB_AMENDMENT_TYPES).join(', ');
-    const err = new Error(`amendment_type invalid. Permise: ${allowed}`);
+    const err = new Error(\`amendment_type invalid. Permise: \${allowed}\`);
     err.statusCode = 400;
     throw err;
   }
@@ -45,20 +50,20 @@ export const getTMBContracts = async (req, res) => {
     let paramCount = 1;
 
     if (sector_id) {
-      whereConditions.push(`tc.sector_id = $${paramCount}`);
+      whereConditions.push(\`tc.sector_id = $\${paramCount}\`);
       params.push(sector_id);
       paramCount++;
     }
 
     if (is_active !== undefined) {
-      whereConditions.push(`tc.is_active = $${paramCount}`);
+      whereConditions.push(\`tc.is_active = $\${paramCount}\`);
       params.push(is_active === 'true' || is_active === true);
       paramCount++;
     }
 
     const whereClause = whereConditions.join(' AND ');
 
-    const query = `
+    const query = \`
       SELECT
         tc.id,
         tc.institution_id,
@@ -100,7 +105,9 @@ export const getTMBContracts = async (req, res) => {
         COALESCE(
           (SELECT tca.new_contract_date_end
            FROM tmb_contract_amendments tca
-           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL
+           WHERE tca.contract_id = tc.id 
+             AND tca.new_contract_date_end IS NOT NULL
+             AND tca.deleted_at IS NULL
            ORDER BY tca.amendment_date DESC, tca.id DESC
            LIMIT 1),
           tc.contract_date_end
@@ -109,7 +116,9 @@ export const getTMBContracts = async (req, res) => {
         COALESCE(
           (SELECT tca.new_tariff_per_ton
            FROM tmb_contract_amendments tca
-           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL
+           WHERE tca.contract_id = tc.id 
+             AND tca.new_tariff_per_ton IS NOT NULL
+             AND tca.deleted_at IS NULL
            ORDER BY tca.amendment_date DESC, tca.id DESC
            LIMIT 1),
           tc.tariff_per_ton
@@ -118,7 +127,9 @@ export const getTMBContracts = async (req, res) => {
         COALESCE(
           (SELECT tca.new_estimated_quantity_tons
            FROM tmb_contract_amendments tca
-           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL
+           WHERE tca.contract_id = tc.id 
+             AND tca.new_estimated_quantity_tons IS NOT NULL
+             AND tca.deleted_at IS NULL
            ORDER BY tca.amendment_date DESC, tca.id DESC
            LIMIT 1),
           tc.estimated_quantity_tons
@@ -127,7 +138,9 @@ export const getTMBContracts = async (req, res) => {
         COALESCE(
           (SELECT tca.new_indicator_recycling_percent
            FROM tmb_contract_amendments tca
-           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_indicator_recycling_percent IS NOT NULL
+           WHERE tca.contract_id = tc.id 
+             AND tca.new_indicator_recycling_percent IS NOT NULL
+             AND tca.deleted_at IS NULL
            ORDER BY tca.amendment_date DESC, tca.id DESC
            LIMIT 1),
           tc.indicator_recycling_percent
@@ -136,7 +149,9 @@ export const getTMBContracts = async (req, res) => {
         COALESCE(
           (SELECT tca.new_indicator_energy_recovery_percent
            FROM tmb_contract_amendments tca
-           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_indicator_energy_recovery_percent IS NOT NULL
+           WHERE tca.contract_id = tc.id 
+             AND tca.new_indicator_energy_recovery_percent IS NOT NULL
+             AND tca.deleted_at IS NULL
            ORDER BY tca.amendment_date DESC, tca.id DESC
            LIMIT 1),
           tc.indicator_energy_recovery_percent
@@ -145,7 +160,9 @@ export const getTMBContracts = async (req, res) => {
         COALESCE(
           (SELECT tca.new_indicator_disposal_percent
            FROM tmb_contract_amendments tca
-           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_indicator_disposal_percent IS NOT NULL
+           WHERE tca.contract_id = tc.id 
+             AND tca.new_indicator_disposal_percent IS NOT NULL
+             AND tca.deleted_at IS NULL
            ORDER BY tca.amendment_date DESC, tca.id DESC
            LIMIT 1),
           tc.indicator_disposal_percent
@@ -155,7 +172,9 @@ export const getTMBContracts = async (req, res) => {
           COALESCE(
             (SELECT tca.new_tariff_per_ton
              FROM tmb_contract_amendments tca
-             WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL
+             WHERE tca.contract_id = tc.id 
+               AND tca.new_tariff_per_ton IS NOT NULL
+               AND tca.deleted_at IS NULL
              ORDER BY tca.amendment_date DESC, tca.id DESC
              LIMIT 1),
             tc.tariff_per_ton
@@ -164,7 +183,9 @@ export const getTMBContracts = async (req, res) => {
           COALESCE(
             (SELECT tca.new_estimated_quantity_tons
              FROM tmb_contract_amendments tca
-             WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL
+             WHERE tca.contract_id = tc.id 
+               AND tca.new_estimated_quantity_tons IS NOT NULL
+               AND tca.deleted_at IS NULL
              ORDER BY tca.amendment_date DESC, tca.id DESC
              LIMIT 1),
             tc.estimated_quantity_tons
@@ -180,9 +201,9 @@ export const getTMBContracts = async (req, res) => {
       JOIN sectors s ON tc.sector_id = s.id
       LEFT JOIN institutions i ON tc.institution_id = i.id
       LEFT JOIN institutions ai ON tc.associate_institution_id = ai.id
-      WHERE ${whereClause}
+      WHERE \${whereClause}
       ORDER BY s.sector_number, tc.contract_date_start DESC
-    `;
+    \`;
 
     const result = await pool.query(query, params);
     res.json({ success: true, data: result.rows });
@@ -202,7 +223,7 @@ export const getTMBContract = async (req, res) => {
   try {
     const { contractId } = req.params;
 
-    const query = `
+    const query = \`
       SELECT
         tc.*,
         s.sector_number,
@@ -216,7 +237,7 @@ export const getTMBContract = async (req, res) => {
       LEFT JOIN institutions i ON tc.institution_id = i.id
       LEFT JOIN institutions ai ON tc.associate_institution_id = ai.id
       WHERE tc.id = $1 AND tc.deleted_at IS NULL
-    `;
+    \`;
 
     const result = await pool.query(query, [contractId]);
 
@@ -248,7 +269,7 @@ export const createTMBContract = async (req, res) => {
       contract_number,
       contract_date_start,
       contract_date_end,
-      service_start_date, // ✅ câmp operațional pe contract, NU prin amendments
+      service_start_date,
       tariff_per_ton,
       currency,
       estimated_quantity_tons,
@@ -266,7 +287,7 @@ export const createTMBContract = async (req, res) => {
       attribution_type,
     } = req.body;
 
-    const query = `
+    const query = \`
       INSERT INTO tmb_contracts (
         sector_id,
         institution_id,
@@ -294,7 +315,7 @@ export const createTMBContract = async (req, res) => {
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
       )
       RETURNING *
-    `;
+    \`;
 
     const values = [
       sector_id,
@@ -322,8 +343,30 @@ export const createTMBContract = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
+    const savedContract = result.rows[0];
 
-    res.status(201).json({ success: true, data: result.rows[0] });
+    // AUTO-TERMINATION (non-blocking): doar dacă avem service_start_date + sector_id
+    let autoTermination = null;
+    if (service_start_date && sector_id) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'TMB',
+          sectorId: sector_id,
+          serviceStartDate: service_start_date,
+          newContractId: savedContract.id,
+          newContractNumber: contract_number,
+          userId: req.user.id
+        });
+      } catch (e) {
+        console.error('Auto-termination error (TMB create):', e);
+      }
+    }
+
+    res.status(201).json({ 
+      success: true, 
+      data: savedContract,
+      auto_termination: autoTermination
+    });
   } catch (error) {
     console.error('Create TMB contract error:', error);
     res.status(500).json({
@@ -341,13 +384,24 @@ export const updateTMBContract = async (req, res) => {
   try {
     const { contractId } = req.params;
 
+    // Citim vechiul service_start_date/sector_id ca să declanșăm auto-termination doar când se schimbă
+    const prev = await pool.query(
+      \`SELECT sector_id, service_start_date FROM tmb_contracts WHERE id = $1 AND deleted_at IS NULL\`,
+      [contractId]
+    );
+    const prevRow = prev.rows?.[0] || null;
+    const prevSector = prevRow?.sector_id || null;
+    const prevService = prevRow?.service_start_date
+      ? String(prevRow.service_start_date).slice(0, 10)
+      : null;
+
     const {
       sector_id,
       institution_id,
       contract_number,
       contract_date_start,
       contract_date_end,
-      service_start_date, // ✅ operațional, update direct pe contract
+      service_start_date,
       tariff_per_ton,
       currency,
       estimated_quantity_tons,
@@ -365,7 +419,7 @@ export const updateTMBContract = async (req, res) => {
       attribution_type,
     } = req.body;
 
-    const query = `
+    const query = \`
       UPDATE tmb_contracts SET
         sector_id = $1,
         institution_id = $2,
@@ -391,7 +445,7 @@ export const updateTMBContract = async (req, res) => {
         updated_at = NOW()
       WHERE id = $22 AND deleted_at IS NULL
       RETURNING *
-    `;
+    \`;
 
     const values = [
       sector_id,
@@ -424,7 +478,38 @@ export const updateTMBContract = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Contract TMB negăsit' });
     }
 
-    res.json({ success: true, data: result.rows[0] });
+    const updatedContract = result.rows[0];
+
+    // AUTO-TERMINATION (non-blocking)
+    let autoTermination = null;
+
+    const nextSector = sector_id || prevSector;
+    const nextService = service_start_date || prevService;
+
+    const changed =
+      (service_start_date && String(nextService) !== String(prevService)) ||
+      (sector_id && String(nextSector) !== String(prevSector));
+
+    if (changed && nextService && nextSector) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'TMB',
+          sectorId: nextSector,
+          serviceStartDate: nextService,
+          newContractId: updatedContract.id,
+          newContractNumber: updatedContract.contract_number,
+          userId: req.user.id
+        });
+      } catch (e) {
+        console.error('Auto-termination error (TMB update):', e);
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      data: updatedContract,
+      auto_termination: autoTermination
+    });
   } catch (error) {
     console.error('Update TMB contract error:', error);
     res.status(500).json({
@@ -442,12 +527,12 @@ export const deleteTMBContract = async (req, res) => {
   try {
     const { contractId } = req.params;
 
-    const query = `
+    const query = \`
       UPDATE tmb_contracts
       SET deleted_at = NOW()
       WHERE id = $1 AND deleted_at IS NULL
       RETURNING id
-    `;
+    \`;
 
     const result = await pool.query(query, [contractId]);
 
@@ -469,12 +554,12 @@ export const getTMBContractAmendments = async (req, res) => {
   try {
     const { contractId } = req.params;
 
-    const query = `
+    const query = \`
       SELECT *
       FROM tmb_contract_amendments
       WHERE contract_id = $1 AND deleted_at IS NULL
       ORDER BY amendment_date DESC, id DESC
-    `;
+    \`;
 
     const result = await pool.query(query, [contractId]);
     res.json({ success: true, data: result.rows });
@@ -518,7 +603,7 @@ export const createTMBContractAmendment = async (req, res) => {
 
     const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
 
-    const query = `
+    const query = \`
       INSERT INTO tmb_contract_amendments (
         contract_id,
         amendment_number,
@@ -544,7 +629,7 @@ export const createTMBContractAmendment = async (req, res) => {
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
       )
       RETURNING *
-    `;
+    \`;
 
     const values = [
       contractId,
@@ -612,7 +697,7 @@ export const updateTMBContractAmendment = async (req, res) => {
 
     const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
 
-    const query = `
+    const query = \`
       UPDATE tmb_contract_amendments SET
         amendment_number = $1,
         amendment_date = $2,
@@ -635,7 +720,7 @@ export const updateTMBContractAmendment = async (req, res) => {
         updated_at = NOW()
       WHERE id = $19 AND contract_id = $20 AND deleted_at IS NULL
       RETURNING *
-    `;
+    \`;
 
     const values = [
       amendment_number,
@@ -684,12 +769,12 @@ export const deleteTMBContractAmendment = async (req, res) => {
   try {
     const { contractId, amendmentId } = req.params;
 
-    const query = `
+    const query = \`
       UPDATE tmb_contract_amendments
       SET deleted_at = NOW()
       WHERE id = $1 AND contract_id = $2 AND deleted_at IS NULL
       RETURNING id
-    `;
+    \`;
 
     const result = await pool.query(query, [amendmentId, contractId]);
 
