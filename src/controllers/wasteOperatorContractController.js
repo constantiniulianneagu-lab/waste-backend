@@ -6,6 +6,7 @@
  */
 
 import pool from '../config/database.js';
+import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
 
 // ============================================================================
 // GET ALL WASTE COLLECTOR CONTRACTS
@@ -133,7 +134,39 @@ export const getWasteCollectorContract = async (req, res) => {
       });
     }
 
-    res.json({ success: true, data: result.rows[0] });
+
+    const updatedContract = result.rows[0];
+
+    // AUTO-TERMINATION (non-blocking)
+    let autoTermination = null;
+
+    const nextSector = sector_id || prevSector;
+    const nextService = service_start_date || prevService;
+
+    const changed =
+      (service_start_date && String(nextService) !== String(prevService)) ||
+      (sector_id && String(nextSector) !== String(prevSector));
+
+    if (changed && nextService && nextSector) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'WASTE_COLLECTOR',
+          sectorId: nextSector,
+          serviceStartDate: nextService,
+          newContractId: updatedContract.id,
+          newContractNumber: updatedContract.contract_number,
+          userId: req.user.id
+        });
+      } catch (e) {
+        console.error('Auto-termination error (waste collector update):', e);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: updatedContract,
+      auto_termination: autoTermination
+    });
   } catch (error) {
     console.error('Get waste collector contract error:', error);
     res.status(500).json({
@@ -210,8 +243,30 @@ export const createWasteCollectorContract = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
+    const savedContract = result.rows[0];
 
-    res.status(201).json({ success: true, data: result.rows[0] });
+    // AUTO-TERMINATION (non-blocking): doar dacă avem service_start_date + sector_id
+    let autoTermination = null;
+    if (service_start_date && sector_id) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'WASTE_COLLECTOR',
+          sectorId: sector_id,
+          serviceStartDate: service_start_date,
+          newContractId: savedContract.id,
+          newContractNumber: contract_number,
+          userId: req.user.id
+        });
+      } catch (e) {
+        console.error('Auto-termination error (waste collector create):', e);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      data: savedContract,
+      auto_termination: autoTermination
+    });
   } catch (error) {
     console.error('Create waste collector contract error:', error);
     res.status(500).json({
@@ -228,6 +283,17 @@ export const createWasteCollectorContract = async (req, res) => {
 export const updateWasteCollectorContract = async (req, res) => {
   try {
     const { contractId } = req.params;
+
+    // Citim vechiul service_start_date/sector_id ca să declanșăm auto-termination doar când se schimbă
+    const prev = await pool.query(
+      `SELECT sector_id, service_start_date FROM waste_collector_contracts WHERE id = $1 AND deleted_at IS NULL`,
+      [contractId]
+    );
+    const prevRow = prev.rows?.[0] || null;
+    const prevSector = prevRow?.sector_id || null;
+    const prevService = prevRow?.service_start_date
+      ? String(prevRow.service_start_date).slice(0, 10)
+      : null;
 
     const {
       institution_id,
