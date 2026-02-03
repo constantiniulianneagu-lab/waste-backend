@@ -31,7 +31,7 @@ const ensureAllowedAmendmentType = (amendment_type) => {
   const t = amendment_type ? String(amendment_type) : 'MANUAL';
   if (!ALLOWED_TMB_AMENDMENT_TYPES.has(t)) {
     const allowed = Array.from(ALLOWED_TMB_AMENDMENT_TYPES).join(', ');
-    const err = new Error(\`amendment_type invalid. Permise: \${allowed}\`);
+    const err = new Error(`amendment_type invalid. Permise: ${allowed}`);
     err.statusCode = 400;
     throw err;
   }
