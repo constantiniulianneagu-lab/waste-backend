@@ -5,14 +5,14 @@
  * ============================================================================
  * Când se prelungește un contract (EXTENSION), cantitatea se calculează automat
  * proporțional cu perioada de prelungire.
- * 
+ *
  * Formula: new_quantity = (original_quantity / total_days) × extension_days
  * ============================================================================
  */
 
 /**
  * Calculate proportional quantity for contract extension
- * 
+ *
  * @param {Object} params
  * @param {string} params.originalStartDate - Data început contract (YYYY-MM-DD)
  * @param {string} params.originalEndDate - Data sfârșit contract original (YYYY-MM-DD)
@@ -20,7 +20,7 @@
  * @param {number} params.originalQuantity - Cantitatea originală estimată (tone)
  * @param {string} params.amendmentType - Tipul actului adițional
  * @param {string} [params.lastExtensionEndDate] - Data ultimei prelungiri (opțional, pentru multiple amendments)
- * 
+ *
  * @returns {number|null} - Cantitatea calculată proporțional sau null dacă nu e EXTENSION
  */
 export const calculateProportionalQuantity = ({
@@ -29,16 +29,16 @@ export const calculateProportionalQuantity = ({
   newEndDate,
   originalQuantity,
   amendmentType,
-  lastExtensionEndDate = null
+  lastExtensionEndDate = null,
 }) => {
   // Calculul proporțional se face DOAR pentru EXTENSION
-  if (amendmentType !== 'EXTENSION') {
+  if (amendmentType !== "EXTENSION") {
     return null;
   }
 
   // Validare parametri
   if (!originalStartDate || !originalEndDate || !newEndDate || !originalQuantity) {
-    console.warn('calculateProportionalQuantity: Missing required parameters');
+    console.warn("calculateProportionalQuantity: Missing required parameters");
     return null;
   }
 
@@ -49,19 +49,20 @@ export const calculateProportionalQuantity = ({
 
     // Validare date
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || isNaN(newEnd.getTime())) {
-      console.error('calculateProportionalQuantity: Invalid dates');
+      console.error("calculateProportionalQuantity: Invalid dates");
       return null;
     }
 
     // Validare cantitate
     const qty = parseFloat(originalQuantity);
     if (isNaN(qty) || qty <= 0) {
-      console.error('calculateProportionalQuantity: Invalid quantity');
+      console.error("calculateProportionalQuantity: Invalid quantity");
       return null;
     }
 
-    // Determină data de la care începe prelungirea
-    // Dacă există prelungiri anterioare, pornește de acolo; altfel de la sfârșitul original
+    // Determină data de la care începe prelungirea:
+    // - dacă există prelungiri anterioare, pornește de la ultima prelungire
+    // - altfel, pornește de la sfârșitul original
     let extensionStartDate = endDate;
     if (lastExtensionEndDate) {
       const lastExtension = new Date(lastExtensionEndDate);
@@ -72,22 +73,26 @@ export const calculateProportionalQuantity = ({
 
     // Validare logică: newEndDate trebuie să fie după data de început a prelungirii
     if (newEnd <= extensionStartDate) {
-      console.warn(`calculateProportionalQuantity: New end date (${newEndDate}) must be after extension start (${extensionStartDate.toISOString().split('T')[0]})`);
+      console.warn(
+        `calculateProportionalQuantity: New end date (${newEndDate}) must be after extension start (${extensionStartDate
+          .toISOString()
+          .split("T")[0]})`
+      );
       return null;
     }
 
     // Calcul zile
     const MS_PER_DAY = 1000 * 60 * 60 * 24;
-    
-    // IMPORTANT: totalDays = perioada ORIGINALĂ (pentru rate zilnic constant)
+
+    // totalDays = perioada ORIGINALĂ (pentru rate zilnic constant)
     const totalDays = Math.round((endDate - startDate) / MS_PER_DAY);
-    
+
     // extensionDays = zile de la ultima prelungire (sau sfârșit original) până la noua dată
     const extensionDays = Math.round((newEnd - extensionStartDate) / MS_PER_DAY);
 
     // Validare zile
     if (totalDays <= 0 || extensionDays <= 0) {
-      console.error('calculateProportionalQuantity: Invalid days calculation');
+      console.error("calculateProportionalQuantity: Invalid days calculation");
       return null;
     }
 
@@ -101,7 +106,7 @@ export const calculateProportionalQuantity = ({
     console.log(`📊 Proportional Quantity Calculation:
       Original Period: ${originalStartDate} → ${originalEndDate} (${totalDays} days, ${qty}t)
       Daily Rate: ${dailyRate.toFixed(4)} t/day
-      Extension Start: ${extensionStartDate.toISOString().split('T')[0]}
+      Extension Start: ${extensionStartDate.toISOString().split("T")[0]}
       Extension End: ${newEndDate}
       Extension Days: ${extensionDays} days
       Proportional Quantity: ${rounded}t
@@ -109,7 +114,7 @@ export const calculateProportionalQuantity = ({
 
     return rounded;
   } catch (error) {
-    console.error('calculateProportionalQuantity error:', error);
+    console.error("calculateProportionalQuantity error:", error);
     return null;
   }
 };
@@ -117,27 +122,32 @@ export const calculateProportionalQuantity = ({
 /**
  * Helper function to get contract dates and quantity from database
  * Used by amendment creation endpoints
- * 
+ *
  * @param {Object} pool - Database pool
  * @param {string} tableName - Contract table name
- * @param {string} contractId - Contract UUID
+ * @param {string|number} contractId - Contract ID
  * @param {string} quantityField - Name of quantity field (estimated_quantity_tons or contracted_quantity_tons)
- * 
+ *
  * @returns {Object|null} - { contract_date_start, contract_date_end, quantity } or null
  */
-export const getContractDataForProportional = async (pool, tableName, contractId, quantityField = 'estimated_quantity_tons') => {
+export const getContractDataForProportional = async (
+  pool,
+  tableName,
+  contractId,
+  quantityField = "estimated_quantity_tons"
+) => {
   try {
     const query = `
-      SELECT 
+      SELECT
         contract_date_start,
         contract_date_end,
         ${quantityField} as quantity
       FROM ${tableName}
       WHERE id = $1 AND deleted_at IS NULL
     `;
-    
+
     const result = await pool.query(query, [contractId]);
-    
+
     if (result.rows.length === 0) {
       console.error(`Contract not found: ${contractId} in ${tableName}`);
       return null;
@@ -145,7 +155,7 @@ export const getContractDataForProportional = async (pool, tableName, contractId
 
     return result.rows[0];
   } catch (error) {
-    console.error('getContractDataForProportional error:', error);
+    console.error("getContractDataForProportional error:", error);
     return null;
   }
 };
@@ -153,11 +163,11 @@ export const getContractDataForProportional = async (pool, tableName, contractId
 /**
  * Get the last extension end date from existing amendments
  * Used to calculate proportional quantity for multiple extensions
- * 
+ *
  * @param {Object} pool - Database pool
  * @param {string} amendmentsTableName - Amendments table name
- * @param {string} contractId - Contract UUID
- * 
+ * @param {string|number} contractId - Contract ID
+ *
  * @returns {string|null} - Last extension end date (YYYY-MM-DD) or null
  */
 export const getLastExtensionEndDate = async (pool, amendmentsTableName, contractId) => {
@@ -165,16 +175,16 @@ export const getLastExtensionEndDate = async (pool, amendmentsTableName, contrac
     const query = `
       SELECT new_contract_date_end
       FROM ${amendmentsTableName}
-      WHERE contract_id = $1 
+      WHERE contract_id = $1
         AND deleted_at IS NULL
         AND (amendment_type = 'EXTENSION' OR amendment_type = 'PRELUNGIRE')
         AND new_contract_date_end IS NOT NULL
       ORDER BY new_contract_date_end DESC
       LIMIT 1
     `;
-    
+
     const result = await pool.query(query, [contractId]);
-    
+
     if (result.rows.length === 0) {
       console.log(`No previous extensions found for contract ${contractId}`);
       return null;
@@ -182,32 +192,32 @@ export const getLastExtensionEndDate = async (pool, amendmentsTableName, contrac
 
     const lastExtensionEnd = result.rows[0].new_contract_date_end;
     console.log(`📅 Last extension end date: ${lastExtensionEnd}`);
-    
+
     return lastExtensionEnd;
   } catch (error) {
-    console.error('getLastExtensionEndDate error:', error);
+    console.error("getLastExtensionEndDate error:", error);
     return null;
   }
 };
 
 /**
  * Example usage in amendment creation:
- * 
+ *
  * // 1. Get contract data
  * const contractData = await getContractDataForProportional(
- *   pool, 
- *   'tmb_contracts', 
- *   contractId, 
+ *   pool,
+ *   'tmb_contracts',
+ *   contractId,
  *   'estimated_quantity_tons'
  * );
- * 
+ *
  * // 2. Get last extension end date (for multiple amendments)
  * const lastExtensionEnd = await getLastExtensionEndDate(
  *   pool,
  *   'tmb_contract_amendments',
  *   contractId
  * );
- * 
+ *
  * // 3. Calculate proportional quantity
  * if (contractData && finalAmendmentType === 'EXTENSION') {
  *   const calculated = calculateProportionalQuantity({
@@ -216,29 +226,18 @@ export const getLastExtensionEndDate = async (pool, amendmentsTableName, contrac
  *     newEndDate: new_contract_date_end,
  *     originalQuantity: contractData.quantity,
  *     amendmentType: 'EXTENSION',
- *     lastExtensionEndDate: lastExtensionEnd  // <- IMPORTANT pentru multiple prelungiri!
+ *     lastExtensionEndDate: lastExtensionEnd
  *   });
- * 
+ *
  *   if (calculated !== null) {
  *     finalQuantity = calculated;
  *     wasAutoCalculated = true;
  *   }
  * }
  */
- *   const calculatedQty = calculateProportionalQuantity({
- *     originalStartDate: contractData.contract_date_start,
- *     originalEndDate: contractData.contract_date_end,
- *     newEndDate: new_contract_date_end,
- *     originalQuantity: contractData.quantity,
- *     amendmentType: amendment_type
- *   });
- *   
- *   // Use calculatedQty as default if new_estimated_quantity_tons not provided
- *   const finalQty = new_estimated_quantity_tons || calculatedQty;
- * }
- */
 
 export default {
   calculateProportionalQuantity,
-  getContractDataForProportional
+  getContractDataForProportional,
+  getLastExtensionEndDate,
 };
