@@ -8,7 +8,8 @@ import pool from '../config/database.js';
 import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
 import { 
   calculateProportionalQuantity, 
-  getContractDataForProportional 
+  getContractDataForProportional,
+  getLastExtensionEndDate 
 } from '../utils/proportionalQuantity.js';
 
 // ---------------------------------------------------------------------------
@@ -601,13 +602,21 @@ export const createTMBContractAmendment = async (req, res) => {
         'estimated_quantity_tons'
       );
 
+      // Get last extension end date for multiple amendments
+      const lastExtensionEnd = await getLastExtensionEndDate(
+        pool,
+        'tmb_contract_amendments',
+        contractId
+      );
+
       if (contractData) {
         const calculated = calculateProportionalQuantity({
           originalStartDate: contractData.contract_date_start,
           originalEndDate: contractData.contract_date_end,
           newEndDate: new_contract_date_end,
           originalQuantity: contractData.quantity,
-          amendmentType: finalAmendmentType
+          amendmentType: finalAmendmentType,
+          lastExtensionEndDate: lastExtensionEnd  // Pentru multiple prelungiri
         });
 
         if (calculated !== null) {
