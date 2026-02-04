@@ -12,6 +12,10 @@
 
 import pool from "../config/database.js";
 import { autoTerminateDisposalContracts } from "../utils/autoTermination.js";
+import { 
+  calculateProportionalQuantity, 
+  getContractDataForProportional 
+} from '../utils/proportionalQuantity.js';
 
 // ============================================================================
 // GET ALL DISPOSAL CONTRACTS
@@ -896,6 +900,37 @@ export const createContractAmendment = async (req, res) => {
       finalAmendmentType = changes.length > 1 ? "MULTIPLE" : changes[0] || "MULTIPLE";
     }
 
+    // ======================================================================
+    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION
+    // ======================================================================
+    let finalQuantity = new_contracted_quantity_tons;
+    let wasAutoCalculated = false;
+
+    if (finalAmendmentType === 'EXTENSION' && !new_contracted_quantity_tons && new_contract_date_end) {
+      const contractData = await getContractDataForProportional(
+        pool,
+        'disposal_contracts',
+        contractId,
+        'contracted_quantity_tons'
+      );
+
+      if (contractData) {
+        const calculated = calculateProportionalQuantity({
+          originalStartDate: contractData.contract_date_start,
+          originalEndDate: contractData.contract_date_end,
+          newEndDate: new_contract_date_end,
+          originalQuantity: contractData.quantity,
+          amendmentType: finalAmendmentType
+        });
+
+        if (calculated !== null) {
+          finalQuantity = calculated;
+          wasAutoCalculated = true;
+          console.log(`✅ Disposal Amendment: Proportional quantity auto-calculated: ${finalQuantity} t`);
+        }
+      }
+    }
+
     const query = `
       INSERT INTO disposal_contract_amendments (
         contract_id,
@@ -925,7 +960,7 @@ export const createContractAmendment = async (req, res) => {
       new_contract_date_end || null,
       new_tariff_per_ton || null,
       new_cec_tax_per_ton || null,
-      new_contracted_quantity_tons || null,
+      finalQuantity || null,
       changes_description || null,
       reason || null,
       notes || null,
@@ -939,6 +974,7 @@ export const createContractAmendment = async (req, res) => {
       success: true,
       message: "Act adițional adăugat cu succes",
       data: result.rows[0],
+      quantity_auto_calculated: wasAutoCalculated
     });
   } catch (err) {
     console.error("Error creating amendment:", err);
