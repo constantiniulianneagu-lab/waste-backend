@@ -9,7 +9,8 @@ import pool from '../config/database.js';
 import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
 import { 
   calculateProportionalQuantity, 
-  getContractDataForProportional 
+  getContractDataForProportional,
+  getLastExtensionEndDate  // ← NOU!
 } from '../utils/proportionalQuantity.js';
 // ============================================================================
 // GET ALL AEROBIC CONTRACTS
@@ -507,24 +508,32 @@ export const createAerobicContractAmendment = async (req, res) => {
     if (finalAmendmentType === 'EXTENSION' && !new_estimated_quantity_tons && new_contract_date_end) {
       const contractData = await getContractDataForProportional(
         pool,
-        'TABLE_NAME',  // ← Vezi tabelul mai jos
+        'aerobic_contracts',
         contractId,
         'estimated_quantity_tons'
       );
-
+    
+      // Get last extension end date for multiple amendments ← NOU!
+      const lastExtensionEnd = await getLastExtensionEndDate(
+        pool,
+        'aerobic_contract_amendments',
+        contractId
+      );
+    
       if (contractData) {
         const calculated = calculateProportionalQuantity({
           originalStartDate: contractData.contract_date_start,
           originalEndDate: contractData.contract_date_end,
           newEndDate: new_contract_date_end,
           originalQuantity: contractData.quantity,
-          amendmentType: finalAmendmentType
+          amendmentType: finalAmendmentType,
+          lastExtensionEndDate: lastExtensionEnd  // ← NOU!
         });
 
         if (calculated !== null) {
           finalQuantity = calculated;
           wasAutoCalculated = true;
-          console.log(`✅ CONTROLLER_NAME Amendment: Proportional quantity auto-calculated: ${finalQuantity} t`);
+          console.log(`✅ Aerobic Amendment: Proportional quantity auto-calculated: ${finalQuantity} t`);
         }
       }
     }

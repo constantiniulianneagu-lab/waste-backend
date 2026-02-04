@@ -14,7 +14,8 @@ import pool from "../config/database.js";
 import { autoTerminateDisposalContracts } from "../utils/autoTermination.js";
 import { 
   calculateProportionalQuantity, 
-  getContractDataForProportional 
+  getContractDataForProportional,
+  getLastExtensionEndDate  // ← NOU!
 } from '../utils/proportionalQuantity.js';
 
 // ============================================================================
@@ -909,21 +910,29 @@ export const createContractAmendment = async (req, res) => {
     // Accept both 'EXTENSION' (standard) and 'PRELUNGIRE' (DISPOSAL-specific)
     const isExtension = finalAmendmentType === 'EXTENSION' || finalAmendmentType === 'PRELUNGIRE';
 
-    if (isExtension && !new_contracted_quantity_tons && new_contract_date_end) {
+    if (finalAmendmentType === 'EXTENSION' && !new_estimated_quantity_tons && new_contract_date_end) {
       const contractData = await getContractDataForProportional(
         pool,
         'disposal_contracts',
         contractId,
-        'contracted_quantity_tons'
+        'estimated_quantity_tons'
       );
-
+    
+      // Get last extension end date for multiple amendments ← NOU!
+      const lastExtensionEnd = await getLastExtensionEndDate(
+        pool,
+        'disposal_contract_amendments',
+        contractId
+      );
+    
       if (contractData) {
         const calculated = calculateProportionalQuantity({
           originalStartDate: contractData.contract_date_start,
           originalEndDate: contractData.contract_date_end,
           newEndDate: new_contract_date_end,
           originalQuantity: contractData.quantity,
-          amendmentType: 'EXTENSION'  // Use standard type for calculation
+          amendmentType: finalAmendmentType,
+          lastExtensionEndDate: lastExtensionEnd  // ← NOU!
         });
 
         if (calculated !== null) {
