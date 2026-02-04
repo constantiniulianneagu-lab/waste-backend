@@ -11,6 +11,10 @@
 
 import pool from '../config/database.js';
 import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
+import { 
+  calculateProportionalQuantity, 
+  getContractDataForProportional 
+} from '../utils/proportionalQuantity.js';
 
 // ============================================================================
 // GET ALL ANAEROBIC CONTRACTS
@@ -500,6 +504,37 @@ export const createAnaerobicContractAmendment = async (req, res) => {
       amendment_file_size,
     } = req.body;
 
+// ======================================================================
+    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION
+    // ======================================================================
+    let finalQuantity = new_estimated_quantity_tons;
+    let wasAutoCalculated = false;
+
+    if (finalAmendmentType === 'EXTENSION' && !new_estimated_quantity_tons && new_contract_date_end) {
+      const contractData = await getContractDataForProportional(
+        pool,
+        'TABLE_NAME',  // ← Vezi tabelul mai jos
+        contractId,
+        'estimated_quantity_tons'
+      );
+
+      if (contractData) {
+        const calculated = calculateProportionalQuantity({
+          originalStartDate: contractData.contract_date_start,
+          originalEndDate: contractData.contract_date_end,
+          newEndDate: new_contract_date_end,
+          originalQuantity: contractData.quantity,
+          amendmentType: finalAmendmentType
+        });
+
+        if (calculated !== null) {
+          finalQuantity = calculated;
+          wasAutoCalculated = true;
+          console.log(`✅ CONTROLLER_NAME Amendment: Proportional quantity auto-calculated: ${finalQuantity} t`);
+        }
+      }
+    }
+
     const query = `
       INSERT INTO anaerobic_contract_amendments (
         contract_id, amendment_number, amendment_date, new_tariff_per_ton,
@@ -514,8 +549,8 @@ export const createAnaerobicContractAmendment = async (req, res) => {
       contractId,
       amendment_number,
       amendment_date,
-      new_tariff_per_ton || null,
-      new_estimated_quantity_tons || null,
+      toNullIfEmpty(new_tariff_per_ton),
+      toNullIfEmpty(finalQuantity),  // ← FOLOSEȘTE finalQuantity
       new_contract_date_end || null,
       amendment_type || null,
       changes_description || null,
@@ -529,9 +564,10 @@ export const createAnaerobicContractAmendment = async (req, res) => {
 
     const result = await pool.query(query, values);
 
-    res.status(201).json({
-      success: true,
+    res.status(201).json({ 
+      success: true, 
       data: result.rows[0],
+      quantity_auto_calculated: wasAutoCalculated
     });
   } catch (error) {
     console.error('Create anaerobic amendment error:', error);

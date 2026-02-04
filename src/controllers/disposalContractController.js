@@ -901,12 +901,15 @@ export const createContractAmendment = async (req, res) => {
     }
 
     // ======================================================================
-    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION
+    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION/PRELUNGIRE
     // ======================================================================
     let finalQuantity = new_contracted_quantity_tons;
     let wasAutoCalculated = false;
 
-    if (finalAmendmentType === 'EXTENSION' && !new_contracted_quantity_tons && new_contract_date_end) {
+    // Accept both 'EXTENSION' (standard) and 'PRELUNGIRE' (DISPOSAL-specific)
+    const isExtension = finalAmendmentType === 'EXTENSION' || finalAmendmentType === 'PRELUNGIRE';
+
+    if (isExtension && !new_contracted_quantity_tons && new_contract_date_end) {
       const contractData = await getContractDataForProportional(
         pool,
         'disposal_contracts',
@@ -920,7 +923,7 @@ export const createContractAmendment = async (req, res) => {
           originalEndDate: contractData.contract_date_end,
           newEndDate: new_contract_date_end,
           originalQuantity: contractData.quantity,
-          amendmentType: finalAmendmentType
+          amendmentType: 'EXTENSION'  // Use standard type for calculation
         });
 
         if (calculated !== null) {
