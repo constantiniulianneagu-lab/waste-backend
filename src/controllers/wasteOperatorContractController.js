@@ -1,42 +1,88 @@
-// src/controllers/wasteCollectorContractController.js
+// src/controllers/wasteOperatorContractController.js
 /**
  * ============================================================================
- * WASTE COLLECTOR CONTRACT CONTROLLER (COL-)
+ * WASTE OPERATOR (WASTE COLLECTOR) CONTRACT CONTROLLER
+ * ============================================================================
+ * Routes expected (see routes/institutions.js):
+ *  GET    /api/institutions/:institutionId/waste-contracts
+ *  GET    /api/institutions/:institutionId/waste-contracts/:contractId
+ *  POST   /api/institutions/:institutionId/waste-contracts
+ *  PUT    /api/institutions/:institutionId/waste-contracts/:contractId
+ *  DELETE /api/institutions/:institutionId/waste-contracts/:contractId
+ *
+ * Optional (not wired by default in routes/institutions.js in your repo):
+ *  GET    /api/institutions/:institutionId/waste-contracts/:contractId/amendments
+ *  POST   /api/institutions/:institutionId/waste-contracts/:contractId/amendments
+ *  PUT    /api/institutions/:institutionId/waste-contracts/:contractId/amendments/:amendmentId
+ *  DELETE /api/institutions/:institutionId/waste-contracts/:contractId/amendments/:amendmentId
  * ============================================================================
  */
 
 import pool from '../config/database.js';
 import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
-import { 
-  calculateProportionalQuantity, 
-  getContractDataForProportional,
-  getLastExtensionEndDate  // ← NOU!
-} from '../utils/proportionalQuantity.js';
+
+// ============================
+// Amendment type normalization
+// ============================
+const WASTE_COLLECTOR_ALLOWED_AMENDMENT_TYPES = new Set([
+  'MANUAL',
+  'AUTO_TERMINATION',
+  'PRELUNGIRE',
+  'INCETARE',
+  'MODIFICARE_VALABILITATE',
+]);
+
+function ensureAllowedWasteCollectorAmendmentType(input) {
+  if (!input) return 'MANUAL';
+  const raw = String(input).trim().toUpperCase();
+  const aliases = {
+    EXTENSION: 'PRELUNGIRE',
+    PRELUNGIRE: 'PRELUNGIRE',
+    TERMINATION: 'INCETARE',
+    INCETARE: 'INCETARE',
+    VALIDITY_CHANGE: 'MODIFICARE_VALABILITATE',
+    MODIFICARE_VALABILITATE: 'MODIFICARE_VALABILITATE',
+    AUTO_TERMINATION: 'AUTO_TERMINATION',
+    MANUAL: 'MANUAL',
+    MULTIPLE: 'MANUAL',
+  };
+  const normalized = aliases[raw] || raw;
+  return WASTE_COLLECTOR_ALLOWED_AMENDMENT_TYPES.has(normalized) ? normalized : 'MANUAL';
+}
+
+function isAllInstitution(institutionId) {
+  return !institutionId || String(institutionId) === '0';
+}
 
 // ============================================================================
-// GET ALL WASTE COLLECTOR CONTRACTS
+// GET ALL WASTE COLLECTOR CONTRACTS (institutionId=0 => ALL)
 // ============================================================================
 export const getWasteCollectorContracts = async (req, res) => {
   try {
+    const { institutionId } = req.params;
     const { sector_id, is_active } = req.query;
 
-    let whereConditions = ['wcc.deleted_at IS NULL'];
+    const where = ['wcc.deleted_at IS NULL'];
     const params = [];
-    let paramCount = 1;
+    let p = 1;
+
+    if (!isAllInstitution(institutionId)) {
+      where.push(`wcc.institution_id = $${p}`);
+      params.push(institutionId);
+      p++;
+    }
 
     if (sector_id) {
-      whereConditions.push(`wcc.sector_id = $${paramCount}`);
+      where.push(`wcc.sector_id = $${p}`);
       params.push(sector_id);
-      paramCount++;
+      p++;
     }
 
     if (is_active !== undefined) {
-      whereConditions.push(`wcc.is_active = $${paramCount}`);
+      where.push(`wcc.is_active = $${p}`);
       params.push(is_active === 'true' || is_active === true);
-      paramCount++;
+      p++;
     }
-
-    const whereClause = whereConditions.join(' AND ');
 
     const query = `
       SELECT
@@ -47,19 +93,16 @@ export const getWasteCollectorContracts = async (req, res) => {
         wcc.contract_date_end,
         wcc.service_start_date,
         wcc.sector_id,
-
         wcc.contract_file_url,
         wcc.contract_file_name,
         wcc.contract_file_size,
         wcc.contract_file_type,
         wcc.contract_file_uploaded_at,
-
         wcc.is_active,
         wcc.notes,
         wcc.created_by,
         wcc.created_at,
         wcc.updated_at,
-
         wcc.associate_institution_id,
         wcc.attribution_type,
 
@@ -76,7 +119,9 @@ export const getWasteCollectorContracts = async (req, res) => {
         COALESCE(
           (SELECT wcca.new_contract_date_end
            FROM waste_collector_contract_amendments wcca
-           WHERE wcca.contract_id = wcc.id AND wcca.deleted_at IS NULL AND wcca.new_contract_date_end IS NOT NULL
+           WHERE wcca.contract_id = wcc.id
+             AND wcca.deleted_at IS NULL
+             AND wcca.new_contract_date_end IS NOT NULL
            ORDER BY wcca.amendment_date DESC, wcca.id DESC
            LIMIT 1),
           wcc.contract_date_end
@@ -91,12 +136,11 @@ export const getWasteCollectorContracts = async (req, res) => {
       JOIN institutions i ON wcc.institution_id = i.id
       LEFT JOIN sectors s ON wcc.sector_id = s.id
       LEFT JOIN institutions ai ON wcc.associate_institution_id = ai.id
-      WHERE ${whereClause}
-      ORDER BY s.sector_number, wcc.contract_date_start DESC
+      WHERE ${where.join(' AND ')}
+      ORDER BY s.sector_number NULLS LAST, wcc.contract_date_start DESC
     `;
 
     const result = await pool.query(query, params);
-
     res.json({ success: true, data: result.rows });
   } catch (error) {
     console.error('Get waste collector contracts error:', error);
@@ -112,7 +156,17 @@ export const getWasteCollectorContracts = async (req, res) => {
 // ============================================================================
 export const getWasteCollectorContract = async (req, res) => {
   try {
-    const { contractId } = req.params;
+    const { institutionId, contractId } = req.params;
+
+    const where = ['wcc.id = $1', 'wcc.deleted_at IS NULL'];
+    const params = [contractId];
+    let p = 2;
+
+    if (!isAllInstitution(institutionId)) {
+      where.push(`wcc.institution_id = $${p}`);
+      params.push(institutionId);
+      p++;
+    }
 
     const query = `
       SELECT
@@ -127,10 +181,11 @@ export const getWasteCollectorContract = async (req, res) => {
       JOIN institutions i ON wcc.institution_id = i.id
       LEFT JOIN sectors s ON wcc.sector_id = s.id
       LEFT JOIN institutions ai ON wcc.associate_institution_id = ai.id
-      WHERE wcc.id = $1 AND wcc.deleted_at IS NULL
+      WHERE ${where.join(' AND ')}
+      LIMIT 1
     `;
 
-    const result = await pool.query(query, [contractId]);
+    const result = await pool.query(query, params);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -154,8 +209,10 @@ export const getWasteCollectorContract = async (req, res) => {
 // ============================================================================
 export const createWasteCollectorContract = async (req, res) => {
   try {
+    const { institutionId } = req.params;
+
     const {
-      institution_id,
+      institution_id, // acceptăm și din body, dar param are prioritate dacă nu e 0
       contract_number,
       contract_date_start,
       contract_date_end,
@@ -171,6 +228,15 @@ export const createWasteCollectorContract = async (req, res) => {
       associate_institution_id,
       attribution_type,
     } = req.body;
+
+    const finalInstitutionId = !isAllInstitution(institutionId) ? Number(institutionId) : institution_id;
+
+    if (!finalInstitutionId || !contract_number || !contract_date_start) {
+      return res.status(400).json({
+        success: false,
+        message: 'Câmpuri obligatorii: institution_id, contract_number, contract_date_start',
+      });
+    }
 
     const query = `
       INSERT INTO waste_collector_contracts (
@@ -197,7 +263,7 @@ export const createWasteCollectorContract = async (req, res) => {
     `;
 
     const values = [
-      institution_id,
+      finalInstitutionId,
       contract_number,
       contract_date_start,
       contract_date_end || null,
@@ -210,13 +276,12 @@ export const createWasteCollectorContract = async (req, res) => {
       contract_file_uploaded_at || null,
       is_active !== undefined ? is_active : true,
       notes || null,
-      req.user.id,
+      req.user?.id || null,
       associate_institution_id || null,
       attribution_type || null,
     ];
 
     const result = await pool.query(query, values);
-
     res.status(201).json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('Create waste collector contract error:', error);
@@ -233,21 +298,28 @@ export const createWasteCollectorContract = async (req, res) => {
 // ============================================================================
 export const updateWasteCollectorContract = async (req, res) => {
   try {
-    const { contractId } = req.params;
+    const { institutionId, contractId } = req.params;
 
-    // Citim vechiul service_start_date/sector_id ca să declanșăm auto-termination doar când se schimbă
+    // citim vechiul sector/service pentru auto-termination (opțional)
     const prev = await pool.query(
-      `SELECT sector_id, service_start_date FROM waste_collector_contracts WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT institution_id, sector_id, service_start_date FROM waste_collector_contracts WHERE id = $1 AND deleted_at IS NULL`,
       [contractId]
     );
     const prevRow = prev.rows?.[0] || null;
+
+    if (!prevRow) {
+      return res.status(404).json({ success: false, message: 'Contract de colectare negăsit' });
+    }
+
+    if (!isAllInstitution(institutionId) && Number(institutionId) !== Number(prevRow.institution_id)) {
+      return res.status(404).json({ success: false, message: 'Contract de colectare negăsit (instituție diferită)' });
+    }
+
     const prevSector = prevRow?.sector_id || null;
-    const prevService = prevRow?.service_start_date
-      ? String(prevRow.service_start_date).slice(0, 10)
-      : null;
+    const prevService = prevRow?.service_start_date ? String(prevRow.service_start_date).slice(0, 10) : null;
 
     const {
-      institution_id,
+      institution_id, // acceptăm, dar nu schimbăm instituția dacă vine din params != 0
       contract_number,
       contract_date_start,
       contract_date_end,
@@ -263,6 +335,8 @@ export const updateWasteCollectorContract = async (req, res) => {
       associate_institution_id,
       attribution_type,
     } = req.body;
+
+    const finalInstitutionId = !isAllInstitution(institutionId) ? Number(institutionId) : (institution_id ?? prevRow.institution_id);
 
     const query = `
       UPDATE waste_collector_contracts SET
@@ -287,7 +361,7 @@ export const updateWasteCollectorContract = async (req, res) => {
     `;
 
     const values = [
-      institution_id,
+      finalInstitutionId,
       contract_number,
       contract_date_start,
       contract_date_end || null,
@@ -298,7 +372,7 @@ export const updateWasteCollectorContract = async (req, res) => {
       contract_file_size || null,
       contract_file_type || 'application/pdf',
       contract_file_uploaded_at || null,
-      is_active,
+      is_active !== undefined ? is_active : true,
       notes || null,
       associate_institution_id || null,
       attribution_type || null,
@@ -307,8 +381,19 @@ export const updateWasteCollectorContract = async (req, res) => {
 
     const result = await pool.query(query, values);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Contract de colectare negăsit' });
+    // auto-termination (opțional)
+    const newSector = sector_id || null;
+    const newService = service_start_date ? String(service_start_date).slice(0, 10) : null;
+    if (prevSector !== newSector || prevService !== newService) {
+      try {
+        await autoTerminateSimpleContracts(pool, {
+          contractTable: 'waste_collector_contracts',
+          amendmentsTable: 'waste_collector_contract_amendments',
+          sectorColumn: 'sector_id',
+        });
+      } catch (e) {
+        console.warn('autoTerminateSimpleContracts warning (waste collector):', e?.message || e);
+      }
     }
 
     res.json({ success: true, data: result.rows[0] });
@@ -327,16 +412,27 @@ export const updateWasteCollectorContract = async (req, res) => {
 // ============================================================================
 export const deleteWasteCollectorContract = async (req, res) => {
   try {
-    const { contractId } = req.params;
+    const { institutionId, contractId } = req.params;
+
+    // dacă institutionId != 0, asigură că ștergi doar contractul instituției respective
+    const where = ['id = $1', 'deleted_at IS NULL'];
+    const params = [contractId];
+    let p = 2;
+
+    if (!isAllInstitution(institutionId)) {
+      where.push(`institution_id = $${p}`);
+      params.push(institutionId);
+      p++;
+    }
 
     const query = `
       UPDATE waste_collector_contracts
       SET deleted_at = NOW()
-      WHERE id = $1 AND deleted_at IS NULL
+      WHERE ${where.join(' AND ')}
       RETURNING id
     `;
 
-    const result = await pool.query(query, [contractId]);
+    const result = await pool.query(query, params);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Contract de colectare negăsit' });
@@ -353,8 +449,9 @@ export const deleteWasteCollectorContract = async (req, res) => {
 };
 
 // ============================================================================
-// GET AMENDMENTS FOR WASTE COLLECTOR CONTRACT
+// AMENDMENTS (OPTIONAL ENDPOINTS)
 // ============================================================================
+
 export const getWasteCollectorContractAmendments = async (req, res) => {
   try {
     const { contractId } = req.params;
@@ -367,7 +464,6 @@ export const getWasteCollectorContractAmendments = async (req, res) => {
     `;
 
     const result = await pool.query(query, [contractId]);
-
     res.json({ success: true, data: result.rows });
   } catch (error) {
     console.error('Get waste collector amendments error:', error);
@@ -378,9 +474,6 @@ export const getWasteCollectorContractAmendments = async (req, res) => {
   }
 };
 
-// ============================================================================
-// CREATE AMENDMENT FOR WASTE COLLECTOR CONTRACT
-// ============================================================================
 export const createWasteCollectorContractAmendment = async (req, res) => {
   try {
     const { contractId } = req.params;
@@ -388,9 +481,10 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
-      new_contract_date_end,
-      new_contract_date_start,
       amendment_type,
+      new_contract_date_start,
+      new_contract_date_end,
+      new_service_start_date,
       changes_description,
       reason,
       notes,
@@ -399,52 +493,25 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
       amendment_file_size,
       reference_contract_id,
     } = req.body;
-// ======================================================================
-    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION
-    // ======================================================================
-    let finalQuantity = new_estimated_quantity_tons;
-    let wasAutoCalculated = false;
 
-    if (finalAmendmentType === 'EXTENSION' && !new_estimated_quantity_tons && new_contract_date_end) {
-      const contractData = await getContractDataForProportional(
-        pool,
-        'waste_collector_contracts',
-        contractId,
-        'estimated_quantity_tons'
-      );
-    
-      // Get last extension end date for multiple amendments ← NOU!
-      const lastExtensionEnd = await getLastExtensionEndDate(
-        pool,
-        'waste_collector_contract_amendments',
-        contractId
-      );
-    
-      if (contractData) {
-        const calculated = calculateProportionalQuantity({
-          originalStartDate: contractData.contract_date_start,
-          originalEndDate: contractData.contract_date_end,
-          newEndDate: new_contract_date_end,
-          originalQuantity: contractData.quantity,
-          amendmentType: finalAmendmentType,
-          lastExtensionEndDate: lastExtensionEnd  // ← NOU!
-        });
-
-        if (calculated !== null) {
-          finalQuantity = calculated;
-          wasAutoCalculated = true;
-          console.log(`✅ Collector Amendment: Proportional quantity auto-calculated: ${finalQuantity} t`);
-        }
-      }
+    if (!amendment_number || !amendment_date) {
+      return res.status(400).json({
+        success: false,
+        message: 'Numărul și data actului adițional sunt obligatorii',
+      });
     }
+
+    const finalAmendmentType = ensureAllowedWasteCollectorAmendmentType(amendment_type);
+
     const query = `
       INSERT INTO waste_collector_contract_amendments (
         contract_id,
         amendment_number,
         amendment_date,
-        new_contract_date_end,
-        new_contract_date_start,
         amendment_type,
+        new_contract_date_start,
+        new_contract_date_end,
+        new_service_start_date,
         changes_description,
         reason,
         notes,
@@ -454,7 +521,7 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
         reference_contract_id,
         created_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
       )
       RETURNING *
     `;
@@ -463,9 +530,10 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
       contractId,
       amendment_number,
       amendment_date,
-      toNullIfEmpty(new_tariff_per_ton),
-      toNullIfEmpty(finalQuantity),  // ← FOLOSEȘTE finalQuantity
-      amendment_type || null,
+      finalAmendmentType,
+      new_contract_date_start || null,
+      new_contract_date_end || null,
+      new_service_start_date || null,
       changes_description || null,
       reason || null,
       notes || null,
@@ -473,16 +541,12 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
       amendment_file_name || null,
       amendment_file_size || null,
       reference_contract_id || null,
-      req.user.id,
+      req.user?.id || null,
     ];
 
     const result = await pool.query(query, values);
-
-    res.status(201).json({ 
-      success: true, 
-      data: result.rows[0],
-      quantity_auto_calculated: wasAutoCalculated
-    });  } catch (error) {
+    res.status(201).json({ success: true, data: result.rows[0] });
+  } catch (error) {
     console.error('Create waste collector amendment error:', error);
     res.status(500).json({
       success: false,
@@ -492,9 +556,6 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
   }
 };
 
-// ============================================================================
-// UPDATE AMENDMENT FOR WASTE COLLECTOR CONTRACT
-// ============================================================================
 export const updateWasteCollectorContractAmendment = async (req, res) => {
   try {
     const { contractId, amendmentId } = req.params;
@@ -502,9 +563,10 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
-      new_contract_date_end,
-      new_contract_date_start,
       amendment_type,
+      new_contract_date_start,
+      new_contract_date_end,
+      new_service_start_date,
       changes_description,
       reason,
       notes,
@@ -514,31 +576,35 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
       reference_contract_id,
     } = req.body;
 
+    const finalAmendmentType = ensureAllowedWasteCollectorAmendmentType(amendment_type);
+
     const query = `
       UPDATE waste_collector_contract_amendments SET
         amendment_number = $1,
         amendment_date = $2,
-        new_contract_date_end = $3,
+        amendment_type = $3,
         new_contract_date_start = $4,
-        amendment_type = $5,
-        changes_description = $6,
-        reason = $7,
-        notes = $8,
-        amendment_file_url = $9,
-        amendment_file_name = $10,
-        amendment_file_size = $11,
-        reference_contract_id = $12,
+        new_contract_date_end = $5,
+        new_service_start_date = $6,
+        changes_description = $7,
+        reason = $8,
+        notes = $9,
+        amendment_file_url = $10,
+        amendment_file_name = $11,
+        amendment_file_size = $12,
+        reference_contract_id = $13,
         updated_at = NOW()
-      WHERE id = $13 AND contract_id = $14 AND deleted_at IS NULL
+      WHERE id = $14 AND contract_id = $15 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const values = [
       amendment_number,
       amendment_date,
-      new_contract_date_end || null,
+      finalAmendmentType,
       new_contract_date_start || null,
-      amendment_type || null,
+      new_contract_date_end || null,
+      new_service_start_date || null,
       changes_description || null,
       reason || null,
       notes || null,
@@ -567,9 +633,6 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
   }
 };
 
-// ============================================================================
-// DELETE AMENDMENT FOR WASTE COLLECTOR CONTRACT
-// ============================================================================
 export const deleteWasteCollectorContractAmendment = async (req, res) => {
   try {
     const { contractId, amendmentId } = req.params;

@@ -18,6 +18,41 @@ import {
   getLastExtensionEndDate  // ← NOU!
 } from '../utils/proportionalQuantity.js';
 
+const DISPOSAL_ALLOWED_AMENDMENT_TYPES = new Set([
+  'MANUAL',
+  'AUTO_TERMINATION',
+  'PRELUNGIRE',
+  'INCETARE',
+  'MODIFICARE_TARIF',
+  'MODIFICARE_CEC',
+  'MODIFICARE_CANTITATE',
+  'MODIFICARE_VALABILITATE',
+]);
+
+function ensureAllowedDisposalAmendmentType(input) {
+  if (!input) return null;
+  const raw = String(input).trim().toUpperCase();
+  const aliases = {
+    EXTENSION: 'PRELUNGIRE',
+    PRELUNGIRE: 'PRELUNGIRE',
+    TERMINATION: 'INCETARE',
+    INCETARE: 'INCETARE',
+    TARIFF_CHANGE: 'MODIFICARE_TARIF',
+    MODIFICARE_TARIF: 'MODIFICARE_TARIF',
+    CEC_CHANGE: 'MODIFICARE_CEC',
+    MODIFICARE_CEC: 'MODIFICARE_CEC',
+    QUANTITY_CHANGE: 'MODIFICARE_CANTITATE',
+    MODIFICARE_CANTITATE: 'MODIFICARE_CANTITATE',
+    VALIDITY_CHANGE: 'MODIFICARE_VALABILITATE',
+    MODIFICARE_VALABILITATE: 'MODIFICARE_VALABILITATE',
+    AUTO_TERMINATION: 'AUTO_TERMINATION',
+    MANUAL: 'MANUAL',
+    MULTIPLE: 'MANUAL',
+  };
+  const normalized = aliases[raw] || raw;
+  return DISPOSAL_ALLOWED_AMENDMENT_TYPES.has(normalized) ? normalized : 'MANUAL';
+}
+
 // ============================================================================
 // GET ALL DISPOSAL CONTRACTS
 // ============================================================================
@@ -483,6 +518,7 @@ export const createDisposalContract = async (req, res) => {
         contract_number,
         contract_date_start,
         contract_date_end || null,
+        service_start_date || null,
         contract_file_url || null,
         contract_file_name || null,
         contract_file_size || null,
@@ -890,49 +926,60 @@ export const createContractAmendment = async (req, res) => {
     }
 
     // Determine amendment type if not provided
-    let finalAmendmentType = amendment_type;
+    let finalAmendmentType = ensureAllowedDisposalAmendmentType(amendment_type);
+
     if (!finalAmendmentType) {
       const changes = [];
-      if (new_contract_date_end) changes.push("EXTENSION");
-      if (new_tariff_per_ton !== undefined || new_cec_tax_per_ton !== undefined)
-        changes.push("TARIFF_CHANGE");
-      if (new_contracted_quantity_tons !== undefined) changes.push("QUANTITY_CHANGE");
+      if (new_contract_date_end) changes.push('PRELUNGIRE');
+      if (new_tariff_per_ton !== undefined) changes.push('MODIFICARE_TARIF');
+      if (new_cec_tax_per_ton !== undefined) changes.push('MODIFICARE_CEC');
+      if (new_contracted_quantity_tons !== undefined) changes.push('MODIFICARE_CANTITATE');
 
-      finalAmendmentType = changes.length > 1 ? "MULTIPLE" : changes[0] || "MULTIPLE";
+      finalAmendmentType = changes.length > 1 ? 'MANUAL' : (changes[0] || 'MANUAL');
     }
 
     // ======================================================================
-    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION/PRELUNGIRE
+    // PROPORTIONAL QUANTITY CALCULATION FOR PRELUNGIRE (DISPOSAL)
     // ======================================================================
     let finalQuantity = new_contracted_quantity_tons;
     let wasAutoCalculated = false;
 
-    // Accept both 'EXTENSION' (standard) and 'PRELUNGIRE' (DISPOSAL-specific)
-    const isExtension = finalAmendmentType === 'EXTENSION' || finalAmendmentType === 'PRELUNGIRE';
+    const isExtension = finalAmendmentType === 'PRELUNGIRE';
 
-    if (finalAmendmentType === 'EXTENSION' && !new_estimated_quantity_tons && new_contract_date_end) {
-      const contractData = await getContractDataForProportional(
-        pool,
-        'disposal_contracts',
-        contractId,
-        'estimated_quantity_tons'
+    if (isExtension && !new_contracted_quantity_tons && new_contract_date_end) {
+      // Pentru DISPOSAL, cantitatea este pe disposal_contract_sectors
+      const contractDataRes = await pool.query(
+        `
+          SELECT
+            dc.contract_date_start,
+            dc.contract_date_end,
+            dcs.contracted_quantity_tons AS quantity
+          FROM disposal_contracts dc
+          LEFT JOIN disposal_contract_sectors dcs
+            ON dcs.contract_id = dc.id AND dcs.deleted_at IS NULL
+          WHERE dc.id = $1 AND dc.deleted_at IS NULL
+          ORDER BY dcs.id ASC
+          LIMIT 1
+        `,
+        [contractId]
       );
-    
-      // Get last extension end date for multiple amendments ← NOU!
+
+      const contractData = contractDataRes.rows[0];
+
       const lastExtensionEnd = await getLastExtensionEndDate(
         pool,
         'disposal_contract_amendments',
         contractId
       );
-    
-      if (contractData) {
+
+      if (contractData?.contract_date_start && contractData?.contract_date_end && contractData?.quantity) {
         const calculated = calculateProportionalQuantity({
           originalStartDate: contractData.contract_date_start,
           originalEndDate: contractData.contract_date_end,
           newEndDate: new_contract_date_end,
           originalQuantity: contractData.quantity,
-          amendmentType: finalAmendmentType,
-          lastExtensionEndDate: lastExtensionEnd  // ← NOU!
+          amendmentType: 'PRELUNGIRE',
+          lastExtensionEndDate: lastExtensionEnd,
         });
 
         if (calculated !== null) {

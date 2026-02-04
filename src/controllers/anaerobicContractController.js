@@ -17,6 +17,35 @@ import {
   getLastExtensionEndDate  // ← NOU!
 } from '../utils/proportionalQuantity.js';
 
+const ALLOWED_AMENDMENT_TYPES = new Set(['MANUAL','AUTO_TERMINATION','PRELUNGIRE','INCETARE','MODIFICARE_TARIF','MODIFICARE_CANTITATE','MODIFICARE_INDICATOR','MODIFICARE_VALABILITATE']);
+
+function ensureAllowedAmendmentType(input) {
+  if (!input) return null;
+  const raw = String(input).trim().toUpperCase();
+
+  // UI aliases → DB allowed codes
+  const aliases = {
+    EXTENSION: 'PRELUNGIRE',
+    PRELUNGIRE: 'PRELUNGIRE',
+    TERMINATION: 'INCETARE',
+    INCETARE: 'INCETARE',
+    TARIFF_CHANGE: 'MODIFICARE_TARIF',
+    MODIFICARE_TARIF: 'MODIFICARE_TARIF',
+    QUANTITY_CHANGE: 'MODIFICARE_CANTITATE',
+    MODIFICARE_CANTITATE: 'MODIFICARE_CANTITATE',
+    INDICATOR_CHANGE: 'MODIFICARE_INDICATOR',
+    MODIFICARE_INDICATOR: 'MODIFICARE_INDICATOR',
+    VALIDITY_CHANGE: 'MODIFICARE_VALABILITATE',
+    MODIFICARE_VALABILITATE: 'MODIFICARE_VALABILITATE',
+    AUTO_TERMINATION: 'AUTO_TERMINATION',
+    MANUAL: 'MANUAL',
+    MULTIPLE: 'MANUAL',
+  };
+
+  const normalized = aliases[raw] || raw;
+  return ALLOWED_AMENDMENT_TYPES.has(normalized) ? normalized : 'MANUAL';
+}
+
 // ============================================================================
 // GET ALL ANAEROBIC CONTRACTS
 // ============================================================================
@@ -225,6 +254,8 @@ export const createAnaerobicContract = async (req, res) => {
       notes,
       attribution_type,
     } = req.body;
+
+    const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
 
     const query = `
       INSERT INTO anaerobic_contracts (
@@ -511,7 +542,7 @@ export const createAnaerobicContractAmendment = async (req, res) => {
     let finalQuantity = new_estimated_quantity_tons;
     let wasAutoCalculated = false;
 
-    if (finalAmendmentType === 'EXTENSION' && !new_estimated_quantity_tons && new_contract_date_end) {
+    if (finalAmendmentType === 'PRELUNGIRE' && !new_estimated_quantity_tons && new_contract_date_end) {
       const contractData = await getContractDataForProportional(
         pool,
         'anaerobic_contracts',
@@ -561,7 +592,8 @@ export const createAnaerobicContractAmendment = async (req, res) => {
       toNullIfEmpty(new_tariff_per_ton),
       toNullIfEmpty(finalQuantity),  // ← FOLOSEȘTE finalQuantity
       new_contract_date_end || null,
-      amendment_type || null,
+      finalAmendmentType,
+
       changes_description || null,
       reason || null,
       notes || null,
@@ -634,7 +666,8 @@ export const updateAnaerobicContractAmendment = async (req, res) => {
       new_tariff_per_ton || null,
       new_estimated_quantity_tons || null,
       new_contract_date_end || null,
-      amendment_type || null,
+      finalAmendmentType,
+
       changes_description || null,
       reason || null,
       notes || null,
