@@ -966,12 +966,6 @@ export const createContractAmendment = async (req, res) => {
 
       const contractData = contractDataRes.rows[0];
 
-      const lastExtensionEnd = await getLastExtensionEndDate(
-        pool,
-        'disposal_contract_amendments',
-        contractId
-      );
-
       if (contractData?.contract_date_start && contractData?.contract_date_end && contractData?.quantity) {
         const calculated = calculateProportionalQuantity({
           originalStartDate: contractData.contract_date_start,
@@ -979,7 +973,6 @@ export const createContractAmendment = async (req, res) => {
           newEndDate: new_contract_date_end,
           originalQuantity: contractData.quantity,
           amendmentType: 'PRELUNGIRE',
-          lastExtensionEndDate: lastExtensionEnd,
         });
 
         if (calculated !== null) {
