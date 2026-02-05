@@ -3,6 +3,12 @@
  * ============================================================================
  * WASTE OPERATOR (WASTE COLLECTOR) CONTRACT CONTROLLER
  * ============================================================================
+ * FIXED / UPDATED (din files.zip):
+ * - Added auto-termination on CREATE + UPDATE (non-blocking) using autoTerminateSimpleContracts({contractType:'WASTE_COLLECTOR', ...})
+ * - Waste Collector Amendments: COMPLETE implementation
+ *   (joins with users + reference_contract_number, full fields)
+ * ============================================================================
+ *
  * Routes expected (see routes/institutions.js):
  *  GET    /api/institutions/:institutionId/waste-contracts
  *  GET    /api/institutions/:institutionId/waste-contracts/:contractId
@@ -10,7 +16,7 @@
  *  PUT    /api/institutions/:institutionId/waste-contracts/:contractId
  *  DELETE /api/institutions/:institutionId/waste-contracts/:contractId
  *
- * Optional (not wired by default in routes/institutions.js in your repo):
+ * Amendments (wired via UPDATE_ROUTES.md):
  *  GET    /api/institutions/:institutionId/waste-contracts/:contractId/amendments
  *  POST   /api/institutions/:institutionId/waste-contracts/:contractId/amendments
  *  PUT    /api/institutions/:institutionId/waste-contracts/:contractId/amendments/:amendmentId
@@ -22,7 +28,16 @@ import pool from '../config/database.js';
 import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
 
 // ============================
-// Amendment type normalization
+// Helpers
+// ============================
+const toNullIfEmpty = (v) => (v === '' ? null : v);
+
+function isAllInstitution(institutionId) {
+  return !institutionId || String(institutionId) === '0';
+}
+
+// ============================
+// Amendment type normalization (UI aliases -> DB allowed)
 // ============================
 const WASTE_COLLECTOR_ALLOWED_AMENDMENT_TYPES = new Set([
   'MANUAL',
@@ -48,10 +63,6 @@ function ensureAllowedWasteCollectorAmendmentType(input) {
   };
   const normalized = aliases[raw] || raw;
   return WASTE_COLLECTOR_ALLOWED_AMENDMENT_TYPES.has(normalized) ? normalized : 'MANUAL';
-}
-
-function isAllInstitution(institutionId) {
-  return !institutionId || String(institutionId) === '0';
 }
 
 // ============================================================================
@@ -115,7 +126,6 @@ export const getWasteCollectorContracts = async (req, res) => {
         ai.name as associate_name,
         ai.short_name as associate_short_name,
 
-        -- Effective end date (din amendments dacă există)
         COALESCE(
           (SELECT wcca.new_contract_date_end
            FROM waste_collector_contract_amendments wcca
@@ -282,7 +292,30 @@ export const createWasteCollectorContract = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
-    res.status(201).json({ success: true, data: result.rows[0] });
+    const savedContract = result.rows[0];
+
+    // AUTO-TERMINATION (non-blocking): doar dacă avem service_start_date + sector_id
+    let autoTermination = null;
+    if (service_start_date && sector_id) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'WASTE_COLLECTOR',
+          sectorId: sector_id,
+          serviceStartDate: service_start_date,
+          newContractId: savedContract.id,
+          newContractNumber: contract_number,
+          userId: req.user?.id || null,
+        });
+      } catch (e) {
+        console.error('Auto-termination error (waste collector create):', e);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      data: savedContract,
+      auto_termination: autoTermination,
+    });
   } catch (error) {
     console.error('Create waste collector contract error:', error);
     res.status(500).json({
@@ -300,7 +333,7 @@ export const updateWasteCollectorContract = async (req, res) => {
   try {
     const { institutionId, contractId } = req.params;
 
-    // citim vechiul sector/service pentru auto-termination (opțional)
+    // citim vechiul sector/service pentru auto-termination
     const prev = await pool.query(
       `SELECT institution_id, sector_id, service_start_date FROM waste_collector_contracts WHERE id = $1 AND deleted_at IS NULL`,
       [contractId]
@@ -319,7 +352,7 @@ export const updateWasteCollectorContract = async (req, res) => {
     const prevService = prevRow?.service_start_date ? String(prevRow.service_start_date).slice(0, 10) : null;
 
     const {
-      institution_id, // acceptăm, dar nu schimbăm instituția dacă vine din params != 0
+      institution_id, // acceptăm, dar param are prioritate dacă nu e 0
       contract_number,
       contract_date_start,
       contract_date_end,
@@ -336,7 +369,9 @@ export const updateWasteCollectorContract = async (req, res) => {
       attribution_type,
     } = req.body;
 
-    const finalInstitutionId = !isAllInstitution(institutionId) ? Number(institutionId) : (institution_id ?? prevRow.institution_id);
+    const finalInstitutionId = !isAllInstitution(institutionId)
+      ? Number(institutionId)
+      : (institution_id ?? prevRow.institution_id);
 
     const query = `
       UPDATE waste_collector_contracts SET
@@ -381,22 +416,42 @@ export const updateWasteCollectorContract = async (req, res) => {
 
     const result = await pool.query(query, values);
 
-    // auto-termination (opțional)
-    const newSector = sector_id || null;
-    const newService = service_start_date ? String(service_start_date).slice(0, 10) : null;
-    if (prevSector !== newSector || prevService !== newService) {
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Contract de colectare negăsit' });
+    }
+
+    const updatedContract = result.rows[0];
+
+    // AUTO-TERMINATION (non-blocking) - doar când se schimbă sector/service
+    let autoTermination = null;
+
+    const nextSector = sector_id ?? prevSector;
+    const nextService = (service_start_date ?? prevService) || null;
+
+    const changed =
+      (sector_id && String(nextSector) !== String(prevSector)) ||
+      (service_start_date && String(nextService) !== String(prevService));
+
+    if (changed && nextSector && nextService) {
       try {
-        await autoTerminateSimpleContracts(pool, {
-          contractTable: 'waste_collector_contracts',
-          amendmentsTable: 'waste_collector_contract_amendments',
-          sectorColumn: 'sector_id',
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'WASTE_COLLECTOR',
+          sectorId: nextSector,
+          serviceStartDate: nextService,
+          newContractId: updatedContract.id,
+          newContractNumber: updatedContract.contract_number,
+          userId: req.user?.id || null,
         });
       } catch (e) {
-        console.warn('autoTerminateSimpleContracts warning (waste collector):', e?.message || e);
+        console.error('Auto-termination error (waste collector update):', e);
       }
     }
 
-    res.json({ success: true, data: result.rows[0] });
+    res.json({
+      success: true,
+      data: updatedContract,
+      auto_termination: autoTermination,
+    });
   } catch (error) {
     console.error('Update waste collector contract error:', error);
     res.status(500).json({
@@ -414,7 +469,6 @@ export const deleteWasteCollectorContract = async (req, res) => {
   try {
     const { institutionId, contractId } = req.params;
 
-    // dacă institutionId != 0, asigură că ștergi doar contractul instituției respective
     const where = ['id = $1', 'deleted_at IS NULL'];
     const params = [contractId];
     let p = 2;
@@ -449,31 +503,47 @@ export const deleteWasteCollectorContract = async (req, res) => {
 };
 
 // ============================================================================
-// AMENDMENTS (OPTIONAL ENDPOINTS)
+// WASTE COLLECTOR CONTRACT AMENDMENTS - COMPLETE IMPLEMENTATION
+// Note: Waste Collector contracts do NOT have quantity fields - only dates
 // ============================================================================
 
+// ============================================================================
+// GET ALL AMENDMENTS FOR WASTE COLLECTOR CONTRACT
+// ============================================================================
 export const getWasteCollectorContractAmendments = async (req, res) => {
   try {
     const { contractId } = req.params;
 
     const query = `
-      SELECT *
-      FROM waste_collector_contract_amendments
-      WHERE contract_id = $1 AND deleted_at IS NULL
-      ORDER BY amendment_date DESC, id DESC
+      SELECT
+        wcca.*,
+        u.first_name || ' ' || u.last_name as created_by_name,
+        rc.contract_number as reference_contract_number
+      FROM waste_collector_contract_amendments wcca
+      LEFT JOIN users u ON wcca.created_by = u.id
+      LEFT JOIN waste_collector_contracts rc ON wcca.reference_contract_id = rc.id
+      WHERE wcca.contract_id = $1 AND wcca.deleted_at IS NULL
+      ORDER BY wcca.amendment_date DESC, wcca.created_at DESC
     `;
 
     const result = await pool.query(query, [contractId]);
-    res.json({ success: true, data: result.rows });
+
+    res.json({
+      success: true,
+      data: result.rows,
+    });
   } catch (error) {
     console.error('Get waste collector amendments error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la obținerea actelor adiționale (colectare)',
+      message: 'Eroare la obținerea actelor adiționale pentru contract colectare',
     });
   }
 };
 
+// ============================================================================
+// CREATE AMENDMENT FOR WASTE COLLECTOR CONTRACT
+// ============================================================================
 export const createWasteCollectorContractAmendment = async (req, res) => {
   try {
     const { contractId } = req.params;
@@ -481,10 +551,8 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
-      amendment_type,
-      new_contract_date_start,
       new_contract_date_end,
-      new_service_start_date,
+      amendment_type,
       changes_description,
       reason,
       notes,
@@ -492,6 +560,8 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
       amendment_file_name,
       amendment_file_size,
       reference_contract_id,
+      new_contract_date_start,
+      new_service_start_date,
     } = req.body;
 
     if (!amendment_number || !amendment_date) {
@@ -508,10 +578,8 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
         contract_id,
         amendment_number,
         amendment_date,
-        amendment_type,
-        new_contract_date_start,
         new_contract_date_end,
-        new_service_start_date,
+        amendment_type,
         changes_description,
         reason,
         notes,
@@ -519,6 +587,8 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
         amendment_file_name,
         amendment_file_size,
         reference_contract_id,
+        new_contract_date_start,
+        new_service_start_date,
         created_by
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
@@ -530,10 +600,8 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
       contractId,
       amendment_number,
       amendment_date,
-      finalAmendmentType,
-      new_contract_date_start || null,
       new_contract_date_end || null,
-      new_service_start_date || null,
+      finalAmendmentType,
       changes_description || null,
       reason || null,
       notes || null,
@@ -541,21 +609,30 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
       amendment_file_name || null,
       amendment_file_size || null,
       reference_contract_id || null,
+      new_contract_date_start || null,
+      new_service_start_date || null,
       req.user?.id || null,
     ];
 
     const result = await pool.query(query, values);
-    res.status(201).json({ success: true, data: result.rows[0] });
+
+    res.status(201).json({
+      success: true,
+      data: result.rows[0],
+    });
   } catch (error) {
     console.error('Create waste collector amendment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la crearea actului adițional (colectare)',
+      message: 'Eroare la crearea actului adițional pentru contract colectare',
       error: error.message,
     });
   }
 };
 
+// ============================================================================
+// UPDATE AMENDMENT FOR WASTE COLLECTOR CONTRACT
+// ============================================================================
 export const updateWasteCollectorContractAmendment = async (req, res) => {
   try {
     const { contractId, amendmentId } = req.params;
@@ -563,10 +640,8 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
-      amendment_type,
-      new_contract_date_start,
       new_contract_date_end,
-      new_service_start_date,
+      amendment_type,
       changes_description,
       reason,
       notes,
@@ -574,6 +649,8 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
       amendment_file_name,
       amendment_file_size,
       reference_contract_id,
+      new_contract_date_start,
+      new_service_start_date,
     } = req.body;
 
     const finalAmendmentType = ensureAllowedWasteCollectorAmendmentType(amendment_type);
@@ -582,17 +659,17 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
       UPDATE waste_collector_contract_amendments SET
         amendment_number = $1,
         amendment_date = $2,
-        amendment_type = $3,
-        new_contract_date_start = $4,
-        new_contract_date_end = $5,
-        new_service_start_date = $6,
-        changes_description = $7,
-        reason = $8,
-        notes = $9,
-        amendment_file_url = $10,
-        amendment_file_name = $11,
-        amendment_file_size = $12,
-        reference_contract_id = $13,
+        new_contract_date_end = $3,
+        amendment_type = $4,
+        changes_description = $5,
+        reason = $6,
+        notes = $7,
+        amendment_file_url = $8,
+        amendment_file_name = $9,
+        amendment_file_size = $10,
+        reference_contract_id = $11,
+        new_contract_date_start = $12,
+        new_service_start_date = $13,
         updated_at = NOW()
       WHERE id = $14 AND contract_id = $15 AND deleted_at IS NULL
       RETURNING *
@@ -601,10 +678,8 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
     const values = [
       amendment_number,
       amendment_date,
-      finalAmendmentType,
-      new_contract_date_start || null,
       new_contract_date_end || null,
-      new_service_start_date || null,
+      finalAmendmentType,
       changes_description || null,
       reason || null,
       notes || null,
@@ -612,6 +687,8 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
       amendment_file_name || null,
       amendment_file_size || null,
       reference_contract_id || null,
+      new_contract_date_start || null,
+      new_service_start_date || null,
       amendmentId,
       contractId,
     ];
@@ -619,7 +696,7 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
     const result = await pool.query(query, values);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Act adițional (colectare) negăsit' });
+      return res.status(404).json({ success: false, message: 'Act adițional colectare negăsit' });
     }
 
     res.json({ success: true, data: result.rows[0] });
@@ -627,12 +704,15 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
     console.error('Update waste collector amendment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la actualizarea actului adițional (colectare)',
+      message: 'Eroare la actualizarea actului adițional pentru contract colectare',
       error: error.message,
     });
   }
 };
 
+// ============================================================================
+// DELETE AMENDMENT FOR WASTE COLLECTOR CONTRACT
+// ============================================================================
 export const deleteWasteCollectorContractAmendment = async (req, res) => {
   try {
     const { contractId, amendmentId } = req.params;
@@ -647,15 +727,15 @@ export const deleteWasteCollectorContractAmendment = async (req, res) => {
     const result = await pool.query(query, [amendmentId, contractId]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Act adițional (colectare) negăsit' });
+      return res.status(404).json({ success: false, message: 'Act adițional colectare negăsit' });
     }
 
-    res.json({ success: true, message: 'Act adițional (colectare) șters cu succes' });
+    res.json({ success: true, message: 'Act adițional colectare șters cu succes' });
   } catch (error) {
     console.error('Delete waste collector amendment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la ștergerea actului adițional (colectare)',
+      message: 'Eroare la ștergerea actului adițional pentru contract colectare',
     });
   }
 };
