@@ -28,7 +28,11 @@ import {
   getWasteCollectorContract as getWasteOperatorContract,
   createWasteCollectorContract as createWasteOperatorContract,
   updateWasteCollectorContract as updateWasteOperatorContract,
-  deleteWasteCollectorContract as deleteWasteOperatorContract
+  deleteWasteCollectorContract as deleteWasteOperatorContract,
+  getWasteCollectorContractAmendments,
+  createWasteCollectorContractAmendment,
+  updateWasteCollectorContractAmendment,
+  deleteWasteCollectorContractAmendment
 } from '../controllers/wasteOperatorContractController.js';
 
 // SORTING (Sortare)
@@ -129,6 +133,12 @@ router.get('/:institutionId/waste-contracts/:contractId', getWasteOperatorContra
 router.post('/:institutionId/waste-contracts', authorizeRoles(ROLES.PLATFORM_ADMIN), createWasteOperatorContract);
 router.put('/:institutionId/waste-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateWasteOperatorContract);
 router.delete('/:institutionId/waste-contracts/:contractId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteWasteOperatorContract);
+
+// Waste Collector Amendments
+router.get('/:institutionId/waste-contracts/:contractId/amendments', getWasteCollectorContractAmendments);
+router.post('/:institutionId/waste-contracts/:contractId/amendments', authorizeRoles(ROLES.PLATFORM_ADMIN), createWasteCollectorContractAmendment);
+router.put('/:institutionId/waste-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), updateWasteCollectorContractAmendment);
+router.delete('/:institutionId/waste-contracts/:contractId/amendments/:amendmentId', authorizeRoles(ROLES.PLATFORM_ADMIN), deleteWasteCollectorContractAmendment);
 
 // ============================================================================
 // SORTING (SORTARE) CONTRACT ROUTES
