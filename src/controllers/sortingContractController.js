@@ -1,22 +1,37 @@
-// src/controllers/sortingOperatorContractController.js
+// src/controllers/sortingContractController.js
 /**
  * ============================================================================
  * SORTING OPERATOR CONTRACT CONTROLLER (SORT-)
+ * ============================================================================
+ * FIXED:
+ * - Full amendments implementation (complete fields + reference_contract_id + dates)
+ * - Proportional quantity for PRELUNGIRE is CUMULATIVE (via proportionalQuantity.js)
+ * - Added auto-termination in CREATE and UPDATE (non-blocking)
+ * - Fixed undefined variables (amendment_type / finalAmendmentType)
  * ============================================================================
  */
 
 import pool from '../config/database.js';
 import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
-import { 
-  calculateProportionalQuantity, 
+import {
+  calculateProportionalQuantity,
   getContractDataForProportional,
-  getLastExtensionEndDate  // ← NOU!
 } from '../utils/proportionalQuantity.js';
 
-const ALLOWED_AMENDMENT_TYPES = new Set(['MANUAL','AUTO_TERMINATION','PRELUNGIRE','INCETARE','MODIFICARE_TARIF','MODIFICARE_CANTITATE','MODIFICARE_VALABILITATE']);
+const toNullIfEmpty = (v) => (v === '' ? null : v);
+
+const ALLOWED_AMENDMENT_TYPES = new Set([
+  'MANUAL',
+  'AUTO_TERMINATION',
+  'PRELUNGIRE',
+  'INCETARE',
+  'MODIFICARE_TARIF',
+  'MODIFICARE_CANTITATE',
+  'MODIFICARE_VALABILITATE',
+]);
 
 function ensureAllowedAmendmentType(input) {
-  if (!input) return null;
+  if (!input) return 'MANUAL';
   const raw = String(input).trim().toUpperCase();
 
   // UI aliases → DB allowed codes
@@ -29,8 +44,6 @@ function ensureAllowedAmendmentType(input) {
     MODIFICARE_TARIF: 'MODIFICARE_TARIF',
     QUANTITY_CHANGE: 'MODIFICARE_CANTITATE',
     MODIFICARE_CANTITATE: 'MODIFICARE_CANTITATE',
-    INDICATOR_CHANGE: 'MODIFICARE_INDICATOR',
-    MODIFICARE_INDICATOR: 'MODIFICARE_INDICATOR',
     VALIDITY_CHANGE: 'MODIFICARE_VALABILITATE',
     MODIFICARE_VALABILITATE: 'MODIFICARE_VALABILITATE',
     AUTO_TERMINATION: 'AUTO_TERMINATION',
@@ -102,11 +115,12 @@ export const getSortingOperatorContracts = async (req, res) => {
         ai.name as associate_name,
         ai.short_name as associate_short_name,
 
-        -- Effective values (din amendments dacă există)
         COALESCE(
           (SELECT soca.new_contract_date_end
            FROM sorting_operator_contract_amendments soca
-           WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_contract_date_end IS NOT NULL
+           WHERE soca.contract_id = soc.id 
+             AND soca.deleted_at IS NULL 
+             AND soca.new_contract_date_end IS NOT NULL
            ORDER BY soca.amendment_date DESC, soca.id DESC
            LIMIT 1),
           soc.contract_date_end
@@ -115,7 +129,9 @@ export const getSortingOperatorContracts = async (req, res) => {
         COALESCE(
           (SELECT soca.new_tariff_per_ton
            FROM sorting_operator_contract_amendments soca
-           WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_tariff_per_ton IS NOT NULL
+           WHERE soca.contract_id = soc.id 
+             AND soca.deleted_at IS NULL 
+             AND soca.new_tariff_per_ton IS NOT NULL
            ORDER BY soca.amendment_date DESC, soca.id DESC
            LIMIT 1),
           soc.tariff_per_ton
@@ -124,7 +140,9 @@ export const getSortingOperatorContracts = async (req, res) => {
         COALESCE(
           (SELECT soca.new_estimated_quantity_tons
            FROM sorting_operator_contract_amendments soca
-           WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_estimated_quantity_tons IS NOT NULL
+           WHERE soca.contract_id = soc.id 
+             AND soca.deleted_at IS NULL 
+             AND soca.new_estimated_quantity_tons IS NOT NULL
            ORDER BY soca.amendment_date DESC, soca.id DESC
            LIMIT 1),
           soc.estimated_quantity_tons
@@ -134,7 +152,9 @@ export const getSortingOperatorContracts = async (req, res) => {
           COALESCE(
             (SELECT soca.new_tariff_per_ton
              FROM sorting_operator_contract_amendments soca
-             WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_tariff_per_ton IS NOT NULL
+             WHERE soca.contract_id = soc.id 
+               AND soca.deleted_at IS NULL 
+               AND soca.new_tariff_per_ton IS NOT NULL
              ORDER BY soca.amendment_date DESC, soca.id DESC
              LIMIT 1),
             soc.tariff_per_ton
@@ -143,7 +163,9 @@ export const getSortingOperatorContracts = async (req, res) => {
           COALESCE(
             (SELECT soca.new_estimated_quantity_tons
              FROM sorting_operator_contract_amendments soca
-             WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_estimated_quantity_tons IS NOT NULL
+             WHERE soca.contract_id = soc.id 
+               AND soca.deleted_at IS NULL 
+               AND soca.new_estimated_quantity_tons IS NOT NULL
              ORDER BY soca.amendment_date DESC, soca.id DESC
              LIMIT 1),
             soc.estimated_quantity_tons
@@ -152,7 +174,8 @@ export const getSortingOperatorContracts = async (req, res) => {
 
         (SELECT COUNT(*)
          FROM sorting_operator_contract_amendments soca
-         WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL
+         WHERE soca.contract_id = soc.id 
+           AND soca.deleted_at IS NULL
         ) as amendments_count
 
       FROM sorting_operator_contracts soc
@@ -164,7 +187,6 @@ export const getSortingOperatorContracts = async (req, res) => {
     `;
 
     const result = await pool.query(query, params);
-
     res.json({ success: true, data: result.rows });
   } catch (error) {
     console.error('Get sorting operator contracts error:', error);
@@ -243,8 +265,6 @@ export const createSortingOperatorContract = async (req, res) => {
       attribution_type,
     } = req.body;
 
-    const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
-
     const query = `
       INSERT INTO sorting_operator_contracts (
         institution_id,
@@ -298,8 +318,30 @@ export const createSortingOperatorContract = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
+    const savedContract = result.rows[0];
 
-    res.status(201).json({ success: true, data: result.rows[0] });
+    // AUTO-TERMINATION (non-blocking)
+    let autoTermination = null;
+    if (service_start_date && sector_id) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'SORTING',
+          sectorId: sector_id,
+          serviceStartDate: service_start_date,
+          newContractId: savedContract.id,
+          newContractNumber: contract_number,
+          userId: req.user.id,
+        });
+      } catch (e) {
+        console.error('Auto-termination error (sorting create):', e);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      data: savedContract,
+      auto_termination: autoTermination,
+    });
   } catch (error) {
     console.error('Create sorting operator contract error:', error);
     res.status(500).json({
@@ -403,7 +445,38 @@ export const updateSortingOperatorContract = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Contract de sortare negăsit' });
     }
 
-    res.json({ success: true, data: result.rows[0] });
+    const updatedContract = result.rows[0];
+
+    // AUTO-TERMINATION (non-blocking)
+    let autoTermination = null;
+
+    const nextSector = sector_id || prevSector;
+    const nextService = service_start_date || prevService;
+
+    const changed =
+      (service_start_date && String(nextService) !== String(prevService)) ||
+      (sector_id && String(nextSector) !== String(prevSector));
+
+    if (changed && nextService && nextSector) {
+      try {
+        autoTermination = await autoTerminateSimpleContracts({
+          contractType: 'SORTING',
+          sectorId: nextSector,
+          serviceStartDate: nextService,
+          newContractId: updatedContract.id,
+          newContractNumber: updatedContract.contract_number,
+          userId: req.user.id,
+        });
+      } catch (e) {
+        console.error('Auto-termination error (sorting update):', e);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: updatedContract,
+      auto_termination: autoTermination,
+    });
   } catch (error) {
     console.error('Update sorting operator contract error:', error);
     res.status(500).json({
@@ -442,33 +515,66 @@ export const deleteSortingOperatorContract = async (req, res) => {
 };
 
 // ============================================================================
-// GET AMENDMENTS FOR SORTING OPERATOR CONTRACT
+// SORTING CONTRACT AMENDMENTS - COMPLETE IMPLEMENTATION
+// ============================================================================
+
+const ALLOWED_SORTING_AMENDMENT_TYPES = new Set([
+  'MANUAL',
+  'AUTO_TERMINATION',
+  'PRELUNGIRE',
+  'INCETARE',
+  'MODIFICARE_TARIF',
+  'MODIFICARE_CANTITATE',
+  'MODIFICARE_VALABILITATE',
+]);
+
+const ensureAllowedSortingAmendmentType = (amendment_type) => {
+  const t = ensureAllowedAmendmentType(amendment_type);
+  if (!ALLOWED_SORTING_AMENDMENT_TYPES.has(t)) {
+    const allowed = Array.from(ALLOWED_SORTING_AMENDMENT_TYPES).join(', ');
+    const err = new Error(`amendment_type invalid. Permise: ${allowed}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return t;
+};
+
+// ============================================================================
+// GET ALL AMENDMENTS FOR SORTING CONTRACT
 // ============================================================================
 export const getSortingOperatorContractAmendments = async (req, res) => {
   try {
     const { contractId } = req.params;
 
     const query = `
-      SELECT *
-      FROM sorting_operator_contract_amendments
-      WHERE contract_id = $1 AND deleted_at IS NULL
-      ORDER BY amendment_date DESC, id DESC
+      SELECT
+        soca.*,
+        u.first_name || ' ' || u.last_name as created_by_name,
+        rc.contract_number as reference_contract_number
+      FROM sorting_operator_contract_amendments soca
+      LEFT JOIN users u ON soca.created_by = u.id
+      LEFT JOIN sorting_operator_contracts rc ON soca.reference_contract_id = rc.id
+      WHERE soca.contract_id = $1 AND soca.deleted_at IS NULL
+      ORDER BY soca.amendment_date DESC, soca.created_at DESC
     `;
 
     const result = await pool.query(query, [contractId]);
 
-    res.json({ success: true, data: result.rows });
+    res.json({
+      success: true,
+      data: result.rows,
+    });
   } catch (error) {
     console.error('Get sorting amendments error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la obținerea actelor adiționale (sortare)',
+      message: 'Eroare la obținerea actelor adiționale pentru contract sortare',
     });
   }
 };
 
 // ============================================================================
-// CREATE AMENDMENT FOR SORTING OPERATOR CONTRACT
+// CREATE AMENDMENT FOR SORTING CONTRACT
 // ============================================================================
 export const createSortingOperatorContractAmendment = async (req, res) => {
   try {
@@ -480,7 +586,6 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
       new_tariff_per_ton,
       new_estimated_quantity_tons,
       new_contract_date_end,
-      new_contract_date_start,
       amendment_type,
       changes_description,
       reason,
@@ -490,9 +595,14 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
       amendment_file_size,
       reference_contract_id,
       quantity_adjustment_auto,
+      new_contract_date_start,
+      new_service_start_date,
     } = req.body;
-// ======================================================================
-    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION
+
+    const finalAmendmentType = ensureAllowedSortingAmendmentType(amendment_type);
+
+    // ======================================================================
+    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION (CUMULATIVE)
     // ======================================================================
     let finalQuantity = new_estimated_quantity_tons;
     let wasAutoCalculated = false;
@@ -504,14 +614,7 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
         contractId,
         'estimated_quantity_tons'
       );
-    
-      // Get last extension end date for multiple amendments ← NOU!
-      const lastExtensionEnd = await getLastExtensionEndDate(
-        pool,
-        'sorting_operator_contract_amendments',
-        contractId
-      );
-    
+
       if (contractData) {
         const calculated = calculateProportionalQuantity({
           originalStartDate: contractData.contract_date_start,
@@ -519,16 +622,16 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
           newEndDate: new_contract_date_end,
           originalQuantity: contractData.quantity,
           amendmentType: finalAmendmentType,
-          lastExtensionEndDate: lastExtensionEnd  // ← NOU!
         });
 
         if (calculated !== null) {
           finalQuantity = calculated;
           wasAutoCalculated = true;
-          console.log(`✅ Sorting Amendment: Proportional quantity auto-calculated: ${finalQuantity} t`);
+          console.log(`✅ Sorting Amendment: CUMULATIVE proportional quantity auto-calculated: ${finalQuantity} t`);
         }
       }
     }
+
     const query = `
       INSERT INTO sorting_operator_contract_amendments (
         contract_id,
@@ -537,7 +640,6 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
         new_tariff_per_ton,
         new_estimated_quantity_tons,
         new_contract_date_end,
-        new_contract_date_start,
         amendment_type,
         changes_description,
         reason,
@@ -547,9 +649,11 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
         amendment_file_size,
         reference_contract_id,
         quantity_adjustment_auto,
+        new_contract_date_start,
+        new_service_start_date,
         created_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
       )
       RETURNING *
     `;
@@ -559,11 +663,9 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
       amendment_number,
       amendment_date,
       toNullIfEmpty(new_tariff_per_ton),
-      toNullIfEmpty(finalQuantity),  // ← FOLOSEȘTE finalQuantity
+      toNullIfEmpty(finalQuantity),
       new_contract_date_end || null,
-      new_contract_date_start || null,
       finalAmendmentType,
-
       changes_description || null,
       reason || null,
       notes || null,
@@ -571,28 +673,30 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
       amendment_file_name || null,
       amendment_file_size || null,
       reference_contract_id || null,
-      quantity_adjustment_auto === '' ? null : quantity_adjustment_auto,
+      toNullIfEmpty(quantity_adjustment_auto),
+      new_contract_date_start || null,
+      new_service_start_date || null,
       req.user.id,
     ];
 
     const result = await pool.query(query, values);
-
-    res.status(201).json({ 
-      success: true, 
+    res.status(201).json({
+      success: true,
       data: result.rows[0],
-      quantity_auto_calculated: wasAutoCalculated
-    });  } catch (error) {
+      quantity_auto_calculated: wasAutoCalculated,
+    });
+  } catch (error) {
     console.error('Create sorting amendment error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: 'Eroare la crearea actului adițional (sortare)',
+      message: 'Eroare la crearea actului adițional pentru contract sortare',
       error: error.message,
     });
   }
 };
 
 // ============================================================================
-// UPDATE AMENDMENT FOR SORTING OPERATOR CONTRACT
+// UPDATE AMENDMENT FOR SORTING CONTRACT
 // ============================================================================
 export const updateSortingOperatorContractAmendment = async (req, res) => {
   try {
@@ -604,7 +708,6 @@ export const updateSortingOperatorContractAmendment = async (req, res) => {
       new_tariff_per_ton,
       new_estimated_quantity_tons,
       new_contract_date_end,
-      new_contract_date_start,
       amendment_type,
       changes_description,
       reason,
@@ -614,7 +717,11 @@ export const updateSortingOperatorContractAmendment = async (req, res) => {
       amendment_file_size,
       reference_contract_id,
       quantity_adjustment_auto,
+      new_contract_date_start,
+      new_service_start_date,
     } = req.body;
+
+    const finalAmendmentType = ensureAllowedSortingAmendmentType(amendment_type);
 
     const query = `
       UPDATE sorting_operator_contract_amendments SET
@@ -623,30 +730,29 @@ export const updateSortingOperatorContractAmendment = async (req, res) => {
         new_tariff_per_ton = $3,
         new_estimated_quantity_tons = $4,
         new_contract_date_end = $5,
-        new_contract_date_start = $6,
-        amendment_type = $7,
-        changes_description = $8,
-        reason = $9,
-        notes = $10,
-        amendment_file_url = $11,
-        amendment_file_name = $12,
-        amendment_file_size = $13,
-        reference_contract_id = $14,
-        quantity_adjustment_auto = $15,
+        amendment_type = $6,
+        changes_description = $7,
+        reason = $8,
+        notes = $9,
+        amendment_file_url = $10,
+        amendment_file_name = $11,
+        amendment_file_size = $12,
+        reference_contract_id = $13,
+        quantity_adjustment_auto = $14,
+        new_contract_date_start = $15,
+        new_service_start_date = $16,
         updated_at = NOW()
-      WHERE id = $16 AND contract_id = $17 AND deleted_at IS NULL
+      WHERE id = $17 AND contract_id = $18 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const values = [
       amendment_number,
       amendment_date,
-      new_tariff_per_ton === '' ? null : new_tariff_per_ton,
-      new_estimated_quantity_tons === '' ? null : new_estimated_quantity_tons,
+      toNullIfEmpty(new_tariff_per_ton),
+      toNullIfEmpty(new_estimated_quantity_tons),
       new_contract_date_end || null,
-      new_contract_date_start || null,
       finalAmendmentType,
-
       changes_description || null,
       reason || null,
       notes || null,
@@ -654,7 +760,9 @@ export const updateSortingOperatorContractAmendment = async (req, res) => {
       amendment_file_name || null,
       amendment_file_size || null,
       reference_contract_id || null,
-      quantity_adjustment_auto === '' ? null : quantity_adjustment_auto,
+      toNullIfEmpty(quantity_adjustment_auto),
+      new_contract_date_start || null,
+      new_service_start_date || null,
       amendmentId,
       contractId,
     ];
@@ -662,22 +770,22 @@ export const updateSortingOperatorContractAmendment = async (req, res) => {
     const result = await pool.query(query, values);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Act adițional (sortare) negăsit' });
+      return res.status(404).json({ success: false, message: 'Act adițional sortare negăsit' });
     }
 
     res.json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('Update sorting amendment error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: 'Eroare la actualizarea actului adițional (sortare)',
+      message: 'Eroare la actualizarea actului adițional pentru contract sortare',
       error: error.message,
     });
   }
 };
 
 // ============================================================================
-// DELETE AMENDMENT FOR SORTING OPERATOR CONTRACT
+// DELETE AMENDMENT FOR SORTING CONTRACT
 // ============================================================================
 export const deleteSortingOperatorContractAmendment = async (req, res) => {
   try {
@@ -693,15 +801,15 @@ export const deleteSortingOperatorContractAmendment = async (req, res) => {
     const result = await pool.query(query, [amendmentId, contractId]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Act adițional (sortare) negăsit' });
+      return res.status(404).json({ success: false, message: 'Act adițional sortare negăsit' });
     }
 
-    res.json({ success: true, message: 'Act adițional (sortare) șters cu succes' });
+    res.json({ success: true, message: 'Act adițional sortare șters cu succes' });
   } catch (error) {
     console.error('Delete sorting amendment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la ștergerea actului adițional (sortare)',
+      message: 'Eroare la ștergerea actului adițional pentru contract sortare',
     });
   }
 };
