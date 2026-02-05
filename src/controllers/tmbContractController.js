@@ -102,7 +102,6 @@ export const getTMBContracts = async (req, res) => {
         ai.name as associate_name,
         ai.short_name as associate_short_name,
 
-        -- Effective fields (din amendments dacă există)
         COALESCE(
           (SELECT tca.new_contract_date_end
            FROM tmb_contract_amendments tca
@@ -121,14 +120,7 @@ export const getTMBContracts = async (req, res) => {
           tc.tariff_per_ton
         ) as effective_tariff,
 
-        COALESCE(
-          (SELECT tca.new_estimated_quantity_tons
-           FROM tmb_contract_amendments tca
-           WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL
-           ORDER BY tca.amendment_date DESC, tca.id DESC
-           LIMIT 1),
-          tc.estimated_quantity_tons
-        ) as effective_quantity,
+        (tc.estimated_quantity_tons + COALESCE((SELECT SUM(tca.new_estimated_quantity_tons) FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL), 0)) as effective_quantity,
 
         COALESCE(
           (SELECT tca.new_indicator_recycling_percent
@@ -157,30 +149,9 @@ export const getTMBContracts = async (req, res) => {
           tc.indicator_disposal_percent
         ) as effective_indicator_disposal_percent,
 
-        (
-          COALESCE(
-            (SELECT tca.new_tariff_per_ton
-             FROM tmb_contract_amendments tca
-             WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL
-             ORDER BY tca.amendment_date DESC, tca.id DESC
-             LIMIT 1),
-            tc.tariff_per_ton
-          )
-          *
-          COALESCE(
-            (SELECT tca.new_estimated_quantity_tons
-             FROM tmb_contract_amendments tca
-             WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL
-             ORDER BY tca.amendment_date DESC, tca.id DESC
-             LIMIT 1),
-            tc.estimated_quantity_tons
-          )
-        ) as effective_total_value,
+        (COALESCE((SELECT tca.new_tariff_per_ton FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL ORDER BY tca.amendment_date DESC, tca.id DESC LIMIT 1), tc.tariff_per_ton) * (tc.estimated_quantity_tons + COALESCE((SELECT SUM(tca.new_estimated_quantity_tons) FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL), 0))) as effective_total_value,
 
-        (SELECT COUNT(*)
-         FROM tmb_contract_amendments tca
-         WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL
-        ) as amendments_count
+        (SELECT COUNT(*) FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL) as amendments_count
 
       FROM tmb_contracts tc
       JOIN sectors s ON tc.sector_id = s.id
