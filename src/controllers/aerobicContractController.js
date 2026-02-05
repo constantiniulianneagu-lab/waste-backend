@@ -11,6 +11,7 @@ import {
   calculateProportionalQuantity,
   getContractDataForProportional,
 } from '../utils/proportionalQuantity.js';
+
 const ALLOWED_AMENDMENT_TYPES = new Set(['MANUAL','AUTO_TERMINATION','PRELUNGIRE','INCETARE','MODIFICARE_TARIF','MODIFICARE_CANTITATE','MODIFICARE_INDICATOR','MODIFICARE_VALABILITATE']);
 
 function ensureAllowedAmendmentType(input) {
@@ -39,6 +40,30 @@ function ensureAllowedAmendmentType(input) {
   const normalized = aliases[raw] || raw;
   return ALLOWED_AMENDMENT_TYPES.has(normalized) ? normalized : 'MANUAL';
 }
+
+const toNullIfEmpty = (v) => (v === '' ? null : v);
+
+const ALLOWED_AEROBIC_AMENDMENT_TYPES = new Set([
+  'MANUAL',
+  'AUTO_TERMINATION',
+  'PRELUNGIRE',
+  'INCETARE',
+  'MODIFICARE_TARIF',
+  'MODIFICARE_CANTITATE',
+  'MODIFICARE_INDICATOR',
+  'MODIFICARE_VALABILITATE',
+]);
+
+const ensureAllowedAerobicAmendmentType = (amendment_type) => {
+  const t = amendment_type ? String(amendment_type) : 'MANUAL';
+  if (!ALLOWED_AEROBIC_AMENDMENT_TYPES.has(t)) {
+    const allowed = Array.from(ALLOWED_AEROBIC_AMENDMENT_TYPES).join(', ');
+    const err = new Error(`amendment_type invalid. Permise: ${allowed}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return t;
+};
 
 // ============================================================================
 // GET ALL AEROBIC CONTRACTS
@@ -120,16 +145,7 @@ export const getAerobicContracts = async (req, res) => {
           ac.tariff_per_ton
         ) as effective_tariff,
         
-        COALESCE(
-          (SELECT aca.new_estimated_quantity_tons 
-           FROM aerobic_contract_amendments aca 
-           WHERE aca.contract_id = ac.id 
-             AND aca.new_estimated_quantity_tons IS NOT NULL 
-             AND aca.deleted_at IS NULL 
-           ORDER BY aca.amendment_date DESC, aca.id DESC 
-           LIMIT 1),
-          ac.estimated_quantity_tons
-        ) as effective_quantity,
+        (ac.estimated_quantity_tons + COALESCE((SELECT SUM(aca.new_estimated_quantity_tons) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_estimated_quantity_tons IS NOT NULL), 0)) as effective_quantity,
         
         COALESCE(
           (SELECT aca.new_indicator_disposal_percent 
@@ -140,7 +156,11 @@ export const getAerobicContracts = async (req, res) => {
            ORDER BY aca.amendment_date DESC, aca.id DESC 
            LIMIT 1),
           ac.indicator_disposal_percent
-        ) as effective_indicator_disposal_percent
+        ) as effective_indicator_disposal_percent,
+
+        (COALESCE((SELECT aca.new_tariff_per_ton FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.new_tariff_per_ton IS NOT NULL AND aca.deleted_at IS NULL ORDER BY aca.amendment_date DESC, aca.id DESC LIMIT 1), ac.tariff_per_ton) * (ac.estimated_quantity_tons + COALESCE((SELECT SUM(aca.new_estimated_quantity_tons) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_estimated_quantity_tons IS NOT NULL), 0))) as effective_total_value,
+
+        (SELECT COUNT(*) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL) as amendments_count
         
       FROM aerobic_contracts ac
       LEFT JOIN institutions i ON ac.institution_id = i.id
@@ -204,16 +224,7 @@ export const getAerobicContract = async (req, res) => {
           ac.tariff_per_ton
         ) as effective_tariff,
         
-        COALESCE(
-          (SELECT aca.new_estimated_quantity_tons 
-           FROM aerobic_contract_amendments aca 
-           WHERE aca.contract_id = ac.id 
-             AND aca.new_estimated_quantity_tons IS NOT NULL 
-             AND aca.deleted_at IS NULL 
-           ORDER BY aca.amendment_date DESC, aca.id DESC 
-           LIMIT 1),
-          ac.estimated_quantity_tons
-        ) as effective_quantity,
+        (ac.estimated_quantity_tons + COALESCE((SELECT SUM(aca.new_estimated_quantity_tons) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_estimated_quantity_tons IS NOT NULL), 0)) as effective_quantity,
         
         COALESCE(
           (SELECT aca.new_indicator_disposal_percent 
@@ -224,7 +235,11 @@ export const getAerobicContract = async (req, res) => {
            ORDER BY aca.amendment_date DESC, aca.id DESC 
            LIMIT 1),
           ac.indicator_disposal_percent
-        ) as effective_indicator_disposal_percent
+        ) as effective_indicator_disposal_percent,
+
+        (COALESCE((SELECT aca.new_tariff_per_ton FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.new_tariff_per_ton IS NOT NULL AND aca.deleted_at IS NULL ORDER BY aca.amendment_date DESC, aca.id DESC LIMIT 1), ac.tariff_per_ton) * (ac.estimated_quantity_tons + COALESCE((SELECT SUM(aca.new_estimated_quantity_tons) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_estimated_quantity_tons IS NOT NULL), 0))) as effective_total_value,
+
+        (SELECT COUNT(*) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL) as amendments_count
         
       FROM aerobic_contracts ac
       LEFT JOIN institutions i ON ac.institution_id = i.id
@@ -468,34 +483,6 @@ export const deleteAerobicContract = async (req, res) => {
       message: 'Eroare la ștergerea contractului aerob'
     });
   }
-};
-
-// ============================================================================
-// AEROBIC CONTRACT AMENDMENTS
-// ============================================================================
-
-const toNullIfEmpty = (v) => (v === '' ? null : v);
-
-const ALLOWED_AEROBIC_AMENDMENT_TYPES = new Set([
-  'MANUAL',
-  'AUTO_TERMINATION',
-  'PRELUNGIRE',
-  'INCETARE',
-  'MODIFICARE_TARIF',
-  'MODIFICARE_CANTITATE',
-  'MODIFICARE_INDICATOR',
-  'MODIFICARE_VALABILITATE',
-]);
-
-const ensureAllowedAerobicAmendmentType = (amendment_type) => {
-  const t = amendment_type ? String(amendment_type) : 'MANUAL';
-  if (!ALLOWED_AEROBIC_AMENDMENT_TYPES.has(t)) {
-    const allowed = Array.from(ALLOWED_AEROBIC_AMENDMENT_TYPES).join(', ');
-    const err = new Error(`amendment_type invalid. Permise: ${allowed}`);
-    err.statusCode = 400;
-    throw err;
-  }
-  return t;
 };
 
 // ============================================================================
