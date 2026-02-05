@@ -7,10 +7,9 @@
 
 import pool from '../config/database.js';
 import { autoTerminateSimpleContracts } from '../utils/autoTermination.js';
-import { 
-  calculateProportionalQuantity, 
+import {
+  calculateProportionalQuantity,
   getContractDataForProportional,
-  getLastExtensionEndDate  // ← NOU!
 } from '../utils/proportionalQuantity.js';
 const ALLOWED_AMENDMENT_TYPES = new Set(['MANUAL','AUTO_TERMINATION','PRELUNGIRE','INCETARE','MODIFICARE_TARIF','MODIFICARE_CANTITATE','MODIFICARE_INDICATOR','MODIFICARE_VALABILITATE']);
 
@@ -132,38 +131,23 @@ export const getAerobicContracts = async (req, res) => {
           ac.estimated_quantity_tons
         ) as effective_quantity,
         
-        (COALESCE(
-          (SELECT aca.new_tariff_per_ton 
+        COALESCE(
+          (SELECT aca.new_indicator_disposal_percent 
            FROM aerobic_contract_amendments aca 
            WHERE aca.contract_id = ac.id 
-             AND aca.new_tariff_per_ton IS NOT NULL 
+             AND aca.new_indicator_disposal_percent IS NOT NULL 
              AND aca.deleted_at IS NULL 
            ORDER BY aca.amendment_date DESC, aca.id DESC 
            LIMIT 1),
-          ac.tariff_per_ton
-        ) * COALESCE(
-          (SELECT aca.new_estimated_quantity_tons 
-           FROM aerobic_contract_amendments aca 
-           WHERE aca.contract_id = ac.id 
-             AND aca.new_estimated_quantity_tons IS NOT NULL 
-             AND aca.deleted_at IS NULL 
-           ORDER BY aca.amendment_date DESC, aca.id DESC 
-           LIMIT 1),
-          ac.estimated_quantity_tons
-        )) as effective_total_value,
-        
-        (SELECT COUNT(*)
-         FROM aerobic_contract_amendments aca
-         WHERE aca.contract_id = ac.id 
-           AND aca.deleted_at IS NULL
-        ) as amendments_count
+          ac.indicator_disposal_percent
+        ) as effective_indicator_disposal_percent
         
       FROM aerobic_contracts ac
-      JOIN institutions i ON ac.institution_id = i.id
+      LEFT JOIN institutions i ON ac.institution_id = i.id
       LEFT JOIN sectors s ON ac.sector_id = s.id
       LEFT JOIN institutions ai ON ac.associate_institution_id = ai.id
       WHERE ${whereClause}
-      ORDER BY s.sector_number, ac.contract_date_start DESC
+      ORDER BY ac.created_at DESC
     `;
 
     const result = await pool.query(query, params);
@@ -196,9 +180,54 @@ export const getAerobicContract = async (req, res) => {
         s.sector_number,
         s.sector_name,
         ai.name as associate_name,
-        ai.short_name as associate_short_name
+        ai.short_name as associate_short_name,
+        
+        COALESCE(
+          (SELECT aca.new_contract_date_end 
+           FROM aerobic_contract_amendments aca 
+           WHERE aca.contract_id = ac.id 
+             AND aca.new_contract_date_end IS NOT NULL
+             AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC, aca.id DESC 
+           LIMIT 1),
+          ac.contract_date_end
+        ) as effective_date_end,
+        
+        COALESCE(
+          (SELECT aca.new_tariff_per_ton 
+           FROM aerobic_contract_amendments aca 
+           WHERE aca.contract_id = ac.id 
+             AND aca.new_tariff_per_ton IS NOT NULL 
+             AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC, aca.id DESC 
+           LIMIT 1),
+          ac.tariff_per_ton
+        ) as effective_tariff,
+        
+        COALESCE(
+          (SELECT aca.new_estimated_quantity_tons 
+           FROM aerobic_contract_amendments aca 
+           WHERE aca.contract_id = ac.id 
+             AND aca.new_estimated_quantity_tons IS NOT NULL 
+             AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC, aca.id DESC 
+           LIMIT 1),
+          ac.estimated_quantity_tons
+        ) as effective_quantity,
+        
+        COALESCE(
+          (SELECT aca.new_indicator_disposal_percent 
+           FROM aerobic_contract_amendments aca 
+           WHERE aca.contract_id = ac.id 
+             AND aca.new_indicator_disposal_percent IS NOT NULL 
+             AND aca.deleted_at IS NULL 
+           ORDER BY aca.amendment_date DESC, aca.id DESC 
+           LIMIT 1),
+          ac.indicator_disposal_percent
+        ) as effective_indicator_disposal_percent
+        
       FROM aerobic_contracts ac
-      JOIN institutions i ON ac.institution_id = i.id
+      LEFT JOIN institutions i ON ac.institution_id = i.id
       LEFT JOIN sectors s ON ac.sector_id = s.id
       LEFT JOIN institutions ai ON ac.associate_institution_id = ai.id
       WHERE ac.id = $1 AND ac.deleted_at IS NULL
@@ -249,8 +278,6 @@ export const createAerobicContract = async (req, res) => {
       attribution_type,
       service_start_date
     } = req.body;
-
-    const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
 
     const query = `
       INSERT INTO aerobic_contracts (
@@ -323,19 +350,8 @@ export const createAerobicContract = async (req, res) => {
 export const updateAerobicContract = async (req, res) => {
   try {
     const { contractId } = req.params;
-
-    // citim vechiul service_start_date/sector_id ca să declanșăm auto-termination doar când se schimbă
-    const prev = await pool.query(
-      `SELECT sector_id, service_start_date FROM aerobic_contracts WHERE id = $1 AND deleted_at IS NULL`,
-      [contractId]
-    );
-    const prevRow = prev.rows?.[0] || null;
-    const prevSector = prevRow?.sector_id || null;
-    const prevService = prevRow?.service_start_date
-      ? String(prevRow.service_start_date).slice(0, 10)
-      : null;
-
     const {
+      institution_id,
       contract_number,
       contract_date_start,
       contract_date_end,
@@ -355,27 +371,29 @@ export const updateAerobicContract = async (req, res) => {
 
     const query = `
       UPDATE aerobic_contracts SET
-        contract_number = $1,
-        contract_date_start = $2,
-        contract_date_end = $3,
-        sector_id = $4,
-        tariff_per_ton = $5,
-        estimated_quantity_tons = $6,
-        associate_institution_id = $7,
-        indicator_disposal_percent = $8,
-        contract_file_url = $9,
-        contract_file_name = $10,
-        contract_file_size = $11,
-        is_active = COALESCE($12, is_active),
-        notes = $13,
-        attribution_type = $14,
-        service_start_date = $15,
+        institution_id = $1,
+        contract_number = $2,
+        contract_date_start = $3,
+        contract_date_end = $4,
+        sector_id = $5,
+        tariff_per_ton = $6,
+        estimated_quantity_tons = $7,
+        associate_institution_id = $8,
+        indicator_disposal_percent = $9,
+        contract_file_url = $10,
+        contract_file_name = $11,
+        contract_file_size = $12,
+        is_active = $13,
+        notes = $14,
+        attribution_type = $15,
+        service_start_date = $16,
         updated_at = NOW()
-      WHERE id = $16 AND deleted_at IS NULL
+      WHERE id = $17 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const values = [
+      institution_id,
       contract_number,
       contract_date_start,
       contract_date_end || null,
@@ -387,7 +405,7 @@ export const updateAerobicContract = async (req, res) => {
       contract_file_url || null,
       contract_file_name || null,
       contract_file_size || null,
-      is_active === undefined ? null : is_active,
+      is_active !== undefined ? is_active : true,
       notes || null,
       attribution_type || null,
       service_start_date || null,
@@ -403,44 +421,15 @@ export const updateAerobicContract = async (req, res) => {
       });
     }
 
-    const updatedContract = result.rows[0];
-
-    // AUTO-TERMINATION (non-blocking)
-    let autoTermination = null;
-
-    const nextSector = sector_id || prevSector;
-    const nextService = service_start_date || prevService;
-
-    const changed =
-      (service_start_date && String(nextService) !== String(prevService)) ||
-      (sector_id && String(nextSector) !== String(prevSector));
-
-    if (changed && nextService && nextSector) {
-      try {
-        autoTermination = await autoTerminateSimpleContracts({
-          contractType: 'AEROBIC',
-          sectorId: nextSector,
-          serviceStartDate: nextService,
-          newContractId: updatedContract.id,
-          newContractNumber: updatedContract.contract_number,
-          userId: req.user.id
-        });
-      } catch (e) {
-        console.error('Auto-termination error (aerobic update):', e);
-      }
-    }
-
     res.json({
       success: true,
-      data: updatedContract,
-      auto_termination: autoTermination
+      data: result.rows[0]
     });
   } catch (error) {
     console.error('Update aerobic contract error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la actualizarea contractului aerob',
-      error: error.message
+      message: 'Eroare la actualizarea contractului aerob'
     });
   }
 };
@@ -482,29 +471,63 @@ export const deleteAerobicContract = async (req, res) => {
 };
 
 // ============================================================================
-// GET AMENDMENTS FOR AEROBIC CONTRACT
+// AEROBIC CONTRACT AMENDMENTS
+// ============================================================================
+
+const toNullIfEmpty = (v) => (v === '' ? null : v);
+
+const ALLOWED_AEROBIC_AMENDMENT_TYPES = new Set([
+  'MANUAL',
+  'AUTO_TERMINATION',
+  'PRELUNGIRE',
+  'INCETARE',
+  'MODIFICARE_TARIF',
+  'MODIFICARE_CANTITATE',
+  'MODIFICARE_INDICATOR',
+  'MODIFICARE_VALABILITATE',
+]);
+
+const ensureAllowedAerobicAmendmentType = (amendment_type) => {
+  const t = amendment_type ? String(amendment_type) : 'MANUAL';
+  if (!ALLOWED_AEROBIC_AMENDMENT_TYPES.has(t)) {
+    const allowed = Array.from(ALLOWED_AEROBIC_AMENDMENT_TYPES).join(', ');
+    const err = new Error(`amendment_type invalid. Permise: ${allowed}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return t;
+};
+
+// ============================================================================
+// GET ALL AMENDMENTS FOR AEROBIC CONTRACT
 // ============================================================================
 export const getAerobicContractAmendments = async (req, res) => {
   try {
     const { contractId } = req.params;
 
     const query = `
-      SELECT * FROM aerobic_contract_amendments
-      WHERE contract_id = $1 AND deleted_at IS NULL
-      ORDER BY amendment_date DESC, id DESC
+      SELECT
+        aca.*,
+        u.first_name || ' ' || u.last_name as created_by_name,
+        rc.contract_number as reference_contract_number
+      FROM aerobic_contract_amendments aca
+      LEFT JOIN users u ON aca.created_by = u.id
+      LEFT JOIN aerobic_contracts rc ON aca.reference_contract_id = rc.id
+      WHERE aca.contract_id = $1 AND aca.deleted_at IS NULL
+      ORDER BY aca.amendment_date DESC, aca.created_at DESC
     `;
 
     const result = await pool.query(query, [contractId]);
 
     res.json({
       success: true,
-      data: result.rows
+      data: result.rows,
     });
   } catch (error) {
     console.error('Get aerobic amendments error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la obținerea actelor adiționale'
+      message: 'Eroare la obținerea actelor adiționale pentru contract aerob',
     });
   }
 };
@@ -515,6 +538,7 @@ export const getAerobicContractAmendments = async (req, res) => {
 export const createAerobicContractAmendment = async (req, res) => {
   try {
     const { contractId } = req.params;
+
     const {
       amendment_number,
       amendment_date,
@@ -527,11 +551,18 @@ export const createAerobicContractAmendment = async (req, res) => {
       notes,
       amendment_file_url,
       amendment_file_name,
-      amendment_file_size
+      amendment_file_size,
+      reference_contract_id,
+      quantity_adjustment_auto,
+      new_indicator_disposal_percent,
+      new_contract_date_start,
+      new_service_start_date,
     } = req.body;
 
-// ======================================================================
-    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION
+    const finalAmendmentType = ensureAllowedAerobicAmendmentType(amendment_type);
+
+    // ======================================================================
+    // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION (CUMULATIVE)
     // ======================================================================
     let finalQuantity = new_estimated_quantity_tons;
     let wasAutoCalculated = false;
@@ -543,14 +574,7 @@ export const createAerobicContractAmendment = async (req, res) => {
         contractId,
         'estimated_quantity_tons'
       );
-    
-      // Get last extension end date for multiple amendments ← NOU!
-      const lastExtensionEnd = await getLastExtensionEndDate(
-        pool,
-        'aerobic_contract_amendments',
-        contractId
-      );
-    
+
       if (contractData) {
         const calculated = calculateProportionalQuantity({
           originalStartDate: contractData.contract_date_start,
@@ -558,24 +582,40 @@ export const createAerobicContractAmendment = async (req, res) => {
           newEndDate: new_contract_date_end,
           originalQuantity: contractData.quantity,
           amendmentType: finalAmendmentType,
-          lastExtensionEndDate: lastExtensionEnd  // ← NOU!
         });
 
         if (calculated !== null) {
           finalQuantity = calculated;
           wasAutoCalculated = true;
-          console.log(`✅ Aerobic Amendment: Proportional quantity auto-calculated: ${finalQuantity} t`);
+          console.log(`✅ Aerobic Amendment: CUMULATIVE proportional quantity auto-calculated: ${finalQuantity} t`);
         }
       }
     }
 
     const query = `
       INSERT INTO aerobic_contract_amendments (
-        contract_id, amendment_number, amendment_date, new_tariff_per_ton,
-        new_estimated_quantity_tons, new_contract_date_end, amendment_type,
-        changes_description, reason, notes, amendment_file_url,
-        amendment_file_name, amendment_file_size, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        contract_id,
+        amendment_number,
+        amendment_date,
+        new_tariff_per_ton,
+        new_estimated_quantity_tons,
+        new_contract_date_end,
+        amendment_type,
+        changes_description,
+        reason,
+        notes,
+        amendment_file_url,
+        amendment_file_name,
+        amendment_file_size,
+        reference_contract_id,
+        quantity_adjustment_auto,
+        new_indicator_disposal_percent,
+        new_contract_date_start,
+        new_service_start_date,
+        created_by
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+      )
       RETURNING *
     `;
 
@@ -584,32 +624,35 @@ export const createAerobicContractAmendment = async (req, res) => {
       amendment_number,
       amendment_date,
       toNullIfEmpty(new_tariff_per_ton),
-      toNullIfEmpty(finalQuantity),  // ← FOLOSEȘTE finalQuantity
+      toNullIfEmpty(finalQuantity),
       new_contract_date_end || null,
       finalAmendmentType,
-
       changes_description || null,
       reason || null,
       notes || null,
       amendment_file_url || null,
       amendment_file_name || null,
       amendment_file_size || null,
-      req.user.id
+      reference_contract_id || null,
+      toNullIfEmpty(quantity_adjustment_auto),
+      toNullIfEmpty(new_indicator_disposal_percent),
+      new_contract_date_start || null,
+      new_service_start_date || null,
+      req.user.id,
     ];
 
     const result = await pool.query(query, values);
-
-    res.status(201).json({ 
-      success: true, 
+    res.status(201).json({
+      success: true,
       data: result.rows[0],
-      quantity_auto_calculated: wasAutoCalculated
+      quantity_auto_calculated: wasAutoCalculated,
     });
   } catch (error) {
     console.error('Create aerobic amendment error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: 'Eroare la crearea actului adițional',
-      error: error.message
+      message: 'Eroare la crearea actului adițional pentru contract aerob',
+      error: error.message,
     });
   }
 };
@@ -620,6 +663,7 @@ export const createAerobicContractAmendment = async (req, res) => {
 export const updateAerobicContractAmendment = async (req, res) => {
   try {
     const { contractId, amendmentId } = req.params;
+
     const {
       amendment_number,
       amendment_date,
@@ -632,8 +676,15 @@ export const updateAerobicContractAmendment = async (req, res) => {
       notes,
       amendment_file_url,
       amendment_file_name,
-      amendment_file_size
+      amendment_file_size,
+      reference_contract_id,
+      quantity_adjustment_auto,
+      new_indicator_disposal_percent,
+      new_contract_date_start,
+      new_service_start_date,
     } = req.body;
+
+    const finalAmendmentType = ensureAllowedAerobicAmendmentType(amendment_type);
 
     const query = `
       UPDATE aerobic_contract_amendments SET
@@ -649,48 +700,51 @@ export const updateAerobicContractAmendment = async (req, res) => {
         amendment_file_url = $10,
         amendment_file_name = $11,
         amendment_file_size = $12,
+        reference_contract_id = $13,
+        quantity_adjustment_auto = $14,
+        new_indicator_disposal_percent = $15,
+        new_contract_date_start = $16,
+        new_service_start_date = $17,
         updated_at = NOW()
-      WHERE id = $13 AND contract_id = $14 AND deleted_at IS NULL
+      WHERE id = $18 AND contract_id = $19 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const values = [
       amendment_number,
       amendment_date,
-      new_tariff_per_ton || null,
-      new_estimated_quantity_tons || null,
+      toNullIfEmpty(new_tariff_per_ton),
+      toNullIfEmpty(new_estimated_quantity_tons),
       new_contract_date_end || null,
       finalAmendmentType,
-
       changes_description || null,
       reason || null,
       notes || null,
       amendment_file_url || null,
       amendment_file_name || null,
       amendment_file_size || null,
+      reference_contract_id || null,
+      toNullIfEmpty(quantity_adjustment_auto),
+      toNullIfEmpty(new_indicator_disposal_percent),
+      new_contract_date_start || null,
+      new_service_start_date || null,
       amendmentId,
-      contractId
+      contractId,
     ];
 
     const result = await pool.query(query, values);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Act adițional negăsit'
-      });
+      return res.status(404).json({ success: false, message: 'Act adițional aerob negăsit' });
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0]
-    });
+    res.json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('Update aerobic amendment error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: 'Eroare la actualizarea actului adițional',
-      error: error.message
+      message: 'Eroare la actualizarea actului adițional pentru contract aerob',
+      error: error.message,
     });
   }
 };
@@ -703,7 +757,7 @@ export const deleteAerobicContractAmendment = async (req, res) => {
     const { contractId, amendmentId } = req.params;
 
     const query = `
-      UPDATE aerobic_contract_amendments 
+      UPDATE aerobic_contract_amendments
       SET deleted_at = NOW()
       WHERE id = $1 AND contract_id = $2 AND deleted_at IS NULL
       RETURNING id
@@ -712,21 +766,15 @@ export const deleteAerobicContractAmendment = async (req, res) => {
     const result = await pool.query(query, [amendmentId, contractId]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Act adițional negăsit'
-      });
+      return res.status(404).json({ success: false, message: 'Act adițional aerob negăsit' });
     }
 
-    res.json({
-      success: true,
-      message: 'Act adițional șters cu succes'
-    });
+    res.json({ success: true, message: 'Act adițional aerob șters cu succes' });
   } catch (error) {
     console.error('Delete aerobic amendment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Eroare la ștergerea actului adițional'
+      message: 'Eroare la ștergerea actului adițional pentru contract aerob',
     });
   }
 };

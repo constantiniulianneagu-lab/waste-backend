@@ -4,14 +4,20 @@
  * PROPORTIONAL QUANTITY CALCULATION FOR CONTRACT AMENDMENTS
  * ============================================================================
  * Când se prelungește un contract (EXTENSION / PRELUNGIRE), cantitatea se
- * calculează automat proporțional cu perioada de prelungire.
+ * calculează automat proporțional cu TOATĂ perioada contractului.
  *
- * Formula: new_quantity = (original_quantity / total_days_original) × extension_days
+ * LOGICA CORECTĂ:
+ * - Contract inițial: 02/07/2024 - 02/06/2025 (1 an) = 84,979 tone
+ * - Prelungire 1 până la 02/06/2026 (+1 an): Total 2 ani = 84,979 × 2 = 169,958 tone
+ * - Prelungire 2 până la 02/06/2027 (+1 an): Total 3 ani = 84,979 × 3 = 254,937 tone
+ *
+ * Formula: new_total_quantity = original_quantity × (total_new_duration / original_duration)
  * ============================================================================
  */
 
 /**
- * Calculate proportional quantity for contract extension
+ * Calculate CUMULATIVE proportional quantity for contract extension
+ * Returns the TOTAL quantity for the entire extended contract period
  *
  * @param {Object} params
  * @param {string} params.originalStartDate - Data început contract (YYYY-MM-DD)
@@ -19,9 +25,8 @@
  * @param {string} params.newEndDate - Data sfârșit contract după prelungire (YYYY-MM-DD)
  * @param {number} params.originalQuantity - Cantitatea originală estimată (tone)
  * @param {string} params.amendmentType - Tipul actului adițional (EXTENSION/PRELUNGIRE)
- * @param {string} [params.lastExtensionEndDate] - Data ultimei prelungiri (opțional)
  *
- * @returns {number|null} - Cantitatea calculată proporțional sau null dacă nu e EXTENSION/PRELUNGIRE
+ * @returns {number|null} - Cantitatea TOTALĂ cumulativă sau null dacă nu e EXTENSION/PRELUNGIRE
  */
 export const calculateProportionalQuantity = ({
   originalStartDate,
@@ -29,7 +34,6 @@ export const calculateProportionalQuantity = ({
   newEndDate,
   originalQuantity,
   amendmentType,
-  lastExtensionEndDate = null,
 }) => {
   // Calculul proporțional se face DOAR pentru prelungiri
   const isExtension = amendmentType === 'EXTENSION' || amendmentType === 'PRELUNGIRE';
@@ -57,51 +61,42 @@ export const calculateProportionalQuantity = ({
       return null;
     }
 
-    // Determină data de la care începe prelungirea
-    let extensionStartDate = endDate;
-    if (lastExtensionEndDate) {
-      const lastExtension = new Date(lastExtensionEndDate);
-      if (!Number.isNaN(lastExtension.getTime()) && lastExtension > endDate) {
-        extensionStartDate = lastExtension;
-      }
-    }
-
-    // newEnd trebuie să fie după începutul prelungirii
-    if (newEnd <= extensionStartDate) {
+    // newEnd trebuie să fie după sfârșitul original
+    if (newEnd <= endDate) {
       console.warn(
-        `calculateProportionalQuantity: New end date (${newEndDate}) must be after extension start (${extensionStartDate
-          .toISOString()
-          .split('T')[0]})`
+        `calculateProportionalQuantity: New end date (${newEndDate}) must be after original end (${originalEndDate})`
       );
       return null;
     }
 
     const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
-    // totalDays = perioada ORIGINALĂ (rate zilnic constant)
-    const totalDays = Math.round((endDate - startDate) / MS_PER_DAY);
+    // Perioada ORIGINALĂ (contract inițial)
+    const originalDays = Math.round((endDate - startDate) / MS_PER_DAY);
 
-    // extensionDays = zile de la ultima prelungire (sau sfârșit original) până la noua dată
-    const extensionDays = Math.round((newEnd - extensionStartDate) / MS_PER_DAY);
+    // Perioada TOTALĂ NOUĂ (de la început până la noua dată)
+    const totalNewDays = Math.round((newEnd - startDate) / MS_PER_DAY);
 
-    if (totalDays <= 0 || extensionDays <= 0) {
+    if (originalDays <= 0 || totalNewDays <= 0) {
       console.error('calculateProportionalQuantity: Invalid days calculation');
       return null;
     }
 
-    const dailyRate = qty / totalDays;
-    const proportionalQuantity = dailyRate * extensionDays;
+    // Calculăm rata zilnică pe baza perioadei originale
+    const dailyRate = qty / originalDays;
+
+    // CANTITATEA TOTALĂ CUMULATIVĂ = rata zilnică × zile totale noi
+    const cumulativeQuantity = dailyRate * totalNewDays;
 
     // Round la 3 zecimale
-    const rounded = Math.round(proportionalQuantity * 1000) / 1000;
+    const rounded = Math.round(cumulativeQuantity * 1000) / 1000;
 
-    console.log(`📊 Proportional Quantity Calculation:
-      Original Period: ${originalStartDate} → ${originalEndDate} (${totalDays} days, ${qty}t)
+    console.log(`📊 CUMULATIVE Proportional Quantity Calculation:
+      Original Contract: ${originalStartDate} → ${originalEndDate} (${originalDays} days, ${qty}t)
       Daily Rate: ${dailyRate.toFixed(4)} t/day
-      Extension Start: ${extensionStartDate.toISOString().split('T')[0]}
-      Extension End: ${newEndDate}
-      Extension Days: ${extensionDays} days
-      Proportional Quantity: ${rounded}t
+      New Extended Period: ${originalStartDate} → ${newEndDate} (${totalNewDays} days)
+      Extension Factor: ${(totalNewDays / originalDays).toFixed(2)}x
+      TOTAL CUMULATIVE Quantity: ${rounded}t (was ${qty}t originally)
     `);
 
     return rounded;
@@ -154,7 +149,7 @@ export const getContractDataForProportional = async (
 
 /**
  * Get the last extension end date from existing amendments
- * Used to calculate proportional quantity for multiple extensions
+ * Used for reference but NOT for calculation (we always calculate from original dates)
  *
  * @param {Object} pool - Database pool
  * @param {string} amendmentsTableName - Amendments table name
