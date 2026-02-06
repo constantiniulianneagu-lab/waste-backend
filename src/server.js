@@ -35,7 +35,7 @@ app.set('trust proxy', 1);
 app.use(cors({
   origin: [
     'http://localhost:5173',
-    'https://waste-frontend-2yrrdrnja.vercel.app',
+    'https://waste-frontend-5c3xzpmvc.vercel.app',
     /\.webcontainer\.io$/,
     /\.local-credentialless\.webcontainer\.io$/
   ],
