@@ -593,7 +593,7 @@ export const createAnaerobicContractAmendment = async (req, res) => {
     let finalQuantity = new_estimated_quantity_tons;
     let wasAutoCalculated = false;
 
-    if (finalAmendmentType === 'PRELUNGIRE' && !new_estimated_quantity_tons && new_contract_date_end) {
+    if ((finalAmendmentType === 'PRELUNGIRE' || finalAmendmentType === 'INCETARE') && !new_estimated_quantity_tons && new_contract_date_end) {
       const contractData = await getContractDataForProportional(
         pool,
         'anaerobic_contracts',

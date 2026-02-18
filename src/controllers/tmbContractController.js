@@ -120,7 +120,16 @@ export const getTMBContracts = async (req, res) => {
           tc.tariff_per_ton
         ) as effective_tariff,
 
-        (tc.estimated_quantity_tons + COALESCE((SELECT SUM(tca.new_estimated_quantity_tons) FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL), 0)) as effective_quantity,
+        COALESCE(
+          (SELECT tca.new_estimated_quantity_tons
+           FROM tmb_contract_amendments tca
+           WHERE tca.contract_id = tc.id
+             AND tca.new_estimated_quantity_tons IS NOT NULL
+             AND tca.deleted_at IS NULL
+           ORDER BY tca.amendment_date DESC, tca.id DESC
+           LIMIT 1),
+          tc.estimated_quantity_tons
+        ) as effective_quantity,
 
         COALESCE(
           (SELECT tca.new_indicator_recycling_percent
@@ -149,7 +158,7 @@ export const getTMBContracts = async (req, res) => {
           tc.indicator_disposal_percent
         ) as effective_indicator_disposal_percent,
 
-        (COALESCE((SELECT tca.new_tariff_per_ton FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL ORDER BY tca.amendment_date DESC, tca.id DESC LIMIT 1), tc.tariff_per_ton) * (tc.estimated_quantity_tons + COALESCE((SELECT SUM(tca.new_estimated_quantity_tons) FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL), 0))) as effective_total_value,
+        (COALESCE((SELECT tca.new_tariff_per_ton FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL ORDER BY tca.amendment_date DESC, tca.id DESC LIMIT 1), tc.tariff_per_ton) * COALESCE((SELECT tca.new_estimated_quantity_tons FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.new_estimated_quantity_tons IS NOT NULL AND tca.deleted_at IS NULL ORDER BY tca.amendment_date DESC, tca.id DESC LIMIT 1), tc.estimated_quantity_tons)) as effective_total_value,
 
         (SELECT COUNT(*) FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL) as amendments_count
 
@@ -565,7 +574,7 @@ export const createTMBContractAmendment = async (req, res) => {
     let finalQuantity = new_estimated_quantity_tons;
     let wasAutoCalculated = false;
 
-    if (finalAmendmentType === 'EXTENSION' && !new_estimated_quantity_tons && new_contract_date_end) {
+    if ((finalAmendmentType === 'PRELUNGIRE' || finalAmendmentType === 'INCETARE') && !new_estimated_quantity_tons && new_contract_date_end) {
       const contractData = await getContractDataForProportional(
         pool,
         'tmb_contracts',

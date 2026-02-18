@@ -3,30 +3,22 @@
  * ============================================================================
  * PROPORTIONAL QUANTITY CALCULATION FOR CONTRACT AMENDMENTS
  * ============================================================================
- * Când se prelungește un contract (EXTENSION / PRELUNGIRE), cantitatea se
- * calculează automat proporțional cu TOATĂ perioada contractului.
- *
- * LOGICA CORECTĂ:
- * - Contract inițial: 02/07/2024 - 02/06/2025 (1 an) = 84,979 tone
- * - Prelungire 1 până la 02/06/2026 (+1 an): Total 2 ani = 84,979 × 2 = 169,958 tone
- * - Prelungire 2 până la 02/06/2027 (+1 an): Total 3 ani = 84,979 × 3 = 254,937 tone
- *
- * Formula: new_total_quantity = original_quantity × (total_new_duration / original_duration)
+ * PRELUNGIRE (extensie): newEnd > originalEnd → cantitate CUMULATIVĂ totală
+ * INCETARE (încetare): newEnd < originalEnd → cantitate PROPORȚIONALĂ scurtată
  * ============================================================================
  */
 
 /**
- * Calculate CUMULATIVE proportional quantity for contract extension
- * Returns the TOTAL quantity for the entire extended contract period
+ * Calculate proportional quantity for PRELUNGIRE (cumulative) or INCETARE (shortened)
  *
  * @param {Object} params
- * @param {string} params.originalStartDate - Data început contract (YYYY-MM-DD)
- * @param {string} params.originalEndDate - Data sfârșit contract original (YYYY-MM-DD)
- * @param {string} params.newEndDate - Data sfârșit contract după prelungire (YYYY-MM-DD)
- * @param {number} params.originalQuantity - Cantitatea originală estimată (tone)
- * @param {string} params.amendmentType - Tipul actului adițional (EXTENSION/PRELUNGIRE)
+ * @param {string} params.originalStartDate
+ * @param {string} params.originalEndDate
+ * @param {string} params.newEndDate
+ * @param {number} params.originalQuantity
+ * @param {string} params.amendmentType - PRELUNGIRE/EXTENSION or INCETARE/TERMINATION
  *
- * @returns {number|null} - Cantitatea TOTALĂ cumulativă sau null dacă nu e EXTENSION/PRELUNGIRE
+ * @returns {number|null}
  */
 export const calculateProportionalQuantity = ({
   originalStartDate,
@@ -35,11 +27,11 @@ export const calculateProportionalQuantity = ({
   originalQuantity,
   amendmentType,
 }) => {
-  // Calculul proporțional se face DOAR pentru prelungiri
   const isExtension = amendmentType === 'EXTENSION' || amendmentType === 'PRELUNGIRE';
-  if (!isExtension) return null;
+  const isTermination = amendmentType === 'TERMINATION' || amendmentType === 'INCETARE';
 
-  // Validare parametri
+  if (!isExtension && !isTermination) return null;
+
   if (!originalStartDate || !originalEndDate || !newEndDate || originalQuantity === null || originalQuantity === undefined) {
     console.warn('calculateProportionalQuantity: Missing required parameters');
     return null;
@@ -61,20 +53,24 @@ export const calculateProportionalQuantity = ({
       return null;
     }
 
-    // newEnd trebuie să fie după sfârșitul original
-    if (newEnd <= endDate) {
-      console.warn(
-        `calculateProportionalQuantity: New end date (${newEndDate}) must be after original end (${originalEndDate})`
-      );
+    // PRELUNGIRE: newEnd trebuie să fie DUPĂ originalEnd
+    if (isExtension && newEnd <= endDate) {
+      console.warn(`calculateProportionalQuantity: For PRELUNGIRE, new end (${newEndDate}) must be after original end (${originalEndDate})`);
+      return null;
+    }
+
+    // INCETARE: newEnd trebuie să fie ÎNAINTE de originalEnd
+    if (isTermination && newEnd >= endDate) {
+      console.warn(`calculateProportionalQuantity: For INCETARE, new end (${newEndDate}) must be before original end (${originalEndDate})`);
       return null;
     }
 
     const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
-    // Perioada ORIGINALĂ (contract inițial)
+    // Perioada ORIGINALĂ (contract inițial) - baza de calcul pentru rata zilnică
     const originalDays = Math.round((endDate - startDate) / MS_PER_DAY);
 
-    // Perioada TOTALĂ NOUĂ (de la început până la noua dată)
+    // Noua perioadă totală (de la start la newEnd)
     const totalNewDays = Math.round((newEnd - startDate) / MS_PER_DAY);
 
     if (originalDays <= 0 || totalNewDays <= 0) {
@@ -82,22 +78,25 @@ export const calculateProportionalQuantity = ({
       return null;
     }
 
-    // Calculăm rata zilnică pe baza perioadei originale
+    // Rata zilnică bazată pe contractul ORIGINAL
     const dailyRate = qty / originalDays;
 
-    // CANTITATEA TOTALĂ CUMULATIVĂ = rata zilnică × zile totale noi
-    const cumulativeQuantity = dailyRate * totalNewDays;
+    // Cantitatea TOTALĂ pentru noua perioadă
+    const newQuantity = dailyRate * totalNewDays;
 
-    // Round la 3 zecimale
-    const rounded = Math.round(cumulativeQuantity * 1000) / 1000;
+    const rounded = Math.round(newQuantity * 1000) / 1000;
 
-    console.log(`📊 CUMULATIVE Proportional Quantity Calculation:
-      Original Contract: ${originalStartDate} → ${originalEndDate} (${originalDays} days, ${qty}t)
-      Daily Rate: ${dailyRate.toFixed(4)} t/day
-      New Extended Period: ${originalStartDate} → ${newEndDate} (${totalNewDays} days)
-      Extension Factor: ${(totalNewDays / originalDays).toFixed(2)}x
-      TOTAL CUMULATIVE Quantity: ${rounded}t (was ${qty}t originally)
-    `);
+    if (isExtension) {
+      console.log(`📊 PRELUNGIRE Proportional:
+        Original: ${originalStartDate} → ${originalEndDate} (${originalDays} zile, ${qty}t)
+        Extins până: ${newEndDate} (${totalNewDays} zile total)
+        Rate: ${dailyRate.toFixed(4)} t/zi → TOTAL CUMULATIV: ${rounded}t`);
+    } else {
+      console.log(`📊 INCETARE Proportional:
+        Original: ${originalStartDate} → ${originalEndDate} (${originalDays} zile, ${qty}t)
+        Încetare la: ${newEndDate} (${totalNewDays} zile efectiv)
+        Rate: ${dailyRate.toFixed(4)} t/zi → CANTITATE REDUSĂ: ${rounded}t`);
+    }
 
     return rounded;
   } catch (error) {
@@ -108,14 +107,6 @@ export const calculateProportionalQuantity = ({
 
 /**
  * Helper function to get contract dates and quantity from database
- * Used by amendment creation endpoints
- *
- * @param {Object} pool - Database pool
- * @param {string} tableName - Contract table name
- * @param {string|number} contractId - Contract ID
- * @param {string} quantityField - Name of quantity field
- *
- * @returns {Object|null} - { contract_date_start, contract_date_end, quantity } or null
  */
 export const getContractDataForProportional = async (
   pool,
@@ -149,13 +140,6 @@ export const getContractDataForProportional = async (
 
 /**
  * Get the last extension end date from existing amendments
- * Used for reference but NOT for calculation (we always calculate from original dates)
- *
- * @param {Object} pool - Database pool
- * @param {string} amendmentsTableName - Amendments table name
- * @param {string|number} contractId - Contract ID
- *
- * @returns {string|null} - Last extension end date (YYYY-MM-DD) or null
  */
 export const getLastExtensionEndDate = async (pool, amendmentsTableName, contractId) => {
   try {
