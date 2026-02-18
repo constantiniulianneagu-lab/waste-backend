@@ -29,14 +29,36 @@ const ALLOWED_TMB_AMENDMENT_TYPES = new Set([
 const toNullIfEmpty = (v) => (v === '' ? null : v);
 
 const ensureAllowedAmendmentType = (amendment_type) => {
-  const t = amendment_type ? String(amendment_type) : 'MANUAL';
-  if (!ALLOWED_TMB_AMENDMENT_TYPES.has(t)) {
+  if (!amendment_type) return 'MANUAL';
+  const raw = String(amendment_type).trim().toUpperCase();
+
+  const aliases = {
+    EXTENSION: 'PRELUNGIRE',
+    PRELUNGIRE: 'PRELUNGIRE',
+    TERMINATION: 'INCETARE',
+    INCETARE: 'INCETARE',
+    TARIFF_CHANGE: 'MODIFICARE_TARIF',
+    MODIFICARE_TARIF: 'MODIFICARE_TARIF',
+    QUANTITY_CHANGE: 'MODIFICARE_CANTITATE',
+    MODIFICARE_CANTITATE: 'MODIFICARE_CANTITATE',
+    INDICATOR_CHANGE: 'MODIFICARE_INDICATORI',
+    MODIFICARE_INDICATORI: 'MODIFICARE_INDICATORI',
+    VALIDITY_CHANGE: 'MODIFICARE_VALABILITATE',
+    MODIFICARE_VALABILITATE: 'MODIFICARE_VALABILITATE',
+    AUTO_TERMINATION: 'AUTO_TERMINATION',
+    MANUAL: 'MANUAL',
+    MULTIPLE: 'MANUAL',
+    OTHER: 'MANUAL',
+  };
+
+  const normalized = aliases[raw] || raw;
+  if (!ALLOWED_TMB_AMENDMENT_TYPES.has(normalized)) {
     const allowed = Array.from(ALLOWED_TMB_AMENDMENT_TYPES).join(', ');
     const err = new Error(`amendment_type invalid. Permise: ${allowed}`);
     err.statusCode = 400;
     throw err;
   }
-  return t;
+  return normalized;
 };
 
 // ============================================================================
