@@ -48,6 +48,7 @@ function ensureAllowedDisposalAmendmentType(input) {
     AUTO_TERMINATION: 'AUTO_TERMINATION',
     MANUAL: 'MANUAL',
     MULTIPLE: 'MANUAL',
+    OTHER: 'MANUAL',
   };
   const normalized = aliases[raw] || raw;
   return DISPOSAL_ALLOWED_AMENDMENT_TYPES.has(normalized) ? normalized : 'MANUAL';
@@ -189,16 +190,18 @@ export const getDisposalContracts = async (req, res) => {
           dcs.cec_tax_per_ton
         ) as effective_cec,
         
-        COALESCE(
-          (SELECT dca.new_contracted_quantity_tons 
-           FROM disposal_contract_amendments dca 
-           WHERE dca.contract_id = dc.id 
-             AND dca.deleted_at IS NULL 
-             AND dca.new_contracted_quantity_tons IS NOT NULL
-           ORDER BY dca.amendment_date DESC, dca.id DESC 
-           LIMIT 1),
-          dcs.contracted_quantity_tons
-        ) as effective_quantity
+        ROUND(
+          dcs.contracted_quantity_tons / NULLIF(dc.contract_date_end - dc.contract_date_start + 1, 0)
+          * (
+              COALESCE(
+                (SELECT dca.new_contract_date_end
+                 FROM disposal_contract_amendments dca
+                 WHERE dca.contract_id = dc.id AND dca.deleted_at IS NULL AND dca.new_contract_date_end IS NOT NULL
+                 ORDER BY dca.amendment_date DESC, dca.id DESC LIMIT 1),
+                dc.contract_date_end
+              ) - dc.contract_date_start + 1
+            )
+        , 2) as effective_quantity
 
       FROM disposal_contracts dc
       LEFT JOIN institutions i ON dc.institution_id = i.id
@@ -944,9 +947,9 @@ export const createContractAmendment = async (req, res) => {
     let finalQuantity = new_contracted_quantity_tons;
     let wasAutoCalculated = false;
 
-    const isExtension = finalAmendmentType === 'PRELUNGIRE';
+    const isExtensionOrTermination = finalAmendmentType === 'PRELUNGIRE' || finalAmendmentType === 'INCETARE';
 
-    if (isExtension && !new_contracted_quantity_tons && new_contract_date_end) {
+    if (isExtensionOrTermination && !new_contracted_quantity_tons && new_contract_date_end) {
       // Pentru DISPOSAL, cantitatea este pe disposal_contract_sectors
       const contractDataRes = await pool.query(
         `
