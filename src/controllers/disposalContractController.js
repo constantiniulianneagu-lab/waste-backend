@@ -105,6 +105,7 @@ export const getDisposalContracts = async (req, res) => {
         dc.contract_number,
         dc.contract_date_start,
         dc.contract_date_end,
+        dc.service_start_date,
         dc.is_active,
         dc.notes,
         dc.contract_file_url,
@@ -214,17 +215,79 @@ export const getDisposalContracts = async (req, res) => {
     const result = await pool.query(query, params);
 
     // Calculate effective total value for each contract
-    const contracts = result.rows.map((contract) => {
+    // Formula: sum of periods, each with its own tariff+CEC
+    const contracts = await Promise.all(result.rows.map(async (contract) => {
       const effectiveTariff = parseFloat(contract.effective_tariff) || 0;
       const effectiveCec = parseFloat(contract.effective_cec) || 0;
       const effectiveQuantity = parseFloat(contract.effective_quantity) || 0;
 
+      // Fetch all amendments that changed tariff or CEC for this contract
+      let effectiveTotalValue = effectiveQuantity * (effectiveTariff + effectiveCec); // fallback
+
+      try {
+        const amendRes = await pool.query(
+          `SELECT amendment_date, new_tariff_per_ton, new_cec_tax_per_ton
+           FROM disposal_contract_amendments
+           WHERE contract_id = $1
+             AND deleted_at IS NULL
+             AND (new_tariff_per_ton IS NOT NULL OR new_cec_tax_per_ton IS NOT NULL)
+           ORDER BY amendment_date ASC, id ASC`,
+          [contract.id]
+        );
+
+        if (amendRes.rows.length > 0) {
+          const contractStart = new Date(contract.contract_date_start);
+          const contractEnd = new Date(contract.effective_date_end || contract.contract_date_end);
+          const totalDays = Math.round((contractEnd - contractStart) / 86400000) + 1;
+          const originalQty = parseFloat(contract.contracted_quantity_tons) || 0;
+          const dailyRate = totalDays > 0 ? originalQty / totalDays : 0;
+
+          // Build periods: each time tariff or CEC changes, a new period starts
+          const periods = [];
+          let periodStart = contractStart;
+          let currentTariff = parseFloat(contract.tariff_per_ton) || 0;
+          let currentCec = parseFloat(contract.cec_tax_per_ton) || 0;
+
+          for (const amend of amendRes.rows) {
+            const amendDate = new Date(amend.amendment_date);
+            // Period ends day before amendment
+            const periodEnd = new Date(amendDate);
+            periodEnd.setDate(periodEnd.getDate() - 1);
+
+            if (periodEnd >= periodStart) {
+              const days = Math.round((periodEnd - periodStart) / 86400000) + 1;
+              const qty = Math.round(dailyRate * days * 100) / 100;
+              periods.push({ qty, tariff: currentTariff, cec: currentCec });
+            }
+
+            // Update rates for next period
+            if (amend.new_tariff_per_ton !== null) currentTariff = parseFloat(amend.new_tariff_per_ton);
+            if (amend.new_cec_tax_per_ton !== null) currentCec = parseFloat(amend.new_cec_tax_per_ton);
+            periodStart = amendDate;
+          }
+
+          // Last period: from last amendment date to contract end
+          if (periodStart <= contractEnd) {
+            const days = Math.round((contractEnd - periodStart) / 86400000) + 1;
+            const qty = Math.round(dailyRate * days * 100) / 100;
+            periods.push({ qty, tariff: currentTariff, cec: currentCec });
+          }
+
+          // Sum all periods
+          effectiveTotalValue = Math.round(
+            periods.reduce((sum, p) => sum + p.qty * (p.tariff + p.cec), 0) * 100
+          ) / 100;
+        }
+      } catch (e) {
+        console.error('Period value calc error for contract', contract.id, e);
+      }
+
       return {
         ...contract,
         effective_total_per_ton: effectiveTariff + effectiveCec,
-        effective_total_value: effectiveQuantity * (effectiveTariff + effectiveCec),
+        effective_total_value: effectiveTotalValue,
       };
-    });
+    }));
 
     res.json({
       success: true,
