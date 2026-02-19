@@ -744,16 +744,17 @@ export const updateDisposalContract = async (req, res) => {
           contract_number = COALESCE($1, contract_number),
           contract_date_start = COALESCE($2, contract_date_start),
           contract_date_end = $3,
-          contract_file_url = COALESCE($4, contract_file_url),
-          contract_file_name = COALESCE($5, contract_file_name),
-          contract_file_size = COALESCE($6, contract_file_size),
-          contract_file_type = COALESCE($7, contract_file_type),
-          contract_file_uploaded_at = COALESCE($8, contract_file_uploaded_at),
-          notes = $9,
-          is_active = COALESCE($10, is_active),
-          attribution_type = COALESCE($11, attribution_type),
+          service_start_date = $4,
+          contract_file_url = COALESCE($5, contract_file_url),
+          contract_file_name = COALESCE($6, contract_file_name),
+          contract_file_size = COALESCE($7, contract_file_size),
+          contract_file_type = COALESCE($8, contract_file_type),
+          contract_file_uploaded_at = COALESCE($9, contract_file_uploaded_at),
+          notes = $10,
+          is_active = COALESCE($11, is_active),
+          attribution_type = COALESCE($12, attribution_type),
           updated_at = CURRENT_TIMESTAMP
-        WHERE id = $12 AND deleted_at IS NULL
+        WHERE id = $13 AND deleted_at IS NULL
         RETURNING *
       `;
 
@@ -761,6 +762,7 @@ export const updateDisposalContract = async (req, res) => {
         contract_number,
         contract_date_start,
         contract_date_end || null,
+        service_start_date || null,
         contract_file_url || null,
         contract_file_name || null,
         contract_file_size || null,
