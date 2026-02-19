@@ -137,40 +137,20 @@ export const getSortingOperatorContracts = async (req, res) => {
           soc.tariff_per_ton
         ) as effective_tariff,
 
-        COALESCE(
-          (SELECT soca.new_estimated_quantity_tons
-           FROM sorting_operator_contract_amendments soca
-           WHERE soca.contract_id = soc.id 
-             AND soca.deleted_at IS NULL 
-             AND soca.new_estimated_quantity_tons IS NOT NULL
-           ORDER BY soca.amendment_date DESC, soca.id DESC
-           LIMIT 1),
-          soc.estimated_quantity_tons
-        ) as effective_quantity,
+        ROUND(
+          soc.estimated_quantity_tons / NULLIF(soc.contract_date_end - soc.contract_date_start + 1, 0)
+          * (
+              COALESCE(
+                (SELECT soca.new_contract_date_end
+                 FROM sorting_operator_contract_amendments soca
+                 WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_contract_date_end IS NOT NULL
+                 ORDER BY soca.amendment_date DESC, soca.id DESC LIMIT 1),
+                soc.contract_date_end
+              ) - soc.contract_date_start + 1
+            )
+        , 2) as effective_quantity,
 
-        (
-          COALESCE(
-            (SELECT soca.new_tariff_per_ton
-             FROM sorting_operator_contract_amendments soca
-             WHERE soca.contract_id = soc.id 
-               AND soca.deleted_at IS NULL 
-               AND soca.new_tariff_per_ton IS NOT NULL
-             ORDER BY soca.amendment_date DESC, soca.id DESC
-             LIMIT 1),
-            soc.tariff_per_ton
-          )
-          *
-          COALESCE(
-            (SELECT soca.new_estimated_quantity_tons
-             FROM sorting_operator_contract_amendments soca
-             WHERE soca.contract_id = soc.id 
-               AND soca.deleted_at IS NULL 
-               AND soca.new_estimated_quantity_tons IS NOT NULL
-             ORDER BY soca.amendment_date DESC, soca.id DESC
-             LIMIT 1),
-            soc.estimated_quantity_tons
-          )
-        ) as effective_total_value,
+        (COALESCE((SELECT soca.new_tariff_per_ton FROM sorting_operator_contract_amendments soca WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_tariff_per_ton IS NOT NULL ORDER BY soca.amendment_date DESC, soca.id DESC LIMIT 1), soc.tariff_per_ton) * ROUND(soc.estimated_quantity_tons / NULLIF(soc.contract_date_end - soc.contract_date_start + 1, 0) * (COALESCE((SELECT soca.new_contract_date_end FROM sorting_operator_contract_amendments soca WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_contract_date_end IS NOT NULL ORDER BY soca.amendment_date DESC, soca.id DESC LIMIT 1), soc.contract_date_end) - soc.contract_date_start + 1), 2)) as effective_total_value,
 
         (SELECT COUNT(*)
          FROM sorting_operator_contract_amendments soca

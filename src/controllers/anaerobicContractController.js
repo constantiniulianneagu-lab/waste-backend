@@ -150,25 +150,7 @@ export const getAnaerobicContracts = async (req, res) => {
           anc.estimated_quantity_tons
         ) as effective_quantity,
         
-        (COALESCE(
-          (SELECT anca.new_tariff_per_ton 
-           FROM anaerobic_contract_amendments anca 
-           WHERE anca.contract_id = anc.id 
-             AND anca.new_tariff_per_ton IS NOT NULL 
-             AND anca.deleted_at IS NULL 
-           ORDER BY anca.amendment_date DESC, anca.id DESC 
-           LIMIT 1),
-          anc.tariff_per_ton
-        ) * COALESCE(
-          (SELECT anca.new_estimated_quantity_tons 
-           FROM anaerobic_contract_amendments anca 
-           WHERE anca.contract_id = anc.id 
-             AND anca.new_estimated_quantity_tons IS NOT NULL 
-             AND anca.deleted_at IS NULL 
-           ORDER BY anca.amendment_date DESC, anca.id DESC 
-           LIMIT 1),
-          anc.estimated_quantity_tons
-        )) as effective_total_value,
+        (COALESCE((SELECT anca.new_tariff_per_ton FROM anaerobic_contract_amendments anca WHERE anca.contract_id = anc.id AND anca.new_tariff_per_ton IS NOT NULL AND anca.deleted_at IS NULL ORDER BY anca.amendment_date DESC, anca.id DESC LIMIT 1), anc.tariff_per_ton) * ROUND(anc.estimated_quantity_tons / NULLIF(anc.contract_date_end - anc.contract_date_start + 1, 0) * (COALESCE((SELECT anca.new_contract_date_end FROM anaerobic_contract_amendments anca WHERE anca.contract_id = anc.id AND anca.deleted_at IS NULL AND anca.new_contract_date_end IS NOT NULL ORDER BY anca.amendment_date DESC, anca.id DESC LIMIT 1), anc.contract_date_end) - anc.contract_date_start + 1), 2)) as effective_total_value,
         
         (SELECT COUNT(*)
          FROM anaerobic_contract_amendments anca
