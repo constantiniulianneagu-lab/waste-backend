@@ -873,14 +873,16 @@ export const getUserProfile = async (req, res) => {
         GROUP BY i.id
       `;
 
-      // 3) TMB OPERATORS
+      // 3) TMB OPERATORS - contract-centric (one row per contract, not per operator)
       const tmbQuery = `
         SELECT
-          i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+          tc.id as id,
+          tc.contract_number as name,
           'TMB_OPERATOR' as operator_type,
+          NULL as contact_email, NULL as contact_phone, NULL as address, NULL as website,
           COALESCE(
             json_agg(
-              json_build_object(
+              DISTINCT jsonb_build_object(
                 'contract_id', tc.id,
                 'contract_number', tc.contract_number,
                 'contract_date_start', tc.contract_date_start,
@@ -895,27 +897,23 @@ export const getUserProfile = async (req, res) => {
                 'is_active', tc.is_active,
                 'notes', tc.notes,
                 'has_file', (tc.contract_file_url IS NOT NULL),
-                'association_role',
-                  CASE 
-                    WHEN ta.primary_operator_id = i.id THEN 'PRIMARY'
-                    WHEN ta.secondary_operator_id = i.id THEN 'SECONDARY'
-                    ELSE NULL
-                  END
+                'primary_operator', ip.name,
+                'secondary_operator', ise.name
               )
-              ORDER BY s.sector_number, tc.contract_date_start
             ) FILTER (WHERE tc.id IS NOT NULL),
             '[]'::json
           ) as contracts
-        FROM tmb_associations ta
-        JOIN tmb_contracts tc ON ta.sector_id = tc.sector_id
+        FROM tmb_contracts tc
         JOIN sectors s ON tc.sector_id = s.id
-        JOIN institutions i
-          ON i.id = ta.primary_operator_id OR i.id = ta.secondary_operator_id
-        WHERE i.deleted_at IS NULL
-          AND ta.is_active = true
-          AND tc.deleted_at IS NULL
-          AND ta.sector_id = ANY($1)
-        GROUP BY i.id
+        LEFT JOIN tmb_associations ta ON ta.sector_id = tc.sector_id AND ta.is_active = true
+        LEFT JOIN institutions ip ON ip.id = ta.primary_operator_id AND ip.deleted_at IS NULL
+        LEFT JOIN institutions ise ON ise.id = ta.secondary_operator_id AND ise.deleted_at IS NULL
+        WHERE tc.deleted_at IS NULL
+          AND tc.sector_id = ANY($1)
+        GROUP BY tc.id, tc.contract_number, tc.contract_date_start, tc.contract_date_end,
+                 tc.sector_id, s.sector_name, s.sector_number, tc.tariff_per_ton,
+                 tc.estimated_quantity_tons, tc.contract_value, tc.currency,
+                 tc.is_active, tc.notes, tc.contract_file_url
       `;
 
       // 4) DISPOSAL OPERATORS
@@ -1331,11 +1329,13 @@ export const getProfileOperators = async (req, res) => {
 
     const tmbQuery = `
       SELECT
-        i.id, i.name, i.type, i.contact_email, i.contact_phone, i.address, i.website,
+        tc.id as id,
+        tc.contract_number as name,
         'TMB_OPERATOR' as operator_type,
+        NULL as contact_email, NULL as contact_phone, NULL as address, NULL as website,
         COALESCE(
           json_agg(
-            json_build_object(
+            DISTINCT jsonb_build_object(
               'contract_id', tc.id,
               'contract_number', tc.contract_number,
               'contract_date_start', tc.contract_date_start,
@@ -1350,27 +1350,23 @@ export const getProfileOperators = async (req, res) => {
               'is_active', tc.is_active,
               'notes', tc.notes,
               'has_file', (tc.contract_file_url IS NOT NULL),
-              'association_role',
-                CASE 
-                  WHEN ta.primary_operator_id = i.id THEN 'PRIMARY'
-                  WHEN ta.secondary_operator_id = i.id THEN 'SECONDARY'
-                  ELSE NULL
-                END
+              'primary_operator', ip.name,
+              'secondary_operator', ise.name
             )
-            ORDER BY s.sector_number, tc.contract_date_start
           ) FILTER (WHERE tc.id IS NOT NULL),
           '[]'::json
         ) as contracts
-      FROM tmb_associations ta
-      JOIN tmb_contracts tc ON ta.sector_id = tc.sector_id
+      FROM tmb_contracts tc
       JOIN sectors s ON tc.sector_id = s.id
-      JOIN institutions i
-        ON i.id = ta.primary_operator_id OR i.id = ta.secondary_operator_id
-      WHERE i.deleted_at IS NULL
-        AND ta.is_active = true
-        AND tc.deleted_at IS NULL
-        AND ta.sector_id = ANY($1)
-      GROUP BY i.id
+      LEFT JOIN tmb_associations ta ON ta.sector_id = tc.sector_id AND ta.is_active = true
+      LEFT JOIN institutions ip ON ip.id = ta.primary_operator_id AND ip.deleted_at IS NULL
+      LEFT JOIN institutions ise ON ise.id = ta.secondary_operator_id AND ise.deleted_at IS NULL
+      WHERE tc.deleted_at IS NULL
+        AND tc.sector_id = ANY($1)
+      GROUP BY tc.id, tc.contract_number, tc.contract_date_start, tc.contract_date_end,
+               tc.sector_id, s.sector_name, s.sector_number, tc.tariff_per_ton,
+               tc.estimated_quantity_tons, tc.contract_value, tc.currency,
+               tc.is_active, tc.notes, tc.contract_file_url
     `;
 
     const disposalQuery = `
