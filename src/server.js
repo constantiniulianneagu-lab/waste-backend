@@ -21,6 +21,7 @@ import wasteCodesRoutes from './routes/wasteCodes.js';
 import sectorsRoutes from './routes/sectors.js';
 import contractExportRoutes from './routes/contractExport.js';
 import statsRoutes from './routes/stats.js';
+import notificationRoutes from './routes/notifications.js';
 
 // Dashboard Routes
 import dashboardLandfillRoutes from './routes/dashboard/landfill.js';
@@ -136,6 +137,9 @@ app.use('/api/contracts', contractExportRoutes);
 
 console.log('📍 Mounting stats routes at /api/stats');
 app.use('/api/stats', statsRoutes);
+
+// Notifications
+app.use('/api/notifications', notificationRoutes);
 
 // Dashboard Routes
 console.log('📍 Mounting dashboard landfill routes at /api/dashboard/landfill');
