@@ -33,21 +33,25 @@ const buildDateWhere = ({ year, start_date, end_date, alias = '' }) => {
   const where = [`${del} IS NULL`];
   const params = [];
 
+  // start_date / end_date au prioritate față de year
+  if (start_date || end_date) {
+    if (start_date) {
+      params.push(start_date);
+      where.push(`${col} >= $${params.length}`);
+    }
+    if (end_date) {
+      params.push(end_date);
+      where.push(`${col} <= $${params.length}`);
+    }
+    return { where: where.join(' AND '), params };
+  }
+
   if (year) {
     const y = parseInt(String(year), 10);
     if (Number.isNaN(y)) return { error: `Invalid year: ${year}` };
     params.push(y);
     where.push(`EXTRACT(YEAR FROM ${col}) = $${params.length}`);
     return { where: where.join(' AND '), params };
-  }
-
-  if (start_date) {
-    params.push(start_date);
-    where.push(`${col} >= $${params.length}`);
-  }
-  if (end_date) {
-    params.push(end_date);
-    where.push(`${col} <= $${params.length}`);
   }
 
   return { where: where.join(' AND '), params };
