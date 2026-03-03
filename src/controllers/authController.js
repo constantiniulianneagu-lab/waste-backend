@@ -1,135 +1,248 @@
 // src/controllers/authController.js
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { randomUUID } from 'crypto';
 import pool from '../config/database.js';
 import { resolveUserAccess } from '../middleware/resolveUserAccess.js';
 
-// Generate JWT tokens
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// ============================================================
+// CONFIGURARE
+// ============================================================
+const LOCKOUT_MAX_ATTEMPTS = 10;       // blocat după 10 încercări eșuate
+const LOCKOUT_DURATION_MIN = 30;       // blocat 30 de minute
+
+// ============================================================
+// HELPER — log doar în dev
+// ============================================================
+const devLog = (...args) => {
+  if (!IS_PROD) console.log(...args);
+};
+
+// ============================================================
+// HELPER — audit log
+// ============================================================
+const writeAuditLog = async ({ userId, action, entityType, entityId, ip, userAgent, details }) => {
+  try {
+    await pool.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, user_agent, details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        userId ?? null,
+        action,
+        entityType ?? null,
+        entityId ?? null,
+        ip ?? null,
+        userAgent ?? null,
+        details ? JSON.stringify(details) : null,
+      ]
+    );
+  } catch (err) {
+    // Audit log nu trebuie să blocheze fluxul principal
+    console.error('[AuditLog] Eroare la scriere:', err.message);
+  }
+};
+
+// ============================================================
+// HELPER — computeUserAccess
+// ============================================================
+const computeUserAccess = async (userId, role) => {
+  const mockReq = { user: { id: userId, role } };
+  const mockRes = {
+    status: (code) => ({
+      json: (data) => {
+        throw new Error(`resolveUserAccess status(${code}): ${JSON.stringify(data)}`);
+      },
+    }),
+  };
+  const mockNext = () => {};
+
+  try {
+    await resolveUserAccess(mockReq, mockRes, mockNext);
+    return mockReq.userAccess ?? null;
+  } catch (err) {
+    console.error('[computeUserAccess] Eroare:', err.message);
+    return null;
+  }
+};
+
+// ============================================================
+// HELPER — generează tokens cu jti
+// jti (JWT ID) = UUID unic salvat și în DB pentru lookup O(1)
+// ============================================================
 const generateTokens = (userId, email, role) => {
+  const jti = randomUUID();
+
   const accessToken = jwt.sign(
-    { id: userId, email, role }, // ✅ SCHIMBAT: userId → id
+    { id: userId, email, role },
     process.env.JWT_SECRET,
     { expiresIn: '15m' }
   );
 
   const refreshToken = jwt.sign(
-    { id: userId, email }, // ✅ SCHIMBAT: userId → id
+    { id: userId, email, jti },
     process.env.JWT_REFRESH_SECRET,
     { expiresIn: '7d' }
   );
 
-  return { accessToken, refreshToken };
+  return { accessToken, refreshToken, jti };
 };
 
+// ============================================================
 // LOGIN
+// ============================================================
 export const login = async (req, res) => {
+  const ip = req.ip;
+  const userAgent = req.headers['user-agent'] ?? 'unknown';
+
   try {
     const { email, password } = req.body;
 
-    console.log('🔐 Login attempt:', { email, password: '***' });
-
     // Validare input
     if (!email || !password) {
-      console.log('❌ Missing email or password');
       return res.status(400).json({
         success: false,
-        message: 'Email și parola sunt obligatorii'
+        message: 'Email și parola sunt obligatorii',
       });
     }
 
-    console.log('🔍 Searching for user in database...');
-
     // Găsește user în DB
     const result = await pool.query(
-      'SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL',
-      [email.toLowerCase()]
+      `SELECT id, email, first_name, last_name, role, is_active,
+              password_hash, failed_login_attempts, locked_until
+       FROM users
+       WHERE email = $1 AND deleted_at IS NULL`,
+      [email.toLowerCase().trim()]
     );
 
-    console.log('📊 Database query result:', {
-      rowCount: result.rows.length,
-      userFound: result.rows.length > 0
-    });
-
+    // Răspuns generic — nu dezvăluim dacă email-ul există
     if (result.rows.length === 0) {
-      console.log('❌ User not found with email:', email);
+      await writeAuditLog({
+        action: 'LOGIN_FAILED',
+        ip,
+        userAgent,
+        details: { reason: 'user_not_found', email: email.toLowerCase().trim() },
+      });
       return res.status(401).json({
         success: false,
-        message: 'Email sau parolă greșită'
+        message: 'Email sau parolă greșită',
       });
     }
 
     const user = result.rows[0];
-    console.log('✅ User found:', {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      is_active: user.is_active,
-      hash_preview: user.password_hash?.substring(0, 20)
-    });
+
+    // Verifică dacă contul e blocat
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      const minutesLeft = Math.ceil(
+        (new Date(user.locked_until) - new Date()) / 1000 / 60
+      );
+      await writeAuditLog({
+        userId: user.id,
+        action: 'LOGIN_BLOCKED',
+        ip,
+        userAgent,
+        details: { reason: 'account_locked', minutes_left: minutesLeft },
+      });
+      return res.status(423).json({
+        success: false,
+        message: `Contul este blocat temporar. Încearcă din nou în ${minutesLeft} minute.`,
+      });
+    }
 
     // Verifică dacă user e activ
     if (!user.is_active) {
-      console.log('❌ User is not active');
+      await writeAuditLog({
+        userId: user.id,
+        action: 'LOGIN_FAILED',
+        ip,
+        userAgent,
+        details: { reason: 'account_inactive' },
+      });
       return res.status(403).json({
         success: false,
-        message: 'Contul este dezactivat. Contactați administratorul.'
+        message: 'Contul este dezactivat. Contactați administratorul.',
       });
     }
 
-    console.log('🔒 Comparing passwords...');
-    
     // Verifică parola
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
-    console.log('🔑 Password comparison result:', isPasswordValid ? 'valid' : 'invalid');
-
     if (!isPasswordValid) {
-      console.log('❌ Password does not match');
+      const newAttempts = (user.failed_login_attempts ?? 0) + 1;
+      const shouldLock = newAttempts >= LOCKOUT_MAX_ATTEMPTS;
+
+      await pool.query(
+        `UPDATE users
+         SET failed_login_attempts = $1,
+             locked_until = $2
+         WHERE id = $3`,
+        [
+          newAttempts,
+          shouldLock
+            ? new Date(Date.now() + LOCKOUT_DURATION_MIN * 60 * 1000)
+            : null,
+          user.id,
+        ]
+      );
+
+      await writeAuditLog({
+        userId: user.id,
+        action: 'LOGIN_FAILED',
+        ip,
+        userAgent,
+        details: { reason: 'wrong_password', attempt: newAttempts, locked: shouldLock },
+      });
+
+      if (shouldLock) {
+        console.warn(`[Login] Cont blocat: ${user.email} (${newAttempts} încercări) IP: ${ip}`);
+        return res.status(423).json({
+          success: false,
+          message: `Prea multe încercări eșuate. Contul a fost blocat ${LOCKOUT_DURATION_MIN} minute.`,
+        });
+      }
+
+      const attemptsLeft = LOCKOUT_MAX_ATTEMPTS - newAttempts;
       return res.status(401).json({
         success: false,
-        message: 'Email sau parolă greșită'
+        message: `Email sau parolă greșită. Mai ai ${attemptsLeft} încercări.`,
       });
     }
 
-    console.log('✅ Password matches! Generating tokens...');
+    // Parolă corectă — resetează contorul
+    await pool.query(
+      `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1`,
+      [user.id]
+    );
 
-    // Generează tokens
-    const { accessToken, refreshToken } = generateTokens(
+    // Generează tokens cu jti
+    const { accessToken, refreshToken, jti } = generateTokens(
       user.id,
       user.email,
       user.role
     );
 
-    // Salvează refresh token în DB
+    // Salvează refresh token HASHED + jti în DB
+    const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
     await pool.query(
-      `INSERT INTO refresh_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
-      [user.id, refreshToken]
+      `INSERT INTO refresh_tokens (user_id, token, jti, expires_at)
+       VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
+      [user.id, refreshTokenHash, jti]
     );
 
-    console.log('🎉 Login successful for user:', user.email);
+    // Audit log — login reușit
+    await writeAuditLog({
+      userId: user.id,
+      action: 'LOGIN_SUCCESS',
+      ip,
+      userAgent,
+      details: { role: user.role },
+    });
 
-    // Calculate userAccess for this user
-    const mockReq = { user: { id: user.id, role: user.role } };
-    const mockRes = {
-      status: (code) => ({
-        json: (data) => {
-          throw new Error(`Mock res.status(${code}) called: ${JSON.stringify(data)}`);
-        }
-      })
-    };
-    const mockNext = () => {};
-    
-    try {
-      await resolveUserAccess(mockReq, mockRes, mockNext);
-    } catch (err) {
-      // If resolveUserAccess throws error, userAccess won't be set
-      console.error('[Login] Error calculating userAccess:', err.message);
-    }
-    
-    const userAccess = mockReq.userAccess;
+    devLog(`[Login] Success: ${user.email} (${user.role}) IP: ${ip}`);
 
-    // Returnează user info + tokens + userAccess
+    const userAccess = await computeUserAccess(user.id, user.role);
+
     res.json({
       success: true,
       message: 'Login successful',
@@ -140,167 +253,217 @@ export const login = async (req, res) => {
           firstName: user.first_name,
           lastName: user.last_name,
           role: user.role,
-          userAccess: userAccess // ✅ Add userAccess to response
+          userAccess,
         },
         accessToken,
-        refreshToken
-      }
+        refreshToken,
+      },
     });
 
   } catch (error) {
-    console.error('💥 Login error:', error);
+    console.error('[Login] Eroare:', error.message);
     res.status(500).json({
       success: false,
-      message: 'Eroare la autentificare'
+      message: 'Eroare la autentificare',
     });
   }
 };
 
+// ============================================================
 // LOGOUT
+// ============================================================
 export const logout = async (req, res) => {
-  try {
-    const { refreshToken } = req.body;
+  const ip = req.ip;
+  const userAgent = req.headers['user-agent'] ?? 'unknown';
 
-    if (refreshToken) {
-      // Șterge refresh token din DB
-      await pool.query(
-        'DELETE FROM refresh_tokens WHERE token = $1',
-        [refreshToken]
-      );
+  try {
+    const { refreshToken: token } = req.body;
+
+    if (token) {
+      try {
+        const decoded = jwt.decode(token);
+        if (decoded?.jti) {
+          // ✅ Șterge exact token-ul curent după jti — O(1)
+          await pool.query(
+            'DELETE FROM refresh_tokens WHERE jti = $1',
+            [decoded.jti]
+          );
+        }
+      } catch {
+        // Token malformat — ignorăm
+      }
+
+      // Housekeeping — curăță token-uri expirate
+      await pool.query('DELETE FROM refresh_tokens WHERE expires_at < NOW()');
     }
 
-    res.json({
-      success: true,
-      message: 'Logout successful'
+    const userId = req.user?.id ?? null;
+    await writeAuditLog({
+      userId,
+      action: 'LOGOUT',
+      ip,
+      userAgent,
     });
 
+    res.json({ success: true, message: 'Logout successful' });
+
   } catch (error) {
-    console.error('Logout error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la logout'
-    });
+    console.error('[Logout] Eroare:', error.message);
+    res.status(500).json({ success: false, message: 'Eroare la logout' });
   }
 };
 
-// REFRESH TOKEN
+// ============================================================
+// REFRESH TOKEN — cu rotație + jti
+// ============================================================
 export const refreshToken = async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const { refreshToken: token } = req.body;
 
-    if (!refreshToken) {
+    if (!token) {
       return res.status(400).json({
         success: false,
-        message: 'Refresh token lipsește'
+        message: 'Refresh token lipsește',
       });
     }
 
-    // Verifică dacă token există în DB
+    // Verifică JWT signature + extrage jti
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
+    } catch {
+      return res.status(401).json({
+        success: false,
+        message: 'Refresh token invalid sau expirat',
+      });
+    }
+
+    const { id: userId, jti } = decoded;
+
+    if (!jti) {
+      return res.status(401).json({
+        success: false,
+        message: 'Token format invalid. Te rugăm să te autentifici din nou.',
+      });
+    }
+
+    // ✅ Lookup direct după jti — O(1), fără loop
     const result = await pool.query(
-      `SELECT rt.*, u.email, u.role 
+      `SELECT rt.id, rt.token, rt.user_id, rt.jti,
+              u.email, u.role, u.is_active, u.deleted_at
        FROM refresh_tokens rt
        JOIN users u ON rt.user_id = u.id
-       WHERE rt.token = $1 AND rt.expires_at > NOW()`,
-      [refreshToken]
+       WHERE rt.jti = $1 AND rt.expires_at > NOW()`,
+      [jti]
     );
 
     if (result.rows.length === 0) {
+      // jti valid în JWT dar absent în DB → posibil token reutilizat/furat
+      await pool.query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId]);
+      await writeAuditLog({
+        userId,
+        action: 'TOKEN_REUSE_DETECTED',
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        details: { jti },
+      });
+      console.warn(`[RefreshToken] Token reuse detectat pentru user ${userId} — toate sesiunile revocate.`);
       return res.status(401).json({
         success: false,
-        message: 'Refresh token invalid sau expirat'
+        message: 'Sesiune invalidă. Te rugăm să te autentifici din nou.',
       });
     }
 
     const tokenData = result.rows[0];
 
-    // Verifică JWT signature
-    try {
-      jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-    } catch (err) {
-      // Token invalid, șterge din DB
-      await pool.query('DELETE FROM refresh_tokens WHERE token = $1', [refreshToken]);
-      return res.status(401).json({
+    if (tokenData.deleted_at || !tokenData.is_active) {
+      await pool.query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId]);
+      return res.status(403).json({
         success: false,
-        message: 'Refresh token invalid'
+        message: 'Contul este dezactivat.',
       });
     }
 
-    // Generează nou access token
-    const newAccessToken = jwt.sign(
-      {
-        id: tokenData.user_id,  // ✅ SCHIMBAT: userId → id
-        email: tokenData.email,
-        role: tokenData.role
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '15m' }
-    );
+    // Double-check hash
+    const isHashValid = await bcrypt.compare(token, tokenData.token);
+    if (!isHashValid) {
+      await pool.query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId]);
+      console.warn(`[RefreshToken] Hash invalid pentru jti ${jti} — toate sesiunile revocate.`);
+      return res.status(401).json({
+        success: false,
+        message: 'Sesiune invalidă. Te rugăm să te autentifici din nou.',
+      });
+    }
+
+    // ✅ ROTAȚIE — tokens noi cu jti nou
+    const {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      jti: newJti,
+    } = generateTokens(tokenData.user_id, tokenData.email, tokenData.role);
+
+    const newHash = await bcrypt.hash(newRefreshToken, 10);
+
+    // Tranzacție atomică: șterge vechi, inserează nou
+    await pool.query('BEGIN');
+    try {
+      await pool.query('DELETE FROM refresh_tokens WHERE id = $1', [tokenData.id]);
+      await pool.query(
+        `INSERT INTO refresh_tokens (user_id, token, jti, expires_at)
+         VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
+        [tokenData.user_id, newHash, newJti]
+      );
+      await pool.query('COMMIT');
+    } catch (txErr) {
+      await pool.query('ROLLBACK');
+      throw txErr;
+    }
+
+    devLog(`[RefreshToken] Rotație OK pentru user ${tokenData.user_id}`);
 
     res.json({
       success: true,
       data: {
-        accessToken: newAccessToken
-      }
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+      },
     });
 
   } catch (error) {
-    console.error('Refresh token error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la refresh token'
-    });
+    console.error('[RefreshToken] Eroare:', error.message);
+    res.status(500).json({ success: false, message: 'Eroare la refresh token' });
   }
 };
 
+// ============================================================
 // GET CURRENT USER
+// ============================================================
 export const getCurrentUser = async (req, res) => {
   try {
-    // req.user vine din auth middleware - acum are "id" în loc de "userId"
-    const userId = req.user.id; // ✅ SCHIMBAT: userId → id
+    const userId = req.user.id;
 
     const result = await pool.query(
       `SELECT id, email, first_name, last_name, role, is_active, created_at
-       FROM users 
-       WHERE id = $1 AND deleted_at IS NULL`,
+       FROM users WHERE id = $1 AND deleted_at IS NULL`,
       [userId]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User negăsit' });
     }
 
     const user = result.rows[0];
 
-    // Calculate userAccess
-    const mockReq = { user: { id: user.id, role: user.role } };
-    const mockRes = {
-      status: (code) => ({
-        json: (data) => {
-          throw new Error(`Mock res.status(${code}) called: ${JSON.stringify(data)}`);
-        }
-      })
-    };
-    const mockNext = () => {};
-    
-    try {
-      await resolveUserAccess(mockReq, mockRes, mockNext);
-    } catch (err) {
-      console.error('[getCurrentUser] Error calculating userAccess:', err.message);
-    }
-    
-    const userAccess = mockReq.userAccess;
-
-    // Găsește instituțiile userului
-    const institutionsResult = await pool.query(
-      `SELECT i.id, i.name, i.type, i.sector
-       FROM institutions i
-       JOIN user_institutions ui ON i.id = ui.institution_id
-       WHERE ui.user_id = $1 AND ui.deleted_at IS NULL AND i.deleted_at IS NULL`,
-      [userId]
-    );
+    const [userAccess, institutionsResult] = await Promise.all([
+      computeUserAccess(user.id, user.role),
+      pool.query(
+        `SELECT i.id, i.name, i.type, i.sector
+         FROM institutions i
+         JOIN user_institutions ui ON i.id = ui.institution_id
+         WHERE ui.user_id = $1 AND ui.deleted_at IS NULL AND i.deleted_at IS NULL`,
+        [userId]
+      ),
+    ]);
 
     res.json({
       success: true,
@@ -313,15 +476,12 @@ export const getCurrentUser = async (req, res) => {
         isActive: user.is_active,
         createdAt: user.created_at,
         institutions: institutionsResult.rows,
-        userAccess: userAccess // ✅ Add userAccess
-      }
+        userAccess,
+      },
     });
 
   } catch (error) {
-    console.error('Get current user error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Eroare la obținerea datelor user'
-    });
+    console.error('[GetCurrentUser] Eroare:', error.message);
+    res.status(500).json({ success: false, message: 'Eroare la obținerea datelor user' });
   }
 };

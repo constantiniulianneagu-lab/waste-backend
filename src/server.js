@@ -2,6 +2,8 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import institutionRoutes from './routes/institutions.js';
@@ -28,154 +30,188 @@ import dashboardLandfillRoutes from './routes/dashboard/landfill.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const IS_PROD = process.env.NODE_ENV === 'production';
 
 // ✅ IMPORTANT (Render / reverse proxy): needed for express-rate-limit + req.ip
 app.set('trust proxy', 1);
 
-// CORS
-app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'https://waste-frontend-5c3xzpmvc.vercel.app',
-    /\.webcontainer\.io$/,
-    /\.local-credentialless\.webcontainer\.io$/
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+// ============================================================
+// SECURITY HEADERS — helmet
+// ============================================================
+app.use(helmet({
+  // Permite încărcarea fonturilor și imaginilor din același origin
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      fontSrc: ["'self'"],
+      connectSrc: ["'self'"],
+      frameSrc: ["'none'"],
+      objectSrc: ["'none'"],
+    },
+  },
+  // HSTS — spune browserului să folosească HTTPS minim 1 an
+  hsts: IS_PROD ? {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  } : false,
+  // Previne clickjacking
+  frameguard: { action: 'deny' },
+  // Previne MIME sniffing
+  noSniff: true,
+  // Referrer policy strictă
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 }));
 
-// Body parser
-app.use(express.json());
+// ============================================================
+// CORS
+// ============================================================
+const allowedOrigins = IS_PROD
+  ? [
+      process.env.FRONTEND_URL || 'https://waste-frontend-5c3xzpmvc.vercel.app',
+    ]
+  : [
+      'http://localhost:5173',
+      'https://waste-frontend-5c3xzpmvc.vercel.app',
+      /\.webcontainer\.io$/,
+      /\.local-credentialless\.webcontainer\.io$/,
+    ];
 
-// Logging middleware
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+// ============================================================
+// BODY PARSER — cu limită explicită
+// ============================================================
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// ============================================================
+// RATE LIMITING GLOBAL — protecție împotriva abuzului
+// ============================================================
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,   // 15 minute
+  max: 300,                    // 300 request-uri per IP per fereastră
+  message: {
+    success: false,
+    message: 'Prea multe cereri. Te rugăm să încerci din nou în 15 minute.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/health', // health check nu e limitat
+});
+app.use(globalLimiter);
+
+// Rate limiter mai strict pentru endpoint-uri de export (consum mare de resurse)
+const exportLimiter = rateLimit({
+  windowMs: 60 * 1000,  // 1 minut
+  max: 10,              // max 10 exporturi pe minut per IP
+  message: {
+    success: false,
+    message: 'Prea multe exporturi. Te rugăm să aștepți un minut.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ============================================================
+// LOGGING — minimal în producție
+// ============================================================
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  if (!IS_PROD) {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  }
   next();
 });
 
-// Health check
+// ============================================================
+// HEALTH CHECK
+// ============================================================
 app.get('/health', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
   });
 });
 
-// Root
+// ============================================================
+// ROOT
+// ============================================================
 app.get('/', (req, res) => {
-  res.json({ 
+  res.json({
     message: 'WasteApp Backend API',
     version: '1.0.0',
-    endpoints: {
-      health: '/health',
-      auth: '/api/auth/*',
-      users: '/api/users/*',
-      institutions: '/api/institutions/*',
-      tmb: '/api/tmb/*',
-      reports: '/api/reports/*',
-      contracts: '/api/contracts/*',
-      wasteCodes: '/api/waste-codes/*',
-      sectors: '/api/sectors/*',
-      stats: '/api/stats/*'
-    }
   });
 });
 
-// API Routes
-console.log('📍 Mounting auth routes at /api/auth');
+// ============================================================
+// API ROUTES
+// ============================================================
 app.use('/api/auth', authRoutes);
-
-console.log('📍 Mounting user routes at /api/users');
 app.use('/api/users', userRoutes);
-
-console.log('📍 Mounting institution routes at /api/institutions');
 app.use('/api/institutions', institutionRoutes);
-
-console.log('📍 Mounting TMB routes at /api/tmb');
 app.use('/api/tmb', tmbRoutes);
-
-console.log('📍 Mounting landfill ticket routes at /api/tickets/landfill');
 app.use('/api/tickets/landfill', landfillTicketRoutes);
-
-console.log('📍 Mounting TMB ticket routes at /api/tickets/tmb');
 app.use('/api/tickets/tmb', tmbTicketRoutes);
-
-console.log('📍 Mounting recycling ticket routes at /api/tickets/recycling');
 app.use('/api/tickets/recycling', recyclingTicketRoutes);
-
-console.log('📍 Mounting recovery ticket routes at /api/tickets/recovery');
 app.use('/api/tickets/recovery', recoveryTicketRoutes);
-
-console.log('📍 Mounting disposal ticket routes at /api/tickets/disposal');
 app.use('/api/tickets/disposal', disposalTicketRoutes);
-
-console.log('📍 Mounting rejected ticket routes at /api/tickets/rejected');
 app.use('/api/tickets/rejected', rejectedTicketRoutes);
-
-console.log('📍 Mounting reports routes at /api/reports');
 app.use('/api/reports', reportsRoutes);
-
-console.log('📍 Mounting TMB reports routes at /api/reports/tmb');
 app.use('/api/reports/tmb', reportTmbRoutes);
-
-console.log('📍 Mounting landfill reports routes at /api/reports/landfill');
 app.use('/api/reports/landfill', reportLandfillRoutes);
-
-console.log('📍 Mounting contract files routes at /api/contracts');
 app.use('/api/contracts', contractFilesRoutes);
-
-console.log('📍 Mounting waste codes routes at /api/waste-codes');
 app.use('/api/waste-codes', wasteCodesRoutes);
-
-console.log('📍 Mounting sectors routes at /api/sectors');
 app.use('/api/sectors', sectorsRoutes);
 
-console.log('📍 Mounting contract export routes at /api/contracts');
-app.use('/api/contracts', contractExportRoutes);
+// Export routes — rate limiter mai strict
+app.use('/api/contracts', exportLimiter, contractExportRoutes);
 
-console.log('📍 Mounting stats routes at /api/stats');
 app.use('/api/stats', statsRoutes);
-
-// Notifications
 app.use('/api/notifications', notificationRoutes);
-
-// Dashboard Routes
-console.log('📍 Mounting dashboard landfill routes at /api/dashboard/landfill');
 app.use('/api/dashboard/landfill', dashboardLandfillRoutes);
-
-console.log('📍 Mounting TMB dashboard routes at /api/dashboard/tmb');
 app.use('/api/dashboard/tmb', tmbDashboardRoutes);
 
-// Debug - list all routes
-console.log('📋 Registered routes:');
-app._router.stack.forEach((middleware) => {
-  if (middleware.route) {
-    console.log(`  ${Object.keys(middleware.route.methods)} ${middleware.route.path}`);
-  }
-});
-
-// 404 handler
+// ============================================================
+// 404 HANDLER
+// ============================================================
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: 'Endpoint not found'
+    message: 'Endpoint not found',
   });
 });
 
-// Error handler
+// ============================================================
+// ERROR HANDLER
+// ============================================================
 app.use((err, req, res, next) => {
+  // Nu expunem detalii de eroare în producție
+  if (IS_PROD) {
+    console.error(`[ERROR] ${req.method} ${req.path} —`, err.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Eroare internă server',
+    });
+  }
   console.error('Server error:', err);
   res.status(500).json({
     success: false,
-    message: 'Internal server error'
+    message: err.message || 'Eroare internă server',
   });
 });
 
-// Start server
+// ============================================================
+// START
+// ============================================================
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🌐 Health check: http://localhost:${PORT}/health`);
+  console.log(`🚀 Server pornit pe portul ${PORT} [${process.env.NODE_ENV || 'development'}]`);
 });
