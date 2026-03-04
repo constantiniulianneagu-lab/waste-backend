@@ -46,13 +46,20 @@ const baseTemplate = (content) => `
           
           <!-- HEADER -->
           <tr>
-            <td style="background:#1e40af;padding:32px 40px;">
-              <p style="margin:0;color:#ffffff;font-size:20px;font-weight:bold;">
-                🗂️ SAMD
-              </p>
-              <p style="margin:4px 0 0;color:#93c5fd;font-size:13px;">
-                Sistem de Administrare și Monitorizare a Deșeurilor
-              </p>
+            <td style="background:linear-gradient(135deg,#059669,#0d9488);padding:32px 40px;">
+              <table cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="padding-right:14px;vertical-align:middle;">
+                    <div style="width:44px;height:44px;background:rgba(255,255,255,0.2);border-radius:12px;display:flex;align-items:center;justify-content:center;text-align:center;line-height:44px;">
+                      <span style="color:#ffffff;font-size:22px;font-weight:900;font-family:Arial,sans-serif;">S</span>
+                    </div>
+                  </td>
+                  <td style="vertical-align:middle;">
+                    <p style="margin:0;color:#ffffff;font-size:22px;font-weight:900;letter-spacing:-0.5px;">SAMD</p>
+                    <p style="margin:3px 0 0;color:rgba(255,255,255,0.8);font-size:12px;">Sistem Avansat de Monitorizare Deșeuri</p>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
 
