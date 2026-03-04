@@ -120,7 +120,7 @@ export const resolveUserAccess = async (req, res, next) => {
         scopes: {
           landfill: "ALL",          // ✅ All sectors, read-only
           tmb: "ALL",               // ✅ All sectors, read-only
-          sectors: "ALL",           // ✅ All sectors, read-only (CORRECTED)
+          sectors: "NONE",          // ✅ No access (in lucru)
           reports: "NONE",          // ✅ No access
           institutions: "NONE",     // ✅ No access
           users: "NONE",            // ✅ No access
@@ -161,7 +161,7 @@ export const resolveUserAccess = async (req, res, next) => {
           scopes: {
             landfill: "ALL",         // ✅ All sectors, read-only
             tmb: "ALL",              // ✅ All sectors, read-only
-            sectors: "ALL",          // ✅ All sectors, read-only
+            sectors: "NONE",         // ✅ No access (in lucru)
             reports: "ALL",          // ✅ All sectors, read-only
             profileContracts: "ALL", // ✅ All sectors, read-only
             institutions: "NONE",    // ✅ No access (CORRECTED)
@@ -197,7 +197,7 @@ export const resolveUserAccess = async (req, res, next) => {
             landfill: "ALL",             // ✅ All sectors, read-only
             tmb: "ALL",                  // ✅ All sectors, read-only
             reports: "SECTOR",           // ✅ Only their sector, read-only
-            sectors: "SECTOR",           // ✅ Only their sector, read-only
+            sectors: "NONE",             // ✅ No access (in lucru)
             profileContracts: "SECTOR",  // ✅ Only their sector, read-only
             institutions: "NONE",        // ✅ No access
             users: "NONE",               // ✅ No access
