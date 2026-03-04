@@ -24,6 +24,7 @@ import sectorsRoutes from './routes/sectors.js';
 import contractExportRoutes from './routes/contractExport.js';
 import statsRoutes from './routes/stats.js';
 import notificationRoutes from './routes/notifications.js';
+import aiAssistantRoutes from './routes/aiAssistant.js';
 
 // Dashboard Routes
 import dashboardLandfillRoutes from './routes/dashboard/landfill.js';
@@ -178,6 +179,7 @@ app.use('/api/contracts', exportLimiter, contractExportRoutes);
 
 app.use('/api/stats', statsRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/ai', aiAssistantRoutes);
 app.use('/api/dashboard/landfill', dashboardLandfillRoutes);
 app.use('/api/dashboard/tmb', tmbDashboardRoutes);
 
