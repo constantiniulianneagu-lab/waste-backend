@@ -70,11 +70,13 @@ app.use(helmet({
 // CORS
 // ============================================================
 const allowedOrigins = [
-  // Producție
-  process.env.FRONTEND_URL || 'https://waste-frontend-70nh9jvv1.vercel.app',
+  // Producție — URL fix din env var
+  process.env.FRONTEND_URL || 'https://waste-frontend-5c3xzpmvc.vercel.app',
   // Development local
   'http://localhost:5173',
-  // StackBlitz WebContainer (dev) — regex acceptă orice subdomain
+  // Vercel preview deployments (waste-frontend-*.vercel.app)
+  /^https:\/\/waste-frontend-[a-z0-9-]+\.vercel\.app$/,
+  // StackBlitz WebContainer (dev)
   /\.webcontainer\.io$/,
   /\.local-credentialless\.webcontainer\.io$/,
 ];
