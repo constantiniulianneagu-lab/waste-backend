@@ -12,7 +12,18 @@
 
 import { Resend } from 'resend';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// ✅ Inițializare lazy — nu crăpăm la start dacă API key lipsește
+// Setează RESEND_API_KEY în environment variables când ai acces la domeniu
+let resend = null;
+const getResend = () => {
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error('RESEND_API_KEY lipsește din environment variables');
+  }
+  if (!resend) {
+    resend = new Resend(process.env.RESEND_API_KEY);
+  }
+  return resend;
+};
 const FROM = process.env.EMAIL_FROM || 'noreply@adigidmb.ro';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
@@ -110,7 +121,7 @@ export const sendWelcomeEmail = async ({ to, firstName, lastName, email, tempora
     </a>
   `;
 
-  return resend.emails.send({
+  return getResend().emails.send({
     from: FROM,
     to,
     subject: 'Contul tău SAMD a fost creat',
@@ -152,7 +163,7 @@ export const sendPasswordResetEmail = async ({ to, firstName, resetToken }) => {
     </p>
   `;
 
-  return resend.emails.send({
+  return getResend().emails.send({
     from: FROM,
     to,
     subject: 'Resetare parolă SAMD',
