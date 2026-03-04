@@ -107,7 +107,7 @@ export const sendWelcomeEmail = async ({ to, firstName, lastName, email, tempora
           </p>
           <p style="margin:0;color:#1e293b;font-size:15px;">
             <strong>Parolă temporară:</strong>
-            <span style="background:#dbeafe;color:#1d4ed8;padding:2px 10px;border-radius:4px;font-family:monospace;font-size:16px;letter-spacing:1px;">
+            <span style="background:#d1fae5;color:#065f46;padding:2px 10px;border-radius:4px;font-family:monospace;font-size:16px;letter-spacing:1px;">
               ${temporaryPassword}
             </span>
           </p>
@@ -123,7 +123,7 @@ export const sendWelcomeEmail = async ({ to, firstName, lastName, email, tempora
     </div>
 
     <a href="${FRONTEND_URL}" 
-       style="display:inline-block;background:#1e40af;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold;">
+       style="display:inline-block;background:#059669;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold;">
       Accesează SAMD →
     </a>
   `;
@@ -153,7 +153,7 @@ export const sendPasswordResetEmail = async ({ to, firstName, resetToken }) => {
     </p>
 
     <a href="${resetUrl}"
-       style="display:inline-block;background:#1e40af;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold;margin-bottom:24px;">
+       style="display:inline-block;background:#059669;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold;margin-bottom:24px;">
       Resetează parola →
     </a>
 
