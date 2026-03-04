@@ -110,7 +110,7 @@ export const login = async (req, res) => {
     // Găsește user în DB
     const result = await pool.query(
       `SELECT id, email, first_name, last_name, role, is_active,
-              password_hash, failed_login_attempts, locked_until
+              password_hash, failed_login_attempts, locked_until, must_change_password
        FROM users
        WHERE email = $1 AND deleted_at IS NULL`,
       [email.toLowerCase().trim()]
@@ -253,6 +253,7 @@ export const login = async (req, res) => {
           firstName: user.first_name,
           lastName: user.last_name,
           role: user.role,
+          mustChangePassword: user.must_change_password,
           userAccess,
         },
         accessToken,
