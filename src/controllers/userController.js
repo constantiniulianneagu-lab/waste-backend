@@ -428,6 +428,22 @@ const _createUserInternal = async (req, res, data) => {
 
     await client.query('COMMIT');
 
+    // Audit log — user creat
+    await writeAuditLog({
+      userId: req.user?.id ?? null,
+      action: 'USER_CREATED',
+      entityType: 'user',
+      entityId: newUser.id,
+      ip: req.ip,
+      userAgent: req.headers?.['user-agent'],
+      details: {
+        email: newUser.email,
+        role: newUser.role,
+        createdBy: req.user?.id,
+        createdByRole: req.user?.role,
+      },
+    });
+
     return res.status(201).json({
       success: true,
       message: 'Utilizator creat cu succes',
@@ -581,6 +597,16 @@ export const deleteUser = async (req, res) => {
     }
 
 
+    // Obține info user înainte de ștergere pentru audit log
+    const userInfo = await pool.query(
+      `SELECT id, email, role FROM users WHERE id = $1 AND deleted_at IS NULL`,
+      [targetUserId]
+    );
+
+    if (userInfo.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Utilizator negăsit' });
+    }
+
     const result = await pool.query(
       `UPDATE users SET deleted_at = CURRENT_TIMESTAMP, is_active = false, updated_at = CURRENT_TIMESTAMP
        WHERE id = $1 AND deleted_at IS NULL`,
@@ -590,6 +616,22 @@ export const deleteUser = async (req, res) => {
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Utilizator negăsit' });
     }
+
+    // Audit log — user șters
+    await writeAuditLog({
+      userId: req.user?.id ?? null,
+      action: 'USER_DELETED',
+      entityType: 'user',
+      entityId: targetUserId,
+      ip: req.ip,
+      userAgent: req.headers?.['user-agent'],
+      details: {
+        deletedEmail: userInfo.rows[0].email,
+        deletedRole: userInfo.rows[0].role,
+        deletedBy: req.user?.id,
+        deletedByRole: req.user?.role,
+      },
+    });
 
     res.json({ success: true, message: 'Utilizator șters cu succes' });
   } catch (error) {
