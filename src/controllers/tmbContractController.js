@@ -67,17 +67,18 @@ const ensureAllowedAmendmentType = (amendment_type) => {
 export const getTMBContracts = async (req, res) => {
   try {
     const { sector_id, is_active } = req.query;
-    // ── Filtrare automată după sector pentru EDITOR_INSTITUTION ──
-    const { visibleSectorIds, accessLevel } = req.userAccess || {};
-    if (accessLevel === 'SECTOR' && Array.isArray(visibleSectorIds) && visibleSectorIds.length > 0) {
-      const placeholders = visibleSectorIds.map(() => `$${paramCount++}`).join(', ');
-      whereConditions.push(`tc.sector_id = ANY(ARRAY[${placeholders}]::uuid[])`);
-      params.push(...visibleSectorIds);
-    }
 
     let whereConditions = ['tc.deleted_at IS NULL'];
     const params = [];
     let paramCount = 1;
+
+    // ── Filtrare automată după sector pentru EDITOR_INSTITUTION ──
+    const { visibleSectorIds, accessLevel } = req.userAccess || {};
+    if (accessLevel === 'SECTOR' && Array.isArray(visibleSectorIds) && visibleSectorIds.length > 0) {
+      const placeholders = visibleSectorIds.map(() => `${paramCount++}`).join(', ');
+      whereConditions.push(`tc.sector_id = ANY(ARRAY[${placeholders}]::uuid[])`);
+      params.push(...visibleSectorIds);
+    }
 
     if (sector_id) {
       whereConditions.push(`tc.sector_id = $${paramCount}`);
