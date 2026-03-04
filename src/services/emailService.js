@@ -46,7 +46,7 @@ const baseTemplate = (content) => `
           
           <!-- HEADER -->
           <tr>
-            <td style="background:linear-gradient(135deg,#059669,#0d9488);padding:32px 40px;">
+            <td style="background:#059669;padding:32px 40px;">
               <table cellpadding="0" cellspacing="0">
                 <tr>
                   <td style="padding-right:14px;vertical-align:middle;">
