@@ -71,7 +71,7 @@ app.use(helmet({
 // ============================================================
 const allowedOrigins = [
   // Producție
-  process.env.FRONTEND_URL || 'https://waste-frontend-5c3xzpmvc.vercel.app',
+  process.env.FRONTEND_URL || 'https://waste-frontend-70nh9jvv1.vercel.app',
   // Development local
   'http://localhost:5173',
   // StackBlitz WebContainer (dev) — regex acceptă orice subdomain
