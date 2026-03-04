@@ -69,16 +69,15 @@ app.use(helmet({
 // ============================================================
 // CORS
 // ============================================================
-const allowedOrigins = IS_PROD
-  ? [
-      process.env.FRONTEND_URL || 'https://waste-frontend-5c3xzpmvc.vercel.app',
-    ]
-  : [
-      'http://localhost:5173',
-      'https://waste-frontend-5c3xzpmvc.vercel.app',
-      /\.webcontainer\.io$/,
-      /\.local-credentialless\.webcontainer\.io$/,
-    ];
+const allowedOrigins = [
+  // Producție
+  process.env.FRONTEND_URL || 'https://waste-frontend-5c3xzpmvc.vercel.app',
+  // Development local
+  'http://localhost:5173',
+  // StackBlitz WebContainer (dev) — regex acceptă orice subdomain
+  /\.webcontainer\.io$/,
+  /\.local-credentialless\.webcontainer\.io$/,
+];
 
 app.use(cors({
   origin: allowedOrigins,
