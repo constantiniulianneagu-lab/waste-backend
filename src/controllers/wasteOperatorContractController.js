@@ -79,9 +79,8 @@ export const getWasteCollectorContracts = async (req, res) => {
     // ── Filtrare automată după sector pentru EDITOR_INSTITUTION ──
     const { visibleSectorIds, accessLevel } = req.userAccess || {};
     if (accessLevel === 'SECTOR' && Array.isArray(visibleSectorIds) && visibleSectorIds.length > 0) {
-      const placeholders = visibleSectorIds.map(() => `$${p++}`).join(', ');
-      where.push(`wcc.sector_id = ANY(ARRAY[${placeholders}]::uuid[])`);
-      params.push(...visibleSectorIds);
+      where.push(`wcc.sector_id = ANY($${p++}::uuid[])`);
+      params.push(visibleSectorIds);
     }
 
     if (!isAllInstitution(institutionId)) {

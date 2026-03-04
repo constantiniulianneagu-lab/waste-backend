@@ -69,9 +69,8 @@ export const getSortingOperatorContracts = async (req, res) => {
     // ── Filtrare automată după sector pentru EDITOR_INSTITUTION ──
     const { visibleSectorIds, accessLevel } = req.userAccess || {};
     if (accessLevel === 'SECTOR' && Array.isArray(visibleSectorIds) && visibleSectorIds.length > 0) {
-      const placeholders = visibleSectorIds.map(() => `${paramCount++}`).join(', ');
-      whereConditions.push(`soc.sector_id = ANY(ARRAY[${placeholders}]::uuid[])`);
-      params.push(...visibleSectorIds);
+      whereConditions.push(`soc.sector_id = ANY($${paramCount++}::uuid[])`);
+      params.push(visibleSectorIds);
     }
 
     if (sector_id) {
