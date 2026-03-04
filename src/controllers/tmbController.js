@@ -163,10 +163,3 @@ export const getTmbAssociations = async (req, res) => {
     });
   }
 };
-
-export { getTmbOperatorsBySector, getTmbAssociations };
-
-export default {
-  getTmbOperatorsBySector,
-  getTmbAssociations
-};
