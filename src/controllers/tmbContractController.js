@@ -118,6 +118,10 @@ export const getTMBContracts = async (req, res) => {
         tc.indicator_energy_recovery_percent,
         tc.indicator_disposal_percent,
         tc.attribution_type,
+        tc.estimated_quantity_annual,
+        tc.service_order_file_url,
+        tc.service_order_file_name,
+        tc.service_order_file_size,
         tc.created_by,
         tc.created_at,
         tc.updated_at,
@@ -281,6 +285,10 @@ export const createTMBContract = async (req, res) => {
       is_active,
       notes,
       attribution_type,
+      estimated_quantity_annual,
+      service_order_file_url,
+      service_order_file_name,
+      service_order_file_size,
     } = req.body;
 
     const query = `
@@ -306,9 +314,13 @@ export const createTMBContract = async (req, res) => {
         is_active,
         notes,
         attribution_type,
+        estimated_quantity_annual,
+        service_order_file_url,
+        service_order_file_name,
+        service_order_file_size,
         created_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26
       )
       RETURNING *
     `;
@@ -335,6 +347,10 @@ export const createTMBContract = async (req, res) => {
       is_active !== undefined ? is_active : true,
       notes || null,
       attribution_type || null,
+      toNullIfEmpty(estimated_quantity_annual),
+      service_order_file_url || null,
+      service_order_file_name || null,
+      service_order_file_size || null,
       req.user.id,
     ];
 
@@ -413,6 +429,10 @@ export const updateTMBContract = async (req, res) => {
       is_active,
       notes,
       attribution_type,
+      estimated_quantity_annual,
+      service_order_file_url,
+      service_order_file_name,
+      service_order_file_size,
     } = req.body;
 
     const query = `
@@ -438,8 +458,12 @@ export const updateTMBContract = async (req, res) => {
         is_active = $19,
         notes = $20,
         attribution_type = $21,
+        estimated_quantity_annual = $22,
+        service_order_file_url = $23,
+        service_order_file_name = $24,
+        service_order_file_size = $25,
         updated_at = NOW()
-      WHERE id = $22 AND deleted_at IS NULL
+      WHERE id = $26 AND deleted_at IS NULL
       RETURNING *
     `;
 
@@ -465,6 +489,10 @@ export const updateTMBContract = async (req, res) => {
       is_active,
       notes || null,
       attribution_type || null,
+      toNullIfEmpty(estimated_quantity_annual),
+      service_order_file_url || null,
+      service_order_file_name || null,
+      service_order_file_size || null,
       contractId,
     ];
 
