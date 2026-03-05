@@ -27,17 +27,17 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
   const P = sp(sectorParam);
 
   const [
-    depozitare_per_sector_90z,
-    depozitare_lunar_12luni,
+    depozitare_per_sector,
+    depozitare_lunar,
     depozitare_top_zile,
-    tmb_per_sector_90z,
-    tmb_lunar_12luni,
+    tmb_per_sector,
+    tmb_lunar,
     tmb_discrepante,
-    reciclare_per_sector_90z,
-    reciclare_lunar_12luni,
-    recuperare_per_sector_90z,
-    eliminare_per_sector_90z,
-    respinse_per_sector_90z,
+    reciclare_per_sector,
+    reciclare_lunar,
+    recuperare_per_sector,
+    eliminare_per_sector,
+    respinse_per_sector,
     sumar_general,
     contracte_active_per_tip,
     contracte_expira_60z,
@@ -58,8 +58,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          ROUND(AVG(wt.net_weight_tons)::numeric, 3) as medie_tone_per_tiket
        FROM waste_tickets_landfill wt
        JOIN sectors s ON wt.sector_id = s.id
-       WHERE wt.deleted_at IS NULL AND wt.ticket_date >= NOW() - INTERVAL '90 days'
-       ${sf('wt.sector_id', sectorFilter)}
+       WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY s.sector_number, s.sector_name ORDER BY total_tone DESC`, P),
 
     // DEPOZITARE lunar 12 luni per sector
@@ -68,8 +67,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          ROUND(SUM(net_weight_tons)::numeric, 2) as tone
        FROM waste_tickets_landfill wt
        JOIN sectors s ON wt.sector_id = s.id
-       WHERE wt.deleted_at IS NULL AND ticket_date >= NOW() - INTERVAL '12 months'
-       ${sf('wt.sector_id', sectorFilter)}
+       WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY luna, s.sector_number ORDER BY luna, s.sector_number`, P),
 
     // DEPOZITARE top 10 zile cantitate maxima
@@ -77,8 +75,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          ROUND(SUM(net_weight_tons)::numeric, 2) as tone
        FROM waste_tickets_landfill wt
        JOIN sectors s ON wt.sector_id = s.id
-       WHERE wt.deleted_at IS NULL AND ticket_date >= NOW() - INTERVAL '12 months'
-       ${sf('wt.sector_id', sectorFilter)}
+       WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY ticket_date, s.sector_number
        ORDER BY tone DESC LIMIT 10`, P),
 
@@ -89,8 +86,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          ROUND(SUM(wt.gross_weight_tons)::numeric, 2) as total_tone_livrate
        FROM waste_tickets_tmb wt
        JOIN sectors s ON wt.sector_id = s.id
-       WHERE wt.deleted_at IS NULL AND wt.ticket_date >= NOW() - INTERVAL '90 days'
-       ${sf('wt.sector_id', sectorFilter)}
+       WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY s.sector_number, s.sector_name ORDER BY total_tone_acceptate DESC`, P),
 
     // TMB lunar 12 luni
@@ -98,8 +94,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          ROUND(SUM(net_weight_tons)::numeric, 2) as tone_acceptate,
          ROUND(SUM(gross_weight_tons)::numeric, 2) as tone_livrate
        FROM waste_tickets_tmb wt
-       WHERE wt.deleted_at IS NULL AND ticket_date >= NOW() - INTERVAL '12 months'
-       ${sf('wt.sector_id', sectorFilter)}
+       WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY luna ORDER BY luna`, P),
 
     // TMB discrepante per operator
@@ -112,7 +107,6 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
        JOIN sectors s ON wt.sector_id = s.id
        LEFT JOIN institutions i ON wt.operator_id = i.id
        WHERE wt.deleted_at IS NULL
-         AND wt.ticket_date >= NOW() - INTERVAL '90 days'
          AND wt.gross_weight_tons IS NOT NULL AND wt.net_weight_tons IS NOT NULL
          AND (wt.gross_weight_tons - wt.net_weight_tons) > 0.05
        ${sf('wt.sector_id', sectorFilter)}
@@ -125,16 +119,14 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          ROUND(SUM(wt.net_weight_tons)::numeric, 2) as total_tone
        FROM waste_tickets_recycling wt
        JOIN sectors s ON wt.sector_id = s.id
-       WHERE wt.deleted_at IS NULL AND wt.ticket_date >= NOW() - INTERVAL '90 days'
-       ${sf('wt.sector_id', sectorFilter)}
+       WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY s.sector_number ORDER BY s.sector_number`, P),
 
     // RECICLARE lunar
     q(`SELECT TO_CHAR(ticket_date, 'YYYY-MM') as luna,
          ROUND(SUM(net_weight_tons)::numeric, 2) as tone
        FROM waste_tickets_recycling
-       WHERE deleted_at IS NULL AND ticket_date >= NOW() - INTERVAL '12 months'
-       ${sf('sector_id', sectorFilter)}
+       WHERE deleted_at IS NULL ${sf('sector_id', sectorFilter)}
        GROUP BY luna ORDER BY luna`, P),
 
     // RECUPERARE per sector 90 zile
@@ -143,8 +135,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          ROUND(SUM(wt.net_weight_tons)::numeric, 2) as total_tone
        FROM waste_tickets_recovery wt
        JOIN sectors s ON wt.sector_id = s.id
-       WHERE wt.deleted_at IS NULL AND wt.ticket_date >= NOW() - INTERVAL '90 days'
-       ${sf('wt.sector_id', sectorFilter)}
+       WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY s.sector_number ORDER BY s.sector_number`, P),
 
     // ELIMINARE per sector 90 zile
@@ -153,8 +144,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          ROUND(SUM(wt.net_weight_tons)::numeric, 2) as total_tone
        FROM waste_tickets_disposal wt
        JOIN sectors s ON wt.sector_id = s.id
-       WHERE wt.deleted_at IS NULL AND wt.ticket_date >= NOW() - INTERVAL '90 days'
-       ${sf('wt.sector_id', sectorFilter)}
+       WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY s.sector_number ORDER BY s.sector_number`, P),
 
     // RESPINSE per sector 90 zile
@@ -163,8 +153,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          ROUND(SUM(wt.net_weight_tons)::numeric, 2) as total_tone
        FROM waste_tickets_rejected wt
        JOIN sectors s ON wt.sector_id = s.id
-       WHERE wt.deleted_at IS NULL AND wt.ticket_date >= NOW() - INTERVAL '90 days'
-       ${sf('wt.sector_id', sectorFilter)}
+       WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY s.sector_number ORDER BY s.sector_number`, P),
 
     // SUMAR GENERAL toate tipurile ultimele 30 zile
@@ -276,10 +265,10 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
   ]);
 
   return {
-    depozitare_per_sector_90z, depozitare_lunar_12luni, depozitare_top_zile,
-    tmb_per_sector_90z, tmb_lunar_12luni, tmb_discrepante,
-    reciclare_per_sector_90z, reciclare_lunar_12luni,
-    recuperare_per_sector_90z, eliminare_per_sector_90z, respinse_per_sector_90z,
+    depozitare_per_sector, depozitare_lunar, depozitare_top_zile,
+    tmb_per_sector, tmb_lunar, tmb_discrepante,
+    reciclare_per_sector, reciclare_lunar,
+    recuperare_per_sector, eliminare_per_sector, respinse_per_sector,
     sumar_general_30z: sumar_general,
     contracte_active_per_tip, contracte_expira_60z,
     contracte_tmb: contracte_tmb_detalii,
@@ -310,38 +299,38 @@ Rolul utilizatorului: ${userRole}
 ### Sumar general - ultimele 30 zile:
 ${JSON.stringify(contextData.sumar_general_30z, null, 2)}
 
-### Depozitare per sector - 90 zile:
-${JSON.stringify(contextData.depozitare_per_sector_90z, null, 2)}
+### Depozitare per sector (toate datele):
+${JSON.stringify(contextData.depozitare_per_sector, null, 2)}
 
-### Depozitare evoluție lunară - 12 luni:
-${JSON.stringify(contextData.depozitare_lunar_12luni, null, 2)}
+### Depozitare evoluție lunară (toate datele):
+${JSON.stringify(contextData.depozitare_lunar, null, 2)}
 
-### Depozitare top zile:
+### Depozitare top zile cantitate maximă:
 ${JSON.stringify(contextData.depozitare_top_zile, null, 2)}
 
-### TMB per sector - 90 zile:
-${JSON.stringify(contextData.tmb_per_sector_90z, null, 2)}
+### TMB per sector (toate datele):
+${JSON.stringify(contextData.tmb_per_sector, null, 2)}
 
-### TMB evoluție lunară:
-${JSON.stringify(contextData.tmb_lunar_12luni, null, 2)}
+### TMB evoluție lunară (toate datele):
+${JSON.stringify(contextData.tmb_lunar, null, 2)}
 
 ### TMB discrepanțe operatori:
 ${JSON.stringify(contextData.tmb_discrepante, null, 2)}
 
-### Reciclare per sector - 90 zile:
-${JSON.stringify(contextData.reciclare_per_sector_90z, null, 2)}
+### Reciclare per sector (toate datele):
+${JSON.stringify(contextData.reciclare_per_sector, null, 2)}
 
-### Reciclare evoluție lunară:
-${JSON.stringify(contextData.reciclare_lunar_12luni, null, 2)}
+### Reciclare evoluție lunară (toate datele):
+${JSON.stringify(contextData.reciclare_lunar, null, 2)}
 
-### Recuperare per sector - 90 zile:
-${JSON.stringify(contextData.recuperare_per_sector_90z, null, 2)}
+### Recuperare per sector (toate datele):
+${JSON.stringify(contextData.recuperare_per_sector, null, 2)}
 
-### Eliminare per sector - 90 zile:
-${JSON.stringify(contextData.eliminare_per_sector_90z, null, 2)}
+### Eliminare per sector (toate datele):
+${JSON.stringify(contextData.eliminare_per_sector, null, 2)}
 
-### Tichete respinse - 90 zile:
-${JSON.stringify(contextData.respinse_per_sector_90z, null, 2)}
+### Tichete respinse (toate datele):
+${JSON.stringify(contextData.respinse_per_sector, null, 2)}
 
 ### Contracte active per tip:
 ${JSON.stringify(contextData.contracte_active_per_tip, null, 2)}
