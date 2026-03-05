@@ -33,11 +33,16 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
     tmb_per_sector,
     tmb_lunar,
     tmb_discrepante,
+    tmb_per_operator,
     reciclare_per_sector,
     reciclare_lunar,
+    reciclare_per_operator,
     recuperare_per_sector,
+    recuperare_per_operator,
     eliminare_per_sector,
+    eliminare_per_operator,
     respinse_per_sector,
+    respinse_per_operator,
     sumar_general,
     contracte_active_per_tip,
     contracte_expira_60z,
@@ -78,6 +83,19 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
        WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY ticket_date, s.sector_number
        ORDER BY tone DESC LIMIT 10`, P),
+
+    // DEPOZITARE per operator (supplier) - toate datele
+    q(`SELECT sup.short_name as operator, sup.name as operator_nume_complet,
+         s.sector_number,
+         COUNT(wt.id) as tichete,
+         ROUND(SUM(wt.net_weight_tons)::numeric, 2) as total_tone
+       FROM waste_tickets_landfill wt
+       JOIN sectors s ON wt.sector_id = s.id
+       LEFT JOIN institutions sup ON wt.supplier_id = sup.id
+       WHERE wt.deleted_at IS NULL
+       ${sf('wt.sector_id', sectorFilter)}
+       GROUP BY sup.short_name, sup.name, s.sector_number
+       ORDER BY total_tone DESC`, P),
 
     // TMB per sector 90 zile
     q(`SELECT s.sector_number, s.sector_name,
@@ -156,6 +174,71 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
        WHERE wt.deleted_at IS NULL ${sf('wt.sector_id', sectorFilter)}
        GROUP BY s.sector_number ORDER BY s.sector_number`, P),
 
+
+    // TMB per operator (supplier + operator) - toate datele
+    q(`SELECT sup.short_name as furnizor, op.short_name as operator,
+         s.sector_number,
+         COUNT(wt.id) as tichete,
+         ROUND(SUM(wt.net_weight_tons)::numeric, 2) as tone_acceptate,
+         ROUND(SUM(wt.gross_weight_tons)::numeric, 2) as tone_livrate
+       FROM waste_tickets_tmb wt
+       JOIN sectors s ON wt.sector_id = s.id
+       LEFT JOIN institutions sup ON wt.supplier_id = sup.id
+       LEFT JOIN institutions op ON wt.operator_id = op.id
+       WHERE wt.deleted_at IS NULL
+       ${sf('wt.sector_id', sectorFilter)}
+       GROUP BY sup.short_name, op.short_name, s.sector_number
+       ORDER BY tone_acceptate DESC`, P),
+
+    // RECICLARE per operator - toate datele
+    q(`SELECT sup.short_name as furnizor, s.sector_number,
+         COUNT(wt.id) as tichete,
+         ROUND(SUM(wt.net_weight_tons)::numeric, 2) as tone
+       FROM waste_tickets_recycling wt
+       JOIN sectors s ON wt.sector_id = s.id
+       LEFT JOIN institutions sup ON wt.supplier_id = sup.id
+       WHERE wt.deleted_at IS NULL
+       ${sf('wt.sector_id', sectorFilter)}
+       GROUP BY sup.short_name, s.sector_number
+       ORDER BY tone DESC`, P),
+
+    // RECUPERARE per operator - toate datele
+    q(`SELECT sup.short_name as furnizor, s.sector_number,
+         COUNT(wt.id) as tichete,
+         ROUND(SUM(wt.net_weight_tons)::numeric, 2) as tone
+       FROM waste_tickets_recovery wt
+       JOIN sectors s ON wt.sector_id = s.id
+       LEFT JOIN institutions sup ON wt.supplier_id = sup.id
+       WHERE wt.deleted_at IS NULL
+       ${sf('wt.sector_id', sectorFilter)}
+       GROUP BY sup.short_name, s.sector_number
+       ORDER BY tone DESC`, P),
+
+    // ELIMINARE per operator - toate datele
+    q(`SELECT sup.short_name as furnizor, s.sector_number,
+         COUNT(wt.id) as tichete,
+         ROUND(SUM(wt.net_weight_tons)::numeric, 2) as tone
+       FROM waste_tickets_disposal wt
+       JOIN sectors s ON wt.sector_id = s.id
+       LEFT JOIN institutions sup ON wt.supplier_id = sup.id
+       WHERE wt.deleted_at IS NULL
+       ${sf('wt.sector_id', sectorFilter)}
+       GROUP BY sup.short_name, s.sector_number
+       ORDER BY tone DESC`, P),
+
+    // RESPINSE per operator - toate datele
+    q(`SELECT sup.short_name as furnizor, op.short_name as operator,
+         s.sector_number,
+         COUNT(wt.id) as tichete,
+         ROUND(SUM(wt.net_weight_tons)::numeric, 2) as tone
+       FROM waste_tickets_rejected wt
+       JOIN sectors s ON wt.sector_id = s.id
+       LEFT JOIN institutions sup ON wt.supplier_id = sup.id
+       LEFT JOIN institutions op ON wt.operator_id = op.id
+       WHERE wt.deleted_at IS NULL
+       ${sf('wt.sector_id', sectorFilter)}
+       GROUP BY sup.short_name, op.short_name, s.sector_number
+       ORDER BY tone DESC`, P),
     // SUMAR GENERAL toate tipurile ultimele 30 zile
     q(`SELECT 'Depozitare' as tip, COUNT(id) as tichete, ROUND(SUM(net_weight_tons)::numeric, 2) as tone
        FROM waste_tickets_landfill WHERE deleted_at IS NULL AND ticket_date >= NOW() - INTERVAL '30 days'
@@ -265,10 +348,12 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
   ]);
 
   return {
-    depozitare_per_sector, depozitare_lunar, depozitare_top_zile,
-    tmb_per_sector, tmb_lunar, tmb_discrepante,
-    reciclare_per_sector, reciclare_lunar,
-    recuperare_per_sector, eliminare_per_sector, respinse_per_sector,
+    depozitare_per_sector, depozitare_lunar, depozitare_top_zile, depozitare_per_operator,
+    tmb_per_sector, tmb_lunar, tmb_discrepante, tmb_per_operator,
+    reciclare_per_sector, reciclare_lunar, reciclare_per_operator,
+    recuperare_per_sector, recuperare_per_operator,
+    eliminare_per_sector, eliminare_per_operator,
+    respinse_per_sector, respinse_per_operator,
     sumar_general_30z: sumar_general,
     contracte_active_per_tip, contracte_expira_60z,
     contracte_tmb: contracte_tmb_detalii,
@@ -308,6 +393,9 @@ ${JSON.stringify(contextData.depozitare_lunar, null, 2)}
 ### Depozitare top zile cantitate maximă:
 ${JSON.stringify(contextData.depozitare_top_zile, null, 2)}
 
+### Depozitare per operator/furnizor (toate datele):
+${JSON.stringify(contextData.depozitare_per_operator, null, 2)}
+
 ### TMB per sector (toate datele):
 ${JSON.stringify(contextData.tmb_per_sector, null, 2)}
 
@@ -316,6 +404,20 @@ ${JSON.stringify(contextData.tmb_lunar, null, 2)}
 
 ### TMB discrepanțe operatori:
 ${JSON.stringify(contextData.tmb_discrepante, null, 2)}
+### TMB per operator/furnizor (toate datele):
+${JSON.stringify(contextData.tmb_per_operator, null, 2)}
+
+### Reciclare per operator (toate datele):
+${JSON.stringify(contextData.reciclare_per_operator, null, 2)}
+
+### Recuperare per operator (toate datele):
+${JSON.stringify(contextData.recuperare_per_operator, null, 2)}
+
+### Eliminare per operator (toate datele):
+${JSON.stringify(contextData.eliminare_per_operator, null, 2)}
+
+### Tichete respinse per operator (toate datele):
+${JSON.stringify(contextData.respinse_per_operator, null, 2)}
 
 ### Reciclare per sector (toate datele):
 ${JSON.stringify(contextData.reciclare_per_sector, null, 2)}
