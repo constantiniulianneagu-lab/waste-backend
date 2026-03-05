@@ -30,6 +30,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
     depozitare_per_sector,
     depozitare_lunar,
     depozitare_top_zile,
+    depozitare_per_operator,
     tmb_per_sector,
     tmb_lunar,
     tmb_discrepante,

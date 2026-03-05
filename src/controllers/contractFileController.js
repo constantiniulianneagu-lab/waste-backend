@@ -11,11 +11,18 @@
 import { createClient } from '@supabase/supabase-js';
 import multer from 'multer';
 
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+// Initialize Supabase client (lazy — citit după ce dotenv s-a încărcat)
+let _supabase = null;
+const getSupabase = () => {
+  if (!_supabase) {
+    _supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_KEY
+    );
+  }
+  return _supabase;
+};
+const supabase = new Proxy({}, { get: (_, prop) => getSupabase()[prop] });
 
 // Contract type mappings
 const CONTRACT_TYPE_MAPPINGS = {
