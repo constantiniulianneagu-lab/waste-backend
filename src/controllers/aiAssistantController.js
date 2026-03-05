@@ -96,7 +96,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
        FROM waste_tickets_landfill t
        JOIN sectors s ON t.sector_id = s.id
        WHERE t.deleted_at IS NULL ${sf('t.sector_id', sectorFilter)}
-       GROUP BY luna, s.sector_number ORDER BY luna, s.sector_number`, P),
+       GROUP BY luna, s.sector_number ORDER BY luna DESC, s.sector_number LIMIT 144`, P),
 
     q(`SELECT sup.short_name as operator, sup.name as operator_complet,
          s.sector_number,
@@ -115,7 +115,8 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
        FROM waste_tickets_landfill t
        JOIN sectors s ON t.sector_id = s.id
        LEFT JOIN institutions sup ON t.supplier_id = sup.id
-       WHERE t.deleted_at IS NULL ${sf('t.sector_id', sectorFilter)}
+       WHERE t.deleted_at IS NULL AND t.ticket_date >= NOW() - INTERVAL '36 months'
+       ${sf('t.sector_id', sectorFilter)}
        GROUP BY sup.short_name, s.sector_number, luna ORDER BY sup.short_name, luna`, P),
 
     q(`SELECT wc.code as cod_deseu, wc.description as descriere,
@@ -135,7 +136,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
        LEFT JOIN institutions sup ON t.supplier_id = sup.id
        LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
        WHERE t.deleted_at IS NULL ${sf('t.sector_id', sectorFilter)}
-       GROUP BY sup.short_name, wc.code, s.sector_number ORDER BY tone DESC LIMIT 200`, P),
+       GROUP BY sup.short_name, wc.code, s.sector_number ORDER BY tone DESC LIMIT 100`, P),
 
     q(`SELECT t.generator_type, s.sector_number,
          COUNT(t.id) as tichete,
@@ -189,7 +190,8 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
        JOIN sectors s ON t.sector_id = s.id
        LEFT JOIN institutions sup ON t.supplier_id = sup.id
        LEFT JOIN institutions op ON t.operator_id = op.id
-       WHERE t.deleted_at IS NULL ${sf('t.sector_id', sectorFilter)}
+       WHERE t.deleted_at IS NULL AND t.ticket_date >= NOW() - INTERVAL '36 months'
+       ${sf('t.sector_id', sectorFilter)}
        GROUP BY sup.short_name, op.short_name, s.sector_number, luna ORDER BY sup.short_name, luna`, P),
 
     q(`SELECT wc.code as cod_deseu, wc.description as descriere,
@@ -479,7 +481,7 @@ const fetchContextData = async (userRole, visibleSectorIds, accessLevel) => {
          i.contact_email, i.contact_phone, i.fiscal_code
        FROM institutions i WHERE i.deleted_at IS NULL ORDER BY i.type, i.name`, []),
 
-    q(`SELECT code, description, category, is_active FROM waste_codes WHERE deleted_at IS NULL ORDER BY code`, []),
+    q(`SELECT code, description, category, is_active FROM waste_codes ORDER BY code`, []),
 
     q(`SELECT sector_number, sector_name, is_active, area_km2, population FROM sectors WHERE deleted_at IS NULL ORDER BY sector_number`, []),
 
