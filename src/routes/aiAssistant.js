@@ -17,7 +17,6 @@ const router = express.Router();
 const aiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
-  keyGenerator: (req) => req.user?.id || req.ip,
   message: { success: false, message: 'Prea multe cereri. Așteptați un minut.' },
   standardHeaders: true,
   legacyHeaders: false,
