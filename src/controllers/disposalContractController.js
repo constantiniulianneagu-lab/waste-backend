@@ -118,9 +118,13 @@ export const getDisposalContracts = async (req, res) => {
         dc.notes,
         dc.contract_file_url,
         dc.contract_file_name,
+        dc.service_order_file_url,
+        dc.service_order_file_name,
+        dc.service_order_file_size,
         dc.created_at,
         dc.updated_at,
         dc.attribution_type,
+        dc.estimated_quantity_tons,
         
         -- Institution info
         i.name as institution_name,
@@ -544,6 +548,9 @@ export const createDisposalContract = async (req, res) => {
       contract_file_size,
       contract_file_type,
       contract_file_uploaded_at,
+      service_order_file_url,
+      service_order_file_name,
+      service_order_file_size,
       notes,
       is_active = true,
       // Sector data (simplified: one sector per contract)
@@ -551,6 +558,7 @@ export const createDisposalContract = async (req, res) => {
       tariff_per_ton,
       cec_tax_per_ton,
       contracted_quantity_tons,
+      estimated_quantity_tons,
       attribution_type,
     } = req.body;
 
@@ -579,11 +587,15 @@ export const createDisposalContract = async (req, res) => {
           contract_file_size,
           contract_file_type,
           contract_file_uploaded_at,
+          service_order_file_url,
+          service_order_file_name,
+          service_order_file_size,
           notes,
           is_active,
           attribution_type,
+          estimated_quantity_tons,
           created_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         RETURNING *
       `;
 
@@ -598,9 +610,13 @@ export const createDisposalContract = async (req, res) => {
         contract_file_size || null,
         contract_file_type || null,
         contract_file_uploaded_at || null,
+        service_order_file_url || null,
+        service_order_file_name || null,
+        service_order_file_size || null,
         notes || null,
         is_active,
         attribution_type || null,
+        estimated_quantity_tons || null,
         req.user?.id || null,
       ]);
 
@@ -732,6 +748,9 @@ export const updateDisposalContract = async (req, res) => {
       contract_file_size,
       contract_file_type,
       contract_file_uploaded_at,
+      service_order_file_url,
+      service_order_file_name,
+      service_order_file_size,
       notes,
       is_active,
       // Sector data
@@ -739,6 +758,7 @@ export const updateDisposalContract = async (req, res) => {
       tariff_per_ton,
       cec_tax_per_ton,
       contracted_quantity_tons,
+      estimated_quantity_tons,
       attribution_type,
     } = req.body;
 
@@ -758,11 +778,15 @@ export const updateDisposalContract = async (req, res) => {
           contract_file_size = COALESCE($7, contract_file_size),
           contract_file_type = COALESCE($8, contract_file_type),
           contract_file_uploaded_at = COALESCE($9, contract_file_uploaded_at),
-          notes = $10,
-          is_active = COALESCE($11, is_active),
-          attribution_type = COALESCE($12, attribution_type),
+          service_order_file_url = $10,
+          service_order_file_name = $11,
+          service_order_file_size = $12,
+          notes = $13,
+          is_active = COALESCE($14, is_active),
+          attribution_type = COALESCE($15, attribution_type),
+          estimated_quantity_tons = $16,
           updated_at = CURRENT_TIMESTAMP
-        WHERE id = $13 AND deleted_at IS NULL
+        WHERE id = $17 AND deleted_at IS NULL
         RETURNING *
       `;
 
@@ -776,9 +800,13 @@ export const updateDisposalContract = async (req, res) => {
         contract_file_size || null,
         contract_file_type || null,
         contract_file_uploaded_at || null,
+        service_order_file_url || null,
+        service_order_file_name || null,
+        service_order_file_size || null,
         notes || null,
         is_active,
         attribution_type || null,
+        estimated_quantity_tons || null,
         contractId,
       ]);
 
