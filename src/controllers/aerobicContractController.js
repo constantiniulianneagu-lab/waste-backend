@@ -114,6 +114,9 @@ export const getAerobicContracts = async (req, res) => {
         ac.contract_file_url,
         ac.contract_file_name,
         ac.contract_file_size,
+        ac.service_order_file_url,
+        ac.service_order_file_name,
+        ac.service_order_file_size,
         ac.is_active,
         ac.notes,
         ac.attribution_type,
@@ -317,19 +320,25 @@ export const createAerobicContract = async (req, res) => {
       contract_file_url,
       contract_file_name,
       contract_file_size,
+      service_order_file_url,
+      service_order_file_name,
+      service_order_file_size,
       is_active,
       notes,
       attribution_type,
-      service_start_date
+      service_start_date,
+      contracted_quantity_tons,
     } = req.body;
 
     const query = `
       INSERT INTO aerobic_contracts (
         institution_id, contract_number, contract_date_start, contract_date_end,
-        sector_id, tariff_per_ton, estimated_quantity_tons, associate_institution_id,
+        sector_id, tariff_per_ton, estimated_quantity_tons, contracted_quantity_tons,
+        associate_institution_id,
         indicator_disposal_percent, contract_file_url, contract_file_name,
-        contract_file_size, is_active, notes, attribution_type, service_start_date, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        contract_file_size, service_order_file_url, service_order_file_name,
+        service_order_file_size, is_active, notes, attribution_type, service_start_date, created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
       RETURNING *
     `;
 
@@ -341,11 +350,15 @@ export const createAerobicContract = async (req, res) => {
       sector_id || null,
       tariff_per_ton,
       estimated_quantity_tons === '' ? null : estimated_quantity_tons,
+      contracted_quantity_tons === '' ? null : contracted_quantity_tons,
       associate_institution_id || null,
       indicator_disposal_percent === '' ? null : indicator_disposal_percent,
       contract_file_url || null,
       contract_file_name || null,
       contract_file_size || null,
+      service_order_file_url || null,
+      service_order_file_name || null,
+      service_order_file_size || null,
       is_active !== undefined ? is_active : true,
       notes || null,
       attribution_type || null,
@@ -407,10 +420,14 @@ export const updateAerobicContract = async (req, res) => {
       contract_file_url,
       contract_file_name,
       contract_file_size,
+      service_order_file_url,
+      service_order_file_name,
+      service_order_file_size,
       is_active,
       notes,
       attribution_type,
-      service_start_date
+      service_start_date,
+      contracted_quantity_tons,
     } = req.body;
 
     const query = `
@@ -422,17 +439,21 @@ export const updateAerobicContract = async (req, res) => {
         sector_id = $5,
         tariff_per_ton = $6,
         estimated_quantity_tons = $7,
-        associate_institution_id = $8,
-        indicator_disposal_percent = $9,
-        contract_file_url = $10,
-        contract_file_name = $11,
-        contract_file_size = $12,
-        is_active = $13,
-        notes = $14,
-        attribution_type = $15,
-        service_start_date = $16,
+        contracted_quantity_tons = $8,
+        associate_institution_id = $9,
+        indicator_disposal_percent = $10,
+        contract_file_url = $11,
+        contract_file_name = $12,
+        contract_file_size = $13,
+        service_order_file_url = $14,
+        service_order_file_name = $15,
+        service_order_file_size = $16,
+        is_active = $17,
+        notes = $18,
+        attribution_type = $19,
+        service_start_date = $20,
         updated_at = NOW()
-      WHERE id = $17 AND deleted_at IS NULL
+      WHERE id = $21 AND deleted_at IS NULL
       RETURNING *
     `;
 
@@ -444,11 +465,15 @@ export const updateAerobicContract = async (req, res) => {
       sector_id || null,
       tariff_per_ton,
       estimated_quantity_tons === '' ? null : estimated_quantity_tons,
+      contracted_quantity_tons === '' ? null : contracted_quantity_tons,
       associate_institution_id || null,
       indicator_disposal_percent === '' ? null : indicator_disposal_percent,
       contract_file_url || null,
       contract_file_name || null,
       contract_file_size || null,
+      service_order_file_url || null,
+      service_order_file_name || null,
+      service_order_file_size || null,
       is_active !== undefined ? is_active : true,
       notes || null,
       attribution_type || null,
