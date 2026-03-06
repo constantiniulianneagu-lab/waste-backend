@@ -236,6 +236,8 @@ export const getDisposalContracts = async (req, res) => {
 
       // Fetch all amendments that changed tariff or CEC for this contract
       let effectiveTotalValue = effectiveQuantity * (effectiveTariff + effectiveCec); // fallback
+      let effectiveTariffValue = effectiveQuantity * effectiveTariff; // fallback
+      let effectiveCecValue = effectiveQuantity * effectiveCec; // fallback
 
       try {
         const amendRes = await pool.query(
@@ -286,10 +288,21 @@ export const getDisposalContracts = async (req, res) => {
             periods.push({ qty, tariff: currentTariff, cec: currentCec });
           }
 
-          // Sum all periods
+          // Sum all periods - total and per component
           effectiveTotalValue = Math.round(
             periods.reduce((sum, p) => sum + p.qty * (p.tariff + p.cec), 0) * 100
           ) / 100;
+          effectiveTariffValue = Math.round(
+            periods.reduce((sum, p) => sum + p.qty * p.tariff, 0) * 100
+          ) / 100;
+          effectiveCecValue = Math.round(
+            periods.reduce((sum, p) => sum + p.qty * p.cec, 0) * 100
+          ) / 100;
+        } else {
+          // No tariff/CEC amendments - simple calculation
+          const qty = parseFloat(contract.contracted_quantity_tons) || 0;
+          effectiveTariffValue = Math.round(qty * (parseFloat(contract.tariff_per_ton) || 0) * 100) / 100;
+          effectiveCecValue = Math.round(qty * (parseFloat(contract.cec_tax_per_ton) || 0) * 100) / 100;
         }
       } catch (e) {
         console.error('Period value calc error for contract', contract.id, e);
@@ -299,6 +312,8 @@ export const getDisposalContracts = async (req, res) => {
         ...contract,
         effective_total_per_ton: effectiveTariff + effectiveCec,
         effective_total_value: effectiveTotalValue,
+        effective_tariff_value: effectiveTariffValue,
+        effective_cec_value: effectiveCecValue,
       };
     }));
 
