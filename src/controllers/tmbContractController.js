@@ -139,7 +139,7 @@ export const getTMBContracts = async (req, res) => {
           (SELECT tca.new_contract_date_end
            FROM tmb_contract_amendments tca
            WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL
-           ORDER BY tca.amendment_date DESC, tca.id DESC
+           ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC
            LIMIT 1),
           tc.contract_date_end
         ) as effective_date_end,
@@ -148,7 +148,7 @@ export const getTMBContracts = async (req, res) => {
           (SELECT tca.new_tariff_per_ton
            FROM tmb_contract_amendments tca
            WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL
-           ORDER BY tca.amendment_date DESC, tca.id DESC
+           ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC
            LIMIT 1),
           tc.tariff_per_ton
         ) as effective_tariff,
@@ -160,7 +160,7 @@ export const getTMBContracts = async (req, res) => {
                 (SELECT tca.new_contract_date_end
                  FROM tmb_contract_amendments tca
                  WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL
-                 ORDER BY tca.amendment_date DESC, tca.id DESC LIMIT 1),
+                 ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
                 tc.contract_date_end
               ) - tc.contract_date_start + 1
             )
@@ -170,7 +170,7 @@ export const getTMBContracts = async (req, res) => {
           (SELECT tca.new_indicator_recycling_percent
            FROM tmb_contract_amendments tca
            WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_indicator_recycling_percent IS NOT NULL
-           ORDER BY tca.amendment_date DESC, tca.id DESC
+           ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC
            LIMIT 1),
           tc.indicator_recycling_percent
         ) as effective_indicator_recycling_percent,
@@ -179,7 +179,7 @@ export const getTMBContracts = async (req, res) => {
           (SELECT tca.new_indicator_energy_recovery_percent
            FROM tmb_contract_amendments tca
            WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_indicator_energy_recovery_percent IS NOT NULL
-           ORDER BY tca.amendment_date DESC, tca.id DESC
+           ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC
            LIMIT 1),
           tc.indicator_energy_recovery_percent
         ) as effective_indicator_energy_recovery_percent,
@@ -188,12 +188,12 @@ export const getTMBContracts = async (req, res) => {
           (SELECT tca.new_indicator_disposal_percent
            FROM tmb_contract_amendments tca
            WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_indicator_disposal_percent IS NOT NULL
-           ORDER BY tca.amendment_date DESC, tca.id DESC
+           ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC
            LIMIT 1),
           tc.indicator_disposal_percent
         ) as effective_indicator_disposal_percent,
 
-        (COALESCE((SELECT tca.new_tariff_per_ton FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL ORDER BY tca.amendment_date DESC, tca.id DESC LIMIT 1), tc.tariff_per_ton) * ROUND(tc.estimated_quantity_tons / NULLIF(tc.contract_date_end - tc.contract_date_start + 1, 0) * (COALESCE((SELECT tca.new_contract_date_end FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL ORDER BY tca.amendment_date DESC, tca.id DESC LIMIT 1), tc.contract_date_end) - tc.contract_date_start + 1), 2)) as effective_total_value,
+        (COALESCE((SELECT tca.new_tariff_per_ton FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1), tc.tariff_per_ton) * ROUND(tc.estimated_quantity_tons / NULLIF(tc.contract_date_end - tc.contract_date_start + 1, 0) * (COALESCE((SELECT tca.new_contract_date_end FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1), tc.contract_date_end) - tc.contract_date_start + 1), 2)) as effective_total_value,
 
         (SELECT COUNT(*) FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL) as amendments_count
 
@@ -606,6 +606,7 @@ export const createTMBContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
+      effective_date,
       new_tariff_per_ton,
       new_estimated_quantity_tons,
       new_contract_date_end,
@@ -663,6 +664,7 @@ export const createTMBContractAmendment = async (req, res) => {
         contract_id,
         amendment_number,
         amendment_date,
+        effective_date,
         new_tariff_per_ton,
         new_estimated_quantity_tons,
         new_contract_date_end,
@@ -681,7 +683,7 @@ export const createTMBContractAmendment = async (req, res) => {
         new_contract_date_start,
         created_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
       )
       RETURNING *
     `;
@@ -690,6 +692,7 @@ export const createTMBContractAmendment = async (req, res) => {
       contractId,
       amendment_number,
       amendment_date,
+      effective_date || amendment_date,
       toNullIfEmpty(new_tariff_per_ton),
       toNullIfEmpty(finalQuantity),
       new_contract_date_end || null,
@@ -735,6 +738,7 @@ export const updateTMBContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
+      effective_date,
       new_tariff_per_ton,
       new_estimated_quantity_tons,
       new_contract_date_end,
@@ -760,21 +764,22 @@ export const updateTMBContractAmendment = async (req, res) => {
       UPDATE tmb_contract_amendments SET
         amendment_number = $1,
         amendment_date = $2,
-        new_tariff_per_ton = $3,
-        new_estimated_quantity_tons = $4,
-        new_contract_date_end = $5,
-        amendment_type = $6,
-        changes_description = $7,
-        reason = $8,
-        notes = $9,
-        amendment_file_url = $10,
-        amendment_file_name = $11,
-        amendment_file_size = $12,
-        reference_contract_id = $13,
-        quantity_adjustment_auto = $14,
-        new_indicator_recycling_percent = $15,
-        new_indicator_energy_recovery_percent = $16,
-        new_indicator_disposal_percent = $17,
+        effective_date = COALESCE($3, $2),
+        new_tariff_per_ton = $4,
+        new_estimated_quantity_tons = $5,
+        new_contract_date_end = $6,
+        amendment_type = $7,
+        changes_description = $8,
+        reason = $9,
+        notes = $10,
+        amendment_file_url = $11,
+        amendment_file_name = $12,
+        amendment_file_size = $13,
+        reference_contract_id = $14,
+        quantity_adjustment_auto = $15,
+        new_indicator_recycling_percent = $16,
+        new_indicator_energy_recovery_percent = $17,
+        new_indicator_disposal_percent = $18,
         new_contract_date_start = $18,
         updated_at = NOW()
       WHERE id = $19 AND contract_id = $20 AND deleted_at IS NULL
@@ -784,6 +789,7 @@ export const updateTMBContractAmendment = async (req, res) => {
     const values = [
       amendment_number,
       amendment_date,
+      effective_date || amendment_date,
       toNullIfEmpty(new_tariff_per_ton),
       toNullIfEmpty(new_estimated_quantity_tons),
       new_contract_date_end || null,

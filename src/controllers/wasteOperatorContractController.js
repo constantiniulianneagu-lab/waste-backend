@@ -138,7 +138,7 @@ export const getWasteCollectorContracts = async (req, res) => {
            WHERE wcca.contract_id = wcc.id
              AND wcca.deleted_at IS NULL
              AND wcca.new_contract_date_end IS NOT NULL
-           ORDER BY wcca.amendment_date DESC, wcca.id DESC
+           ORDER BY COALESCE(wcca.effective_date, wcca.amendment_date) DESC, wcca.id DESC
            LIMIT 1),
           wcc.contract_date_end
         ) as effective_date_end,
@@ -584,6 +584,7 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
         contract_id,
         amendment_number,
         amendment_date,
+        effective_date,
         new_contract_date_end,
         amendment_type,
         changes_description,
@@ -597,7 +598,7 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
         new_service_start_date,
         created_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
       )
       RETURNING *
     `;
@@ -606,6 +607,7 @@ export const createWasteCollectorContractAmendment = async (req, res) => {
       contractId,
       amendment_number,
       amendment_date,
+      effective_date || amendment_date,
       new_contract_date_end || null,
       finalAmendmentType,
       changes_description || null,
@@ -646,6 +648,7 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
+      effective_date,
       new_contract_date_end,
       amendment_type,
       changes_description,
@@ -665,25 +668,27 @@ export const updateWasteCollectorContractAmendment = async (req, res) => {
       UPDATE waste_collector_contract_amendments SET
         amendment_number = $1,
         amendment_date = $2,
-        new_contract_date_end = $3,
-        amendment_type = $4,
-        changes_description = $5,
-        reason = $6,
-        notes = $7,
-        amendment_file_url = $8,
-        amendment_file_name = $9,
-        amendment_file_size = $10,
-        reference_contract_id = $11,
-        new_contract_date_start = $12,
-        new_service_start_date = $13,
+        effective_date = COALESCE($3, $2),
+        new_contract_date_end = $4,
+        amendment_type = $5,
+        changes_description = $6,
+        reason = $7,
+        notes = $8,
+        amendment_file_url = $9,
+        amendment_file_name = $10,
+        amendment_file_size = $11,
+        reference_contract_id = $12,
+        new_contract_date_start = $13,
+        new_service_start_date = $14,
         updated_at = NOW()
-      WHERE id = $14 AND contract_id = $15 AND deleted_at IS NULL
+      WHERE id = $15 AND contract_id = $16 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const values = [
       amendment_number,
       amendment_date,
+      effective_date || amendment_date,
       new_contract_date_end || null,
       finalAmendmentType,
       changes_description || null,

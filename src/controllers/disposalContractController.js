@@ -154,11 +154,12 @@ export const getDisposalContracts = async (req, res) => {
             'new_tariff_per_ton', dca.new_tariff_per_ton,
             'new_cec_tax_per_ton', dca.new_cec_tax_per_ton,
             'new_contracted_quantity_tons', dca.new_contracted_quantity_tons,
-            'amendment_type', dca.amendment_type
+            'amendment_type', dca.amendment_type,
+            'effective_date', dca.effective_date
           )
           FROM disposal_contract_amendments dca
           WHERE dca.contract_id = dc.id AND dca.deleted_at IS NULL
-          ORDER BY dca.amendment_date DESC, dca.id DESC
+          ORDER BY COALESCE(dca.effective_date, dca.amendment_date) DESC, dca.id DESC
           LIMIT 1
         ) as latest_amendment,
         
@@ -176,7 +177,7 @@ export const getDisposalContracts = async (req, res) => {
            WHERE dca.contract_id = dc.id 
              AND dca.deleted_at IS NULL 
              AND dca.new_contract_date_end IS NOT NULL
-           ORDER BY dca.amendment_date DESC, dca.id DESC 
+           ORDER BY COALESCE(dca.effective_date, dca.amendment_date) DESC, dca.id DESC 
            LIMIT 1),
           dc.contract_date_end
         ) as effective_date_end,
@@ -187,7 +188,7 @@ export const getDisposalContracts = async (req, res) => {
            WHERE dca.contract_id = dc.id 
              AND dca.deleted_at IS NULL 
              AND dca.new_tariff_per_ton IS NOT NULL
-           ORDER BY dca.amendment_date DESC, dca.id DESC 
+           ORDER BY COALESCE(dca.effective_date, dca.amendment_date) DESC, dca.id DESC 
            LIMIT 1),
           dcs.tariff_per_ton
         ) as effective_tariff,
@@ -198,7 +199,7 @@ export const getDisposalContracts = async (req, res) => {
            WHERE dca.contract_id = dc.id 
              AND dca.deleted_at IS NULL 
              AND dca.new_cec_tax_per_ton IS NOT NULL
-           ORDER BY dca.amendment_date DESC, dca.id DESC 
+           ORDER BY COALESCE(dca.effective_date, dca.amendment_date) DESC, dca.id DESC 
            LIMIT 1),
           dcs.cec_tax_per_ton
         ) as effective_cec,
@@ -210,7 +211,7 @@ export const getDisposalContracts = async (req, res) => {
                 (SELECT dca.new_contract_date_end
                  FROM disposal_contract_amendments dca
                  WHERE dca.contract_id = dc.id AND dca.deleted_at IS NULL AND dca.new_contract_date_end IS NOT NULL
-                 ORDER BY dca.amendment_date DESC, dca.id DESC LIMIT 1),
+                 ORDER BY COALESCE(dca.effective_date, dca.amendment_date) DESC, dca.id DESC LIMIT 1),
                 dc.contract_date_end
               ) - dc.contract_date_start + 1
             )
@@ -238,12 +239,12 @@ export const getDisposalContracts = async (req, res) => {
 
       try {
         const amendRes = await pool.query(
-          `SELECT amendment_date, new_tariff_per_ton, new_cec_tax_per_ton
+          `SELECT amendment_date, effective_date, new_tariff_per_ton, new_cec_tax_per_ton
            FROM disposal_contract_amendments
            WHERE contract_id = $1
              AND deleted_at IS NULL
              AND (new_tariff_per_ton IS NOT NULL OR new_cec_tax_per_ton IS NOT NULL)
-           ORDER BY amendment_date ASC, id ASC`,
+           ORDER BY COALESCE(effective_date, amendment_date) ASC, id ASC`,
           [contract.id]
         );
 
@@ -261,8 +262,8 @@ export const getDisposalContracts = async (req, res) => {
           let currentCec = parseFloat(contract.cec_tax_per_ton) || 0;
 
           for (const amend of amendRes.rows) {
-            const amendDate = new Date(amend.amendment_date);
-            // Period ends day before amendment
+            const amendDate = new Date(amend.effective_date || amend.amendment_date);
+            // Period ends day before amendment effective date
             const periodEnd = new Date(amendDate);
             periodEnd.setDate(periodEnd.getDate() - 1);
 
@@ -960,7 +961,7 @@ export const getContractAmendments = async (req, res) => {
       FROM disposal_contract_amendments dca
       LEFT JOIN users u ON dca.created_by = u.id
       WHERE dca.contract_id = $1 AND dca.deleted_at IS NULL
-      ORDER BY dca.amendment_date DESC, dca.id DESC
+      ORDER BY COALESCE(dca.effective_date, dca.amendment_date) DESC, dca.id DESC
     `;
 
     const result = await pool.query(query, [contractId]);
@@ -1092,6 +1093,7 @@ export const createContractAmendment = async (req, res) => {
         contract_id,
         amendment_number,
         amendment_date,
+        effective_date,
         amendment_type,
         new_contract_date_end,
         new_tariff_per_ton,
@@ -1104,7 +1106,7 @@ export const createContractAmendment = async (req, res) => {
         amendment_file_name,
         amendment_file_size,
         created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *
     `;
 
@@ -1112,6 +1114,7 @@ export const createContractAmendment = async (req, res) => {
       contractId,
       amendment_number,
       amendment_date,
+      effective_date || amendment_date,
       finalAmendmentType,
       new_contract_date_end || null,
       new_tariff_per_ton || null,
@@ -1166,6 +1169,7 @@ export const updateContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
+      effective_date,
       amendment_type,
       new_contract_date_end,
       new_tariff_per_ton,
@@ -1183,25 +1187,27 @@ export const updateContractAmendment = async (req, res) => {
       UPDATE disposal_contract_amendments SET
         amendment_number = COALESCE($1, amendment_number),
         amendment_date = COALESCE($2, amendment_date),
-        amendment_type = COALESCE($3, amendment_type),
-        new_contract_date_end = $4,
-        new_tariff_per_ton = $5,
-        new_cec_tax_per_ton = $6,
-        new_contracted_quantity_tons = $7,
-        changes_description = $8,
-        reason = $9,
-        notes = $10,
-        amendment_file_url = $11,
-        amendment_file_name = $12,
-        amendment_file_size = $13,
+        effective_date = COALESCE($3, $2),
+        amendment_type = COALESCE($4, amendment_type),
+        new_contract_date_end = $5,
+        new_tariff_per_ton = $6,
+        new_cec_tax_per_ton = $7,
+        new_contracted_quantity_tons = $8,
+        changes_description = $9,
+        reason = $10,
+        notes = $11,
+        amendment_file_url = $12,
+        amendment_file_name = $13,
+        amendment_file_size = $14,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $14 AND contract_id = $15 AND deleted_at IS NULL
+      WHERE id = $15 AND contract_id = $16 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const result = await pool.query(query, [
       amendment_number,
       amendment_date,
+      effective_date || amendment_date,
       amendment_type,
       new_contract_date_end || null,
       new_tariff_per_ton || null,

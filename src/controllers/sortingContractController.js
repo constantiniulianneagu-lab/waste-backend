@@ -128,7 +128,7 @@ export const getSortingOperatorContracts = async (req, res) => {
            WHERE soca.contract_id = soc.id 
              AND soca.deleted_at IS NULL 
              AND soca.new_contract_date_end IS NOT NULL
-           ORDER BY soca.amendment_date DESC, soca.id DESC
+           ORDER BY COALESCE(soca.effective_date, soca.amendment_date) DESC, soca.id DESC
            LIMIT 1),
           soc.contract_date_end
         ) as effective_date_end,
@@ -139,7 +139,7 @@ export const getSortingOperatorContracts = async (req, res) => {
            WHERE soca.contract_id = soc.id 
              AND soca.deleted_at IS NULL 
              AND soca.new_tariff_per_ton IS NOT NULL
-           ORDER BY soca.amendment_date DESC, soca.id DESC
+           ORDER BY COALESCE(soca.effective_date, soca.amendment_date) DESC, soca.id DESC
            LIMIT 1),
           soc.tariff_per_ton
         ) as effective_tariff,
@@ -151,13 +151,13 @@ export const getSortingOperatorContracts = async (req, res) => {
                 (SELECT soca.new_contract_date_end
                  FROM sorting_operator_contract_amendments soca
                  WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_contract_date_end IS NOT NULL
-                 ORDER BY soca.amendment_date DESC, soca.id DESC LIMIT 1),
+                 ORDER BY COALESCE(soca.effective_date, soca.amendment_date) DESC, soca.id DESC LIMIT 1),
                 soc.contract_date_end
               ) - soc.contract_date_start + 1
             )
         , 2) as effective_quantity,
 
-        (COALESCE((SELECT soca.new_tariff_per_ton FROM sorting_operator_contract_amendments soca WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_tariff_per_ton IS NOT NULL ORDER BY soca.amendment_date DESC, soca.id DESC LIMIT 1), soc.tariff_per_ton) * ROUND(soc.estimated_quantity_tons / NULLIF(soc.contract_date_end - soc.contract_date_start + 1, 0) * (COALESCE((SELECT soca.new_contract_date_end FROM sorting_operator_contract_amendments soca WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_contract_date_end IS NOT NULL ORDER BY soca.amendment_date DESC, soca.id DESC LIMIT 1), soc.contract_date_end) - soc.contract_date_start + 1), 2)) as effective_total_value,
+        (COALESCE((SELECT soca.new_tariff_per_ton FROM sorting_operator_contract_amendments soca WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_tariff_per_ton IS NOT NULL ORDER BY COALESCE(soca.effective_date, soca.amendment_date) DESC, soca.id DESC LIMIT 1), soc.tariff_per_ton) * ROUND(soc.estimated_quantity_tons / NULLIF(soc.contract_date_end - soc.contract_date_start + 1, 0) * (COALESCE((SELECT soca.new_contract_date_end FROM sorting_operator_contract_amendments soca WHERE soca.contract_id = soc.id AND soca.deleted_at IS NULL AND soca.new_contract_date_end IS NOT NULL ORDER BY COALESCE(soca.effective_date, soca.amendment_date) DESC, soca.id DESC LIMIT 1), soc.contract_date_end) - soc.contract_date_start + 1), 2)) as effective_total_value,
 
         (SELECT COUNT(*)
          FROM sorting_operator_contract_amendments soca
@@ -570,6 +570,7 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
+      effective_date,
       new_tariff_per_ton,
       new_estimated_quantity_tons,
       new_contract_date_end,
@@ -624,6 +625,7 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
         contract_id,
         amendment_number,
         amendment_date,
+        effective_date,
         new_tariff_per_ton,
         new_estimated_quantity_tons,
         new_contract_date_end,
@@ -640,7 +642,7 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
         new_service_start_date,
         created_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
       )
       RETURNING *
     `;
@@ -649,6 +651,7 @@ export const createSortingOperatorContractAmendment = async (req, res) => {
       contractId,
       amendment_number,
       amendment_date,
+      effective_date || amendment_date,
       toNullIfEmpty(new_tariff_per_ton),
       toNullIfEmpty(finalQuantity),
       new_contract_date_end || null,
@@ -692,6 +695,7 @@ export const updateSortingOperatorContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
+      effective_date,
       new_tariff_per_ton,
       new_estimated_quantity_tons,
       new_contract_date_end,
@@ -714,28 +718,30 @@ export const updateSortingOperatorContractAmendment = async (req, res) => {
       UPDATE sorting_operator_contract_amendments SET
         amendment_number = $1,
         amendment_date = $2,
-        new_tariff_per_ton = $3,
-        new_estimated_quantity_tons = $4,
-        new_contract_date_end = $5,
-        amendment_type = $6,
-        changes_description = $7,
-        reason = $8,
-        notes = $9,
-        amendment_file_url = $10,
-        amendment_file_name = $11,
-        amendment_file_size = $12,
-        reference_contract_id = $13,
-        quantity_adjustment_auto = $14,
-        new_contract_date_start = $15,
-        new_service_start_date = $16,
+        effective_date = COALESCE($3, $2),
+        new_tariff_per_ton = $4,
+        new_estimated_quantity_tons = $5,
+        new_contract_date_end = $6,
+        amendment_type = $7,
+        changes_description = $8,
+        reason = $9,
+        notes = $10,
+        amendment_file_url = $11,
+        amendment_file_name = $12,
+        amendment_file_size = $13,
+        reference_contract_id = $14,
+        quantity_adjustment_auto = $15,
+        new_contract_date_start = $16,
+        new_service_start_date = $17,
         updated_at = NOW()
-      WHERE id = $17 AND contract_id = $18 AND deleted_at IS NULL
+      WHERE id = $18 AND contract_id = $19 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const values = [
       amendment_number,
       amendment_date,
+      effective_date || amendment_date,
       toNullIfEmpty(new_tariff_per_ton),
       toNullIfEmpty(new_estimated_quantity_tons),
       new_contract_date_end || null,
