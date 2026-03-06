@@ -996,6 +996,7 @@ export const createContractAmendment = async (req, res) => {
     const {
       amendment_number,
       amendment_date,
+      effective_date,
       amendment_type, // EXTENSION, TARIFF_CHANGE, QUANTITY_CHANGE, MULTIPLE
       new_contract_date_end,
       new_tariff_per_ton,
