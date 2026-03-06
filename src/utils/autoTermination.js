@@ -163,14 +163,37 @@ export const autoTerminateSimpleContracts = async ({
         contract_number,
         contract_date_start,
         contract_date_end,
-        ${config.qtyCol ? config.qtyCol : 'NULL::numeric'} AS old_qty
-      FROM ${config.contractTable}
+        ${config.qtyCol ? config.qtyCol : 'NULL::numeric'} AS old_qty,
+        -- Effective end date considering amendments
+        COALESCE(
+          (SELECT new_contract_date_end
+           FROM ${config.amendmentTable}
+           WHERE contract_id = c.id
+             AND deleted_at IS NULL
+             AND new_contract_date_end IS NOT NULL
+           ORDER BY COALESCE(effective_date, amendment_date) DESC, id DESC
+           LIMIT 1),
+          contract_date_end
+        ) as effective_date_end
+      FROM ${config.contractTable} c
       WHERE sector_id = $1
         AND id <> $2
         AND is_active = true
         AND deleted_at IS NULL
         AND contract_date_start <= $3
-        AND (contract_date_end IS NULL OR contract_date_end >= $4)
+        AND (
+          contract_date_end IS NULL
+          OR contract_date_end >= $4
+          OR (
+            SELECT new_contract_date_end
+            FROM ${config.amendmentTable}
+            WHERE contract_id = c.id
+              AND deleted_at IS NULL
+              AND new_contract_date_end IS NOT NULL
+            ORDER BY COALESCE(effective_date, amendment_date) DESC, id DESC
+            LIMIT 1
+          ) >= $4
+        )
     `;
 
     const overlapping = await client.query(findQ, [
@@ -196,13 +219,14 @@ export const autoTerminateSimpleContracts = async ({
       const dedup = await client.query(dedupQ, [oldContract.id, newContractId]);
       if (dedup.rowCount > 0) continue;
 
-      // 3) cantitate proporțională (doar unde avem qtyCol și contract_date_end existent)
+      // 3) cantitate proporțională față de effective_date_end (inclusiv prelungiri)
       let newQty = null;
-      if (config.qtyCol && oldContract.old_qty !== null && oldContract.contract_date_end) {
+      const effectiveEnd = oldContract.effective_date_end || oldContract.contract_date_end;
+      if (config.qtyCol && oldContract.old_qty !== null && effectiveEnd) {
         newQty = calculateProportionalQuantity({
           originalQuantity: oldContract.old_qty,
           originalStartDate: oldContract.contract_date_start,
-          originalEndDate: oldContract.contract_date_end,
+          originalEndDate: effectiveEnd,
           newEndDate: terminationStr,
         });
       }
@@ -297,7 +321,18 @@ export const autoTerminateDisposalContracts = async ({
         dc.id,
         dc.contract_number,
         dc.contract_date_start,
-        dc.contract_date_end
+        dc.contract_date_end,
+        -- Effective end date: last amendment new_contract_date_end, or original end
+        COALESCE(
+          (SELECT dca.new_contract_date_end
+           FROM disposal_contract_amendments dca
+           WHERE dca.contract_id = dc.id
+             AND dca.deleted_at IS NULL
+             AND dca.new_contract_date_end IS NOT NULL
+           ORDER BY COALESCE(dca.effective_date, dca.amendment_date) DESC, dca.id DESC
+           LIMIT 1),
+          dc.contract_date_end
+        ) as effective_date_end
       FROM disposal_contracts dc
       JOIN disposal_contract_sectors dcs ON dc.id = dcs.contract_id
       WHERE dcs.sector_id = ANY($1::uuid[])
@@ -306,7 +341,20 @@ export const autoTerminateDisposalContracts = async ({
         AND dc.deleted_at IS NULL
         AND dcs.deleted_at IS NULL
         AND dc.contract_date_start <= $3
-        AND (dc.contract_date_end IS NULL OR dc.contract_date_end >= $4)
+        AND (
+          -- contractul nu s-a terminat înainte de noul contract
+          dc.contract_date_end IS NULL
+          OR dc.contract_date_end >= $4
+          OR (
+            SELECT dca.new_contract_date_end
+            FROM disposal_contract_amendments dca
+            WHERE dca.contract_id = dc.id
+              AND dca.deleted_at IS NULL
+              AND dca.new_contract_date_end IS NOT NULL
+            ORDER BY COALESCE(dca.effective_date, dca.amendment_date) DESC, dca.id DESC
+            LIMIT 1
+          ) >= $4
+        )
     `;
 
     const overlapping = await client.query(findQ, [
@@ -337,6 +385,24 @@ export const autoTerminateDisposalContracts = async ({
         'disposal_contract_amendments'
       );
 
+      // Cantitate proporțională față de effective_date_end (inclusiv prelungiri)
+      const effectiveEnd = oldContract.effective_date_end || oldContract.contract_date_end;
+      let newQty = null;
+      const sectorQtyRes = await client.query(
+        `SELECT contracted_quantity_tons FROM disposal_contract_sectors 
+         WHERE contract_id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [oldContract.id]
+      );
+      const originalQty = parseFloat(sectorQtyRes.rows[0]?.contracted_quantity_tons) || null;
+      if (originalQty && effectiveEnd) {
+        newQty = calculateProportionalQuantity({
+          originalQuantity: originalQty,
+          originalStartDate: oldContract.contract_date_start,
+          originalEndDate: effectiveEnd,
+          newEndDate: terminationStr,
+        });
+      }
+
       const insertQ = `
         INSERT INTO disposal_contract_amendments (
           contract_id,
@@ -344,11 +410,12 @@ export const autoTerminateDisposalContracts = async ({
           amendment_date,
           amendment_type,
           new_contract_date_end,
+          new_contracted_quantity_tons,
           reference_contract_id,
           changes_description,
           notes,
           created_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         RETURNING id
       `;
 
@@ -358,6 +425,7 @@ export const autoTerminateDisposalContracts = async ({
         terminationStr,
         'AUTO_TERMINATION',
         terminationStr,
+        newQty,
         newContractId,
         `Închidere automată la ${terminationStr}`,
         `Contract depozitare încheiat automat - preluat de contract ${newContractNumber}`,
@@ -368,6 +436,7 @@ export const autoTerminateDisposalContracts = async ({
         id: oldContract.id,
         contract_number: oldContract.contract_number,
         termination_date: terminationStr,
+        new_contracted_quantity_tons: newQty,
       });
     }
 
