@@ -115,13 +115,41 @@ export const getContractDataForProportional = async (
   quantityField = 'estimated_quantity_tons'
 ) => {
   try {
+    // Derivăm amendment table name din contract table name
+    // e.g. tmb_contracts → tmb_contract_amendments
+    const amendmentTable = tableName.replace(/_contracts$/, '_contract_amendments');
+
     const query = `
       SELECT
-        contract_date_start,
-        contract_date_end,
-        ${quantityField} as quantity
-      FROM ${tableName}
-      WHERE id = $1 AND deleted_at IS NULL
+        c.contract_date_start,
+        c.contract_date_end,
+        c.${quantityField} as quantity,
+        -- Effective end date: ultima prelungire din amendamente
+        COALESCE(
+          (SELECT a.new_contract_date_end
+           FROM ${amendmentTable} a
+           WHERE a.contract_id = c.id
+             AND a.deleted_at IS NULL
+             AND a.new_contract_date_end IS NOT NULL
+             AND a.amendment_type NOT IN ('AUTO_TERMINATION', 'INCETARE', 'TERMINATION')
+           ORDER BY COALESCE(a.effective_date, a.amendment_date) DESC, a.id DESC
+           LIMIT 1),
+          c.contract_date_end
+        ) as effective_date_end,
+        -- Effective quantity: ultima cantitate modificată
+        COALESCE(
+          (SELECT a.new_${quantityField}
+           FROM ${amendmentTable} a
+           WHERE a.contract_id = c.id
+             AND a.deleted_at IS NULL
+             AND a.new_${quantityField} IS NOT NULL
+             AND a.amendment_type NOT IN ('AUTO_TERMINATION', 'INCETARE', 'TERMINATION')
+           ORDER BY COALESCE(a.effective_date, a.amendment_date) DESC, a.id DESC
+           LIMIT 1),
+          c.${quantityField}
+        ) as effective_quantity
+      FROM ${tableName} c
+      WHERE c.id = $1 AND c.deleted_at IS NULL
     `;
 
     const result = await pool.query(query, [contractId]);
@@ -131,7 +159,12 @@ export const getContractDataForProportional = async (
       return null;
     }
 
-    return result.rows[0];
+    const row = result.rows[0];
+    return {
+      contract_date_start: row.contract_date_start,
+      contract_date_end: row.effective_date_end, // folosim effective pentru calcul
+      quantity: row.effective_quantity,           // folosim effective quantity
+    };
   } catch (error) {
     console.error('getContractDataForProportional error:', error);
     return null;
