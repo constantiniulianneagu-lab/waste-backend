@@ -154,23 +154,19 @@ export const getTMBContracts = async (req, res) => {
         ) as effective_tariff,
 
         ROUND(
-          COALESCE(
-            (SELECT tca.new_estimated_quantity_tons
-             FROM tmb_contract_amendments tca
-             WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL
-             ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
-            tc.estimated_quantity_tons
-          )
+          -- Cantitate originală (pe contract) calculată cu year_days_for_period
+          tc.estimated_quantity_tons
           / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
-          * (
-              COALESCE(
-                (SELECT tca.new_contract_date_end
-                 FROM tmb_contract_amendments tca
-                 WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL
-                 ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
-                tc.contract_date_end
-              ) - tc.contract_date_start + 1
-            )
+          * (tc.contract_date_end - tc.contract_date_start + 1)
+          -- + suma cantităților din toate actele adiționale de prelungire/încetare
+          + COALESCE((
+            SELECT SUM(tca.new_estimated_quantity_tons)
+            FROM tmb_contract_amendments tca
+            WHERE tca.contract_id = tc.id
+              AND tca.deleted_at IS NULL
+              AND tca.new_estimated_quantity_tons IS NOT NULL
+              AND tca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
+          ), 0)
         , 2) as effective_quantity,
 
         COALESCE(
@@ -204,17 +200,18 @@ export const getTMBContracts = async (req, res) => {
           COALESCE((SELECT tca.new_tariff_per_ton FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1), tc.tariff_per_ton)
           *
           (
-            COALESCE(
-              (SELECT tca.new_estimated_quantity_tons FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
-              tc.estimated_quantity_tons
-            )
+            -- Cantitate originală + suma cantităților din prelungiri
+            tc.estimated_quantity_tons
             / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
-            * (
-                COALESCE(
-                  (SELECT tca.new_contract_date_end FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
-                  tc.contract_date_end
-                ) - tc.contract_date_start + 1
-              )
+            * (tc.contract_date_end - tc.contract_date_start + 1)
+            + COALESCE((
+              SELECT SUM(tca.new_estimated_quantity_tons)
+              FROM tmb_contract_amendments tca
+              WHERE tca.contract_id = tc.id
+                AND tca.deleted_at IS NULL
+                AND tca.new_estimated_quantity_tons IS NOT NULL
+                AND tca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
+            ), 0)
           )
         , 2) as effective_total_value,
 
@@ -271,21 +268,17 @@ export const getTMBContract = async (req, res) => {
         ) as effective_tariff,
 
         ROUND(
-          COALESCE(
-            (SELECT tca.new_estimated_quantity_tons FROM tmb_contract_amendments tca
-             WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL
-             ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
-            tc.estimated_quantity_tons
-          )
+          tc.estimated_quantity_tons
           / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
-          * (
-              COALESCE(
-                (SELECT tca.new_contract_date_end FROM tmb_contract_amendments tca
-                 WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL
-                 ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
-                tc.contract_date_end
-              ) - tc.contract_date_start + 1
-            )
+          * (tc.contract_date_end - tc.contract_date_start + 1)
+          + COALESCE((
+            SELECT SUM(tca.new_estimated_quantity_tons)
+            FROM tmb_contract_amendments tca
+            WHERE tca.contract_id = tc.id
+              AND tca.deleted_at IS NULL
+              AND tca.new_estimated_quantity_tons IS NOT NULL
+              AND tca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
+          ), 0)
         , 2) as effective_quantity,
 
         ROUND(
@@ -297,21 +290,17 @@ export const getTMBContract = async (req, res) => {
           )
           *
           (
-            COALESCE(
-              (SELECT tca.new_estimated_quantity_tons FROM tmb_contract_amendments tca
-               WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL
-               ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
-              tc.estimated_quantity_tons
-            )
+            tc.estimated_quantity_tons
             / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
-            * (
-                COALESCE(
-                  (SELECT tca.new_contract_date_end FROM tmb_contract_amendments tca
-                   WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL
-                   ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
-                  tc.contract_date_end
-                ) - tc.contract_date_start + 1
-              )
+            * (tc.contract_date_end - tc.contract_date_start + 1)
+            + COALESCE((
+              SELECT SUM(tca.new_estimated_quantity_tons)
+              FROM tmb_contract_amendments tca
+              WHERE tca.contract_id = tc.id
+                AND tca.deleted_at IS NULL
+                AND tca.new_estimated_quantity_tons IS NOT NULL
+                AND tca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
+            ), 0)
           )
         , 2) as effective_total_value,
 

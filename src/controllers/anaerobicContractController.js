@@ -149,18 +149,25 @@ export const getAnaerobicContracts = async (req, res) => {
           anc.tariff_per_ton
         ) as effective_tariff,
         
-        COALESCE(
-          (SELECT anca.new_estimated_quantity_tons 
-           FROM anaerobic_contract_amendments anca 
-           WHERE anca.contract_id = anc.id 
-             AND anca.new_estimated_quantity_tons IS NOT NULL 
-             AND anca.deleted_at IS NULL 
-           ORDER BY COALESCE(anca.effective_date, anca.amendment_date) DESC, anca.id DESC 
-           LIMIT 1),
-          anc.estimated_quantity_tons
-        ) as effective_quantity,
+        ROUND(
+          COALESCE(anc.contracted_quantity_tons, anc.estimated_quantity_tons, 0)
+          + COALESCE((
+            SELECT SUM(anca.new_estimated_quantity_tons)
+            FROM anaerobic_contract_amendments anca
+            WHERE anca.contract_id = anc.id
+              AND anca.deleted_at IS NULL
+              AND anca.new_estimated_quantity_tons IS NOT NULL
+              AND anca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
+          ), 0)
+        , 2) as effective_quantity,
         
-        (COALESCE((SELECT anca.new_tariff_per_ton FROM anaerobic_contract_amendments anca WHERE anca.contract_id = anc.id AND anca.new_tariff_per_ton IS NOT NULL AND anca.deleted_at IS NULL ORDER BY COALESCE(anca.effective_date, anca.amendment_date) DESC, anca.id DESC LIMIT 1), anc.tariff_per_ton) * ROUND(anc.estimated_quantity_tons / NULLIF(anc.contract_date_end - anc.contract_date_start + 1, 0) * (COALESCE((SELECT anca.new_contract_date_end FROM anaerobic_contract_amendments anca WHERE anca.contract_id = anc.id AND anca.deleted_at IS NULL AND anca.new_contract_date_end IS NOT NULL ORDER BY COALESCE(anca.effective_date, anca.amendment_date) DESC, anca.id DESC LIMIT 1), anc.contract_date_end) - anc.contract_date_start + 1), 2)) as effective_total_value,
+        ROUND(
+          COALESCE((SELECT anca.new_tariff_per_ton FROM anaerobic_contract_amendments anca WHERE anca.contract_id = anc.id AND anca.new_tariff_per_ton IS NOT NULL AND anca.deleted_at IS NULL ORDER BY COALESCE(anca.effective_date, anca.amendment_date) DESC, anca.id DESC LIMIT 1), anc.tariff_per_ton)
+          * (
+            COALESCE(anc.contracted_quantity_tons, anc.estimated_quantity_tons, 0)
+            + COALESCE((SELECT SUM(anca.new_estimated_quantity_tons) FROM anaerobic_contract_amendments anca WHERE anca.contract_id = anc.id AND anca.deleted_at IS NULL AND anca.new_estimated_quantity_tons IS NOT NULL AND anca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')), 0)
+          )
+        , 2) as effective_total_value,
         
         (SELECT COUNT(*)
          FROM anaerobic_contract_amendments anca
@@ -206,7 +213,45 @@ export const getAnaerobicContract = async (req, res) => {
         s.sector_number,
         s.sector_name,
         ai.name as associate_name,
-        ai.short_name as associate_short_name
+        ai.short_name as associate_short_name,
+
+        COALESCE(
+          (SELECT anca.new_contract_date_end FROM anaerobic_contract_amendments anca
+           WHERE anca.contract_id = anc.id AND anca.deleted_at IS NULL AND anca.new_contract_date_end IS NOT NULL
+           ORDER BY COALESCE(anca.effective_date, anca.amendment_date) DESC, anca.id DESC LIMIT 1),
+          anc.contract_date_end
+        ) as effective_date_end,
+
+        COALESCE(
+          (SELECT anca.new_tariff_per_ton FROM anaerobic_contract_amendments anca
+           WHERE anca.contract_id = anc.id AND anca.new_tariff_per_ton IS NOT NULL AND anca.deleted_at IS NULL
+           ORDER BY COALESCE(anca.effective_date, anca.amendment_date) DESC, anca.id DESC LIMIT 1),
+          anc.tariff_per_ton
+        ) as effective_tariff,
+
+        ROUND(
+          COALESCE(anc.contracted_quantity_tons, anc.estimated_quantity_tons, 0)
+          + COALESCE((
+            SELECT SUM(anca.new_estimated_quantity_tons)
+            FROM anaerobic_contract_amendments anca
+            WHERE anca.contract_id = anc.id
+              AND anca.deleted_at IS NULL
+              AND anca.new_estimated_quantity_tons IS NOT NULL
+              AND anca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
+          ), 0)
+        , 2) as effective_quantity,
+
+        ROUND(
+          COALESCE((SELECT anca.new_tariff_per_ton FROM anaerobic_contract_amendments anca WHERE anca.contract_id = anc.id AND anca.new_tariff_per_ton IS NOT NULL AND anca.deleted_at IS NULL ORDER BY COALESCE(anca.effective_date, anca.amendment_date) DESC, anca.id DESC LIMIT 1), anc.tariff_per_ton)
+          * (
+            COALESCE(anc.contracted_quantity_tons, anc.estimated_quantity_tons, 0)
+            + COALESCE((SELECT SUM(anca.new_estimated_quantity_tons) FROM anaerobic_contract_amendments anca WHERE anca.contract_id = anc.id AND anca.deleted_at IS NULL AND anca.new_estimated_quantity_tons IS NOT NULL AND anca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')), 0)
+          )
+        , 2) as effective_total_value,
+
+        (SELECT COUNT(*) FROM anaerobic_contract_amendments anca
+         WHERE anca.contract_id = anc.id AND anca.deleted_at IS NULL) as amendments_count
+
       FROM anaerobic_contracts anc
       JOIN institutions i ON anc.institution_id = i.id
       LEFT JOIN sectors s ON anc.sector_id = s.id

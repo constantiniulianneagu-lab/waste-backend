@@ -3,8 +3,12 @@
  * ============================================================================
  * PROPORTIONAL QUANTITY CALCULATION FOR CONTRACT AMENDMENTS
  * ============================================================================
- * PRELUNGIRE (extensie): newEnd > originalEnd → cantitate CUMULATIVĂ totală
- * INCETARE (încetare): newEnd < originalEnd → cantitate PROPORȚIONALĂ scurtată
+ * PRELUNGIRE: returnează cantitatea DOAR pentru perioada nouă adăugată
+ *   (originalEnd+1 → newEnd), bazată pe rata zilnică din cantitatea anuală
+ * INCETARE: returnează cantitatea REDUSĂ pentru perioada scurtată
+ *   (start → newEnd)
+ * 
+ * effective_quantity în SQL = cant_originala + SUM(cantități din amendamente)
  * ============================================================================
  */
 
@@ -67,34 +71,33 @@ export const calculateProportionalQuantity = ({
 
     const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
-    // Perioada ORIGINALĂ (contract inițial) - baza de calcul pentru rata zilnică
-    const originalDays = Math.round((endDate - startDate) / MS_PER_DAY);
+    // Rata zilnică bazată pe cantitatea originală și zilele perioadei originale
+    const originalDays = Math.round((endDate - startDate) / MS_PER_DAY) + 1;
 
-    // Noua perioadă totală (de la start la newEnd)
-    const totalNewDays = Math.round((newEnd - startDate) / MS_PER_DAY);
-
-    if (originalDays <= 0 || totalNewDays <= 0) {
+    if (originalDays <= 0) {
       console.error('calculateProportionalQuantity: Invalid days calculation');
       return null;
     }
 
-    // Rata zilnică bazată pe contractul ORIGINAL
     const dailyRate = qty / originalDays;
 
-    // Cantitatea TOTALĂ pentru noua perioadă
-    const newQuantity = dailyRate * totalNewDays;
-
-    const rounded = Math.round(newQuantity * 1000) / 1000;
+    let rounded;
 
     if (isExtension) {
+      // PRELUNGIRE: cantitatea DOAR pentru perioada nouă (originalEnd+1 → newEnd)
+      const newPeriodDays = Math.round((newEnd - endDate) / MS_PER_DAY);
+      rounded = Math.round(dailyRate * newPeriodDays * 1000) / 1000;
       console.log(`📊 PRELUNGIRE Proportional:
         Original: ${originalStartDate} → ${originalEndDate} (${originalDays} zile, ${qty}t)
-        Extins până: ${newEndDate} (${totalNewDays} zile total)
-        Rate: ${dailyRate.toFixed(4)} t/zi → TOTAL CUMULATIV: ${rounded}t`);
+        Perioadă nouă: ${originalEndDate} → ${newEndDate} (${newPeriodDays} zile)
+        Rate: ${dailyRate.toFixed(4)} t/zi → CANTITATE NOUĂ: ${rounded}t`);
     } else {
+      // INCETARE: cantitatea REDUSĂ pentru perioada scurtată (start → newEnd)
+      const shortenedDays = Math.round((newEnd - startDate) / MS_PER_DAY) + 1;
+      rounded = Math.round(dailyRate * shortenedDays * 1000) / 1000;
       console.log(`📊 INCETARE Proportional:
         Original: ${originalStartDate} → ${originalEndDate} (${originalDays} zile, ${qty}t)
-        Încetare la: ${newEndDate} (${totalNewDays} zile efectiv)
+        Încetare la: ${newEndDate} (${shortenedDays} zile efectiv)
         Rate: ${dailyRate.toFixed(4)} t/zi → CANTITATE REDUSĂ: ${rounded}t`);
     }
 

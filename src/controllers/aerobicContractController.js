@@ -156,16 +156,15 @@ export const getAerobicContracts = async (req, res) => {
         ) as effective_tariff,
         
         ROUND(
-          ac.estimated_quantity_tons / NULLIF(ac.contract_date_end - ac.contract_date_start + 1, 0)
-          * (
-              COALESCE(
-                (SELECT aca.new_contract_date_end
-                 FROM aerobic_contract_amendments aca
-                 WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_contract_date_end IS NOT NULL
-                 ORDER BY COALESCE(aca.effective_date, aca.amendment_date) DESC, aca.id DESC LIMIT 1),
-                ac.contract_date_end
-              ) - ac.contract_date_start + 1
-            )
+          COALESCE(ac.contracted_quantity_tons, ac.estimated_quantity_tons, 0)
+          + COALESCE((
+            SELECT SUM(aca.new_estimated_quantity_tons)
+            FROM aerobic_contract_amendments aca
+            WHERE aca.contract_id = ac.id
+              AND aca.deleted_at IS NULL
+              AND aca.new_estimated_quantity_tons IS NOT NULL
+              AND aca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
+          ), 0)
         , 2) as effective_quantity,
         
         COALESCE(
@@ -179,7 +178,13 @@ export const getAerobicContracts = async (req, res) => {
           ac.indicator_disposal_percent
         ) as effective_indicator_disposal_percent,
 
-        (COALESCE((SELECT aca.new_tariff_per_ton FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.new_tariff_per_ton IS NOT NULL AND aca.deleted_at IS NULL ORDER BY COALESCE(aca.effective_date, aca.amendment_date) DESC, aca.id DESC LIMIT 1), ac.tariff_per_ton) * ROUND(ac.estimated_quantity_tons / NULLIF(ac.contract_date_end - ac.contract_date_start + 1, 0) * (COALESCE((SELECT aca.new_contract_date_end FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_contract_date_end IS NOT NULL ORDER BY COALESCE(aca.effective_date, aca.amendment_date) DESC, aca.id DESC LIMIT 1), ac.contract_date_end) - ac.contract_date_start + 1), 2)) as effective_total_value,
+        ROUND(
+          COALESCE((SELECT aca.new_tariff_per_ton FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.new_tariff_per_ton IS NOT NULL AND aca.deleted_at IS NULL ORDER BY COALESCE(aca.effective_date, aca.amendment_date) DESC, aca.id DESC LIMIT 1), ac.tariff_per_ton)
+          * (
+            COALESCE(ac.contracted_quantity_tons, ac.estimated_quantity_tons, 0)
+            + COALESCE((SELECT SUM(aca.new_estimated_quantity_tons) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_estimated_quantity_tons IS NOT NULL AND aca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')), 0)
+          )
+        , 2) as effective_total_value,
 
         (SELECT COUNT(*) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL) as amendments_count
         
@@ -246,16 +251,15 @@ export const getAerobicContract = async (req, res) => {
         ) as effective_tariff,
         
         ROUND(
-          ac.estimated_quantity_tons / NULLIF(ac.contract_date_end - ac.contract_date_start + 1, 0)
-          * (
-              COALESCE(
-                (SELECT aca.new_contract_date_end
-                 FROM aerobic_contract_amendments aca
-                 WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_contract_date_end IS NOT NULL
-                 ORDER BY COALESCE(aca.effective_date, aca.amendment_date) DESC, aca.id DESC LIMIT 1),
-                ac.contract_date_end
-              ) - ac.contract_date_start + 1
-            )
+          COALESCE(ac.contracted_quantity_tons, ac.estimated_quantity_tons, 0)
+          + COALESCE((
+            SELECT SUM(aca.new_estimated_quantity_tons)
+            FROM aerobic_contract_amendments aca
+            WHERE aca.contract_id = ac.id
+              AND aca.deleted_at IS NULL
+              AND aca.new_estimated_quantity_tons IS NOT NULL
+              AND aca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
+          ), 0)
         , 2) as effective_quantity,
         
         COALESCE(
@@ -269,7 +273,13 @@ export const getAerobicContract = async (req, res) => {
           ac.indicator_disposal_percent
         ) as effective_indicator_disposal_percent,
 
-        (COALESCE((SELECT aca.new_tariff_per_ton FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.new_tariff_per_ton IS NOT NULL AND aca.deleted_at IS NULL ORDER BY COALESCE(aca.effective_date, aca.amendment_date) DESC, aca.id DESC LIMIT 1), ac.tariff_per_ton) * ROUND(ac.estimated_quantity_tons / NULLIF(ac.contract_date_end - ac.contract_date_start + 1, 0) * (COALESCE((SELECT aca.new_contract_date_end FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_contract_date_end IS NOT NULL ORDER BY COALESCE(aca.effective_date, aca.amendment_date) DESC, aca.id DESC LIMIT 1), ac.contract_date_end) - ac.contract_date_start + 1), 2)) as effective_total_value,
+        ROUND(
+          COALESCE((SELECT aca.new_tariff_per_ton FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.new_tariff_per_ton IS NOT NULL AND aca.deleted_at IS NULL ORDER BY COALESCE(aca.effective_date, aca.amendment_date) DESC, aca.id DESC LIMIT 1), ac.tariff_per_ton)
+          * (
+            COALESCE(ac.contracted_quantity_tons, ac.estimated_quantity_tons, 0)
+            + COALESCE((SELECT SUM(aca.new_estimated_quantity_tons) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL AND aca.new_estimated_quantity_tons IS NOT NULL AND aca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')), 0)
+          )
+        , 2) as effective_total_value,
 
         (SELECT COUNT(*) FROM aerobic_contract_amendments aca WHERE aca.contract_id = ac.id AND aca.deleted_at IS NULL) as amendments_count
         
