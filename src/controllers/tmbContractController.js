@@ -628,6 +628,13 @@ export const createTMBContractAmendment = async (req, res) => {
 
     const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
 
+    // Sanitizare câmpuri dată — string gol → null (evită "inconsistent types" în PostgreSQL)
+    const safeDate = (v) => (v && typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+    const safeAmendmentDate = safeDate(amendment_date);
+    const safeEffectiveDate = safeDate(effective_date) || safeAmendmentDate;
+    const safeContractDateEnd = safeDate(new_contract_date_end);
+    const safeContractDateStart = safeDate(new_contract_date_start);
+
     // ======================================================================
     // PROPORTIONAL QUANTITY CALCULATION FOR EXTENSION
     // ======================================================================
@@ -691,11 +698,11 @@ export const createTMBContractAmendment = async (req, res) => {
     const values = [
       contractId,
       amendment_number,
-      amendment_date,
-      effective_date || amendment_date,
+      safeAmendmentDate,
+      safeEffectiveDate,
       toNullIfEmpty(new_tariff_per_ton),
       toNullIfEmpty(finalQuantity),
-      new_contract_date_end || null,
+      safeContractDateEnd,
       finalAmendmentType,
       changes_description || null,
       reason || null,
@@ -708,7 +715,7 @@ export const createTMBContractAmendment = async (req, res) => {
       toNullIfEmpty(new_indicator_recycling_percent),
       toNullIfEmpty(new_indicator_energy_recovery_percent),
       toNullIfEmpty(new_indicator_disposal_percent),
-      new_contract_date_start || null,
+      safeContractDateStart,
       req.user.id,
     ];
 
@@ -760,6 +767,13 @@ export const updateTMBContractAmendment = async (req, res) => {
 
     const finalAmendmentType = ensureAllowedAmendmentType(amendment_type);
 
+    // Sanitizare câmpuri dată — string gol → null
+    const safeDate = (v) => (v && typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+    const safeAmendmentDate = safeDate(amendment_date);
+    const safeEffectiveDate = safeDate(effective_date) || safeAmendmentDate;
+    const safeContractDateEnd = safeDate(new_contract_date_end);
+    const safeContractDateStart = safeDate(new_contract_date_start);
+
     const query = `
       UPDATE tmb_contract_amendments SET
         amendment_number = $1,
@@ -788,11 +802,11 @@ export const updateTMBContractAmendment = async (req, res) => {
 
     const values = [
       amendment_number,
-      amendment_date,
-      effective_date || amendment_date,
+      safeAmendmentDate,
+      safeEffectiveDate,
       toNullIfEmpty(new_tariff_per_ton),
       toNullIfEmpty(new_estimated_quantity_tons),
-      new_contract_date_end || null,
+      safeContractDateEnd,
       finalAmendmentType,
       changes_description || null,
       reason || null,
@@ -805,7 +819,7 @@ export const updateTMBContractAmendment = async (req, res) => {
       toNullIfEmpty(new_indicator_recycling_percent),
       toNullIfEmpty(new_indicator_energy_recovery_percent),
       toNullIfEmpty(new_indicator_disposal_percent),
-      new_contract_date_start || null,
+      safeContractDateStart,
       amendmentId,
       contractId,
     ];
