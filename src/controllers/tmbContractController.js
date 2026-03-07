@@ -774,6 +774,17 @@ export const updateTMBContractAmendment = async (req, res) => {
     const safeContractDateEnd = safeDate(new_contract_date_end);
     const safeContractDateStart = safeDate(new_contract_date_start);
 
+    // Nullificăm câmpurile care nu aparțin tipului selectat
+    // (previne date reziduale de la tipul anterior)
+    const isExtOrTerm = finalAmendmentType === 'PRELUNGIRE' || finalAmendmentType === 'INCETARE' || finalAmendmentType === 'AUTO_TERMINATION';
+    const isTariff = finalAmendmentType === 'MODIFICARE_TARIF';
+    const isQty = finalAmendmentType === 'MODIFICARE_CANTITATE';
+    const isManual = finalAmendmentType === 'MANUAL';
+
+    const cleanTariff = (isTariff || isManual) ? toNullIfEmpty(new_tariff_per_ton) : null;
+    const cleanQty = (isQty || isExtOrTerm || isManual) ? toNullIfEmpty(new_estimated_quantity_tons) : null;
+    const cleanDateEnd = (isExtOrTerm || isManual) ? safeContractDateEnd : null;
+
     const query = `
       UPDATE tmb_contract_amendments SET
         amendment_number = $1,
@@ -804,9 +815,9 @@ export const updateTMBContractAmendment = async (req, res) => {
       amendment_number,
       safeAmendmentDate,
       safeEffectiveDate,
-      toNullIfEmpty(new_tariff_per_ton),
-      toNullIfEmpty(new_estimated_quantity_tons),
-      safeContractDateEnd,
+      cleanTariff,
+      cleanQty,
+      cleanDateEnd,
       finalAmendmentType,
       changes_description || null,
       reason || null,
