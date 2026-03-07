@@ -778,7 +778,7 @@ export const updateTMBContractAmendment = async (req, res) => {
       UPDATE tmb_contract_amendments SET
         amendment_number = $1,
         amendment_date = $2,
-        effective_date = COALESCE($3, $2),
+        effective_date = $3,
         new_tariff_per_ton = $4,
         new_estimated_quantity_tons = $5,
         new_contract_date_end = $6,
