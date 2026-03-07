@@ -1214,7 +1214,7 @@ export const updateContractAmendment = async (req, res) => {
       UPDATE disposal_contract_amendments SET
         amendment_number = COALESCE($1, amendment_number),
         amendment_date = COALESCE($2, amendment_date),
-        effective_date = COALESCE($3, $2),
+        effective_date = $3,
         amendment_type = COALESCE($4, amendment_type),
         new_contract_date_end = $5,
         new_tariff_per_ton = $6,
