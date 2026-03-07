@@ -780,9 +780,9 @@ export const updateTMBContractAmendment = async (req, res) => {
         new_indicator_recycling_percent = $16,
         new_indicator_energy_recovery_percent = $17,
         new_indicator_disposal_percent = $18,
-        new_contract_date_start = $18,
+        new_contract_date_start = $19,
         updated_at = NOW()
-      WHERE id = $19 AND contract_id = $20 AND deleted_at IS NULL
+      WHERE id = $20 AND contract_id = $21 AND deleted_at IS NULL
       RETURNING *
     `;
 
