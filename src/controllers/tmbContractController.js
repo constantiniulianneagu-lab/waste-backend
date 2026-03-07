@@ -161,7 +161,7 @@ export const getTMBContracts = async (req, res) => {
              ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
             tc.estimated_quantity_tons
           )
-          / NULLIF(EXTRACT(DOY FROM DATE_TRUNC('year', tc.contract_date_start) + INTERVAL '1 year' - INTERVAL '1 day'), 0)
+          / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
           * (
               COALESCE(
                 (SELECT tca.new_contract_date_end
@@ -208,7 +208,7 @@ export const getTMBContracts = async (req, res) => {
               (SELECT tca.new_estimated_quantity_tons FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_estimated_quantity_tons IS NOT NULL ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
               tc.estimated_quantity_tons
             )
-            / NULLIF(EXTRACT(DOY FROM DATE_TRUNC('year', tc.contract_date_start) + INTERVAL '1 year' - INTERVAL '1 day'), 0)
+            / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
             * (
                 COALESCE(
                   (SELECT tca.new_contract_date_end FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_contract_date_end IS NOT NULL ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
@@ -277,7 +277,7 @@ export const getTMBContract = async (req, res) => {
              ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
             tc.estimated_quantity_tons
           )
-          / NULLIF(EXTRACT(DOY FROM DATE_TRUNC('year', tc.contract_date_start) + INTERVAL '1 year' - INTERVAL '1 day'), 0)
+          / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
           * (
               COALESCE(
                 (SELECT tca.new_contract_date_end FROM tmb_contract_amendments tca
@@ -303,7 +303,7 @@ export const getTMBContract = async (req, res) => {
                ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1),
               tc.estimated_quantity_tons
             )
-            / NULLIF(EXTRACT(DOY FROM DATE_TRUNC('year', tc.contract_date_start) + INTERVAL '1 year' - INTERVAL '1 day'), 0)
+            / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
             * (
                 COALESCE(
                   (SELECT tca.new_contract_date_end FROM tmb_contract_amendments tca
