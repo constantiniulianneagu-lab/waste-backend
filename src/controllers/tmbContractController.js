@@ -154,10 +154,8 @@ export const getTMBContracts = async (req, res) => {
         ) as effective_tariff,
 
         ROUND(
-          -- Cantitate originală (pe contract) calculată cu year_days_for_period
-          tc.estimated_quantity_tons
-          / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
-          * (tc.contract_date_end - tc.contract_date_start + 1)
+          -- Cantitate pe contract (stocată direct, nu mai necesită normalizare prin zile)
+          COALESCE(tc.estimated_quantity_tons, 0)
           -- + suma cantităților din toate actele adiționale de prelungire/încetare
           + COALESCE((
             SELECT SUM(tca.new_estimated_quantity_tons)
@@ -200,10 +198,8 @@ export const getTMBContracts = async (req, res) => {
           COALESCE((SELECT tca.new_tariff_per_ton FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1), tc.tariff_per_ton)
           *
           (
-            -- Cantitate originală + suma cantităților din prelungiri
-            tc.estimated_quantity_tons
-            / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
-            * (tc.contract_date_end - tc.contract_date_start + 1)
+            -- Cantitate pe contract (stocată direct) + suma cantităților din prelungiri
+            COALESCE(tc.estimated_quantity_tons, 0)
             + COALESCE((
               SELECT SUM(tca.new_estimated_quantity_tons)
               FROM tmb_contract_amendments tca
@@ -268,9 +264,7 @@ export const getTMBContract = async (req, res) => {
         ) as effective_tariff,
 
         ROUND(
-          tc.estimated_quantity_tons
-          / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
-          * (tc.contract_date_end - tc.contract_date_start + 1)
+          COALESCE(tc.estimated_quantity_tons, 0)
           + COALESCE((
             SELECT SUM(tca.new_estimated_quantity_tons)
             FROM tmb_contract_amendments tca
@@ -290,9 +284,7 @@ export const getTMBContract = async (req, res) => {
           )
           *
           (
-            tc.estimated_quantity_tons
-            / NULLIF(year_days_for_period(tc.contract_date_start, tc.contract_date_end), 0)
-            * (tc.contract_date_end - tc.contract_date_start + 1)
+            COALESCE(tc.estimated_quantity_tons, 0)
             + COALESCE((
               SELECT SUM(tca.new_estimated_quantity_tons)
               FROM tmb_contract_amendments tca
