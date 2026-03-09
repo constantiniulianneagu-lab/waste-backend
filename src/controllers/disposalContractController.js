@@ -669,23 +669,6 @@ export const createDisposalContract = async (req, res) => {
         contracted_quantity_tons || null,
       ]);
 
-      // AUTO-TERMINATION pentru disposal contracts
-      let autoTermination = null;
-      const sectorIds = sector_id ? [sector_id] : [];
-      if (service_start_date && sectorIds.length > 0) {
-        try {
-          autoTermination = await autoTerminateDisposalContracts({
-            sectorIds,
-            serviceStartDate: service_start_date,
-            newContractId: contractId,
-            newContractNumber: contract_number,
-            userId: req.user.id
-          });
-        } catch (e) {
-          console.error('Auto-termination error (disposal create):', e);
-        }
-      }
-
       await client.query("COMMIT");
 
       // Return the full contract
@@ -708,6 +691,23 @@ export const createDisposalContract = async (req, res) => {
       `,
         [contractId]
       );
+
+      // AUTO-TERMINATION după COMMIT — contractul nou e acum vizibil în DB
+      let autoTermination = null;
+      const sectorIds = sector_id ? [sector_id] : [];
+      if (service_start_date && sectorIds.length > 0) {
+        try {
+          autoTermination = await autoTerminateDisposalContracts({
+            sectorIds,
+            serviceStartDate: service_start_date,
+            newContractId: contractId,
+            newContractNumber: contract_number,
+            userId: req.user.id
+          });
+        } catch (e) {
+          console.error('Auto-termination error (disposal create):', e);
+        }
+      }
 
       res.status(201).json({
         success: true,
@@ -872,12 +872,14 @@ export const updateDisposalContract = async (req, res) => {
         );
       }
 
-      // AUTO-TERMINATION pentru disposal contracts
+      await client.query("COMMIT");
+
+      // AUTO-TERMINATION după COMMIT — contractul e acum vizibil în DB
       let autoTermination = null;
       const currentSectorIds = sector_id ? [sector_id] : prevSectorIds;
       const nextService = service_start_date || prevService;
 
-      const changed = 
+      const changed =
         (service_start_date && String(nextService) !== String(prevService)) ||
         (sector_id && currentSectorIds[0] !== prevSectorIds[0]);
 
@@ -894,8 +896,6 @@ export const updateDisposalContract = async (req, res) => {
           console.error('Auto-termination error (disposal update):', e);
         }
       }
-
-      await client.query("COMMIT");
 
       res.json({
         success: true,
