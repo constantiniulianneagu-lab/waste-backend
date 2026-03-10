@@ -889,6 +889,15 @@ export const createTMBContractAmendment = async (req, res) => {
     });
   } catch (error) {
     console.error('Create TMB amendment error:', error);
+
+    // Duplicate amendment number — constraint unique (inclusiv soft-deleted)
+    if (error.code === '23505' && error.constraint === 'tmb_contract_amendments_unique_number') {
+      return res.status(409).json({
+        success: false,
+        message: `Numărul de act adițional "${amendment_number}" există deja pentru acest contract. Folosiți un număr diferit.`,
+      });
+    }
+
     res.status(error.statusCode || 500).json({
       success: false,
       message: 'Eroare la crearea actului adițional TMB',
