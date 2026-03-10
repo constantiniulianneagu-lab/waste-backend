@@ -104,30 +104,35 @@ const SIMPLE_CONFIG = {
     contractTable: 'aerobic_contracts',
     amendmentTable: 'aerobic_contract_amendments',
     qtyCol: 'estimated_quantity_tons',
+    annualQtyCol: null, // nu are câmp annual separat
     typeLabel: 'aerob',
   },
   ANAEROBIC: {
     contractTable: 'anaerobic_contracts',
     amendmentTable: 'anaerobic_contract_amendments',
     qtyCol: 'estimated_quantity_tons',
+    annualQtyCol: null,
     typeLabel: 'anaerob',
   },
   TMB: {
     contractTable: 'tmb_contracts',
     amendmentTable: 'tmb_contract_amendments',
     qtyCol: 'estimated_quantity_tons',
+    annualQtyCol: 'estimated_quantity_annual', // baza corectă pentru recalcul
     typeLabel: 'TMB',
   },
   SORTING: {
     contractTable: 'sorting_operator_contracts',
     amendmentTable: 'sorting_operator_contract_amendments',
     qtyCol: 'estimated_quantity_tons',
+    annualQtyCol: null,
     typeLabel: 'sortare',
   },
   WASTE_COLLECTOR: {
     contractTable: 'waste_collector_contracts',
     amendmentTable: 'waste_collector_contract_amendments',
     qtyCol: null, // cantitățile sunt în waste_collector_contract_codes
+    annualQtyCol: null,
     typeLabel: 'colectare',
   },
 };
@@ -164,6 +169,8 @@ export const autoTerminateSimpleContracts = async ({
         contract_date_start,
         contract_date_end,
         ${config.qtyCol ? config.qtyCol : 'NULL::numeric'} AS old_qty,
+        -- Cantitatea anuală estimată — baza corectă pentru recalcul proporțional
+        ${config.annualQtyCol ? config.annualQtyCol : 'NULL::numeric'} AS annual_qty,
         -- Effective end date considering amendments
         COALESCE(
           (SELECT new_contract_date_end
@@ -219,16 +226,21 @@ export const autoTerminateSimpleContracts = async ({
       const dedup = await client.query(dedupQ, [oldContract.id, newContractId]);
       if (dedup.rowCount > 0) continue;
 
-      // 3) cantitate proporțională față de effective_date_end (inclusiv prelungiri)
+      // 3) cantitate proporțională bazată pe cantitatea anuală estimată / 365 × zile efective
+      // Formula: annual_qty / 365 × zile(contract_date_start → termination_date)
+      // Aceasta este corectă indiferent de prelungiri — reflectă întreaga durată reală a contractului
       let newQty = null;
-      const effectiveEnd = oldContract.effective_date_end || oldContract.contract_date_end;
-      if (config.qtyCol && oldContract.old_qty !== null && effectiveEnd) {
-        newQty = calculateProportionalQuantity({
-          originalQuantity: oldContract.old_qty,
-          originalStartDate: oldContract.contract_date_start,
-          originalEndDate: effectiveEnd,
-          newEndDate: terminationStr,
-        });
+      if (config.qtyCol && oldContract.annual_qty !== null) {
+        const actualDays = daysBetweenInclusive(oldContract.contract_date_start, terminationStr);
+        if (actualDays && actualDays > 0) {
+          newQty = round2(Number(oldContract.annual_qty) / 365 * actualDays);
+        }
+      } else if (config.qtyCol && oldContract.old_qty !== null) {
+        // Fallback: dacă nu există annual_qty, folosim proporțional față de 365 zile
+        const actualDays = daysBetweenInclusive(oldContract.contract_date_start, terminationStr);
+        if (actualDays && actualDays > 0) {
+          newQty = round2(Number(oldContract.old_qty) / 365 * actualDays);
+        }
       }
 
       const qtyDelta =
