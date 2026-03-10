@@ -2,6 +2,7 @@
 import bcrypt from 'bcryptjs';
 import pool from '../config/database.js';
 import { ROLES } from '../constants/roles.js';
+import { writeAuditLog } from '../utils/auditLog.js';
 
 // ============================================================================
 // HELPERS (AUTHZ)
@@ -452,6 +453,14 @@ const _createUserInternal = async (req, res, data) => {
 
   } catch (e) {
     await client.query('ROLLBACK');
+    console.error('_createUserInternal DB error:', {
+      message: e.message,
+      code: e.code,
+      detail: e.detail,
+      constraint: e.constraint,
+      table: e.table,
+      column: e.column,
+    });
     throw e;
   } finally {
     client.release();
