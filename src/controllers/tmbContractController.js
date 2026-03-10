@@ -11,6 +11,7 @@ import {
   getContractDataForProportional,
   getLastExtensionEndDate 
 } from '../utils/proportionalQuantity.js';
+import { deleteStorageFiles } from '../utils/storageUtils.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -154,17 +155,27 @@ export const getTMBContracts = async (req, res) => {
         ) as effective_tariff,
 
         ROUND(
-          -- Cantitate pe contract (stocată direct, nu mai necesită normalizare prin zile)
-          COALESCE(tc.estimated_quantity_tons, 0)
-          -- + suma cantităților din toate actele adiționale de prelungire/încetare
-          + COALESCE((
-            SELECT SUM(tca.new_estimated_quantity_tons)
-            FROM tmb_contract_amendments tca
-            WHERE tca.contract_id = tc.id
-              AND tca.deleted_at IS NULL
-              AND tca.new_estimated_quantity_tons IS NOT NULL
-              AND tca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
-          ), 0)
+          -- Dacă există AUTO_TERMINATION, cantitatea lui este totalul final
+          -- Dacă nu, adunăm: contract original + PRELUNGIRE + INCETARE
+          COALESCE(
+            (SELECT tca.new_estimated_quantity_tons
+             FROM tmb_contract_amendments tca
+             WHERE tca.contract_id = tc.id
+               AND tca.deleted_at IS NULL
+               AND tca.amendment_type = 'AUTO_TERMINATION'
+               AND tca.new_estimated_quantity_tons IS NOT NULL
+             ORDER BY tca.id DESC
+             LIMIT 1),
+            COALESCE(tc.estimated_quantity_tons, 0)
+            + COALESCE((
+                SELECT SUM(tca2.new_estimated_quantity_tons)
+                FROM tmb_contract_amendments tca2
+                WHERE tca2.contract_id = tc.id
+                  AND tca2.deleted_at IS NULL
+                  AND tca2.new_estimated_quantity_tons IS NOT NULL
+                  AND tca2.amendment_type IN ('PRELUNGIRE', 'INCETARE')
+              ), 0)
+          )
         , 2) as effective_quantity,
 
         COALESCE(
@@ -197,17 +208,24 @@ export const getTMBContracts = async (req, res) => {
         ROUND(
           COALESCE((SELECT tca.new_tariff_per_ton FROM tmb_contract_amendments tca WHERE tca.contract_id = tc.id AND tca.deleted_at IS NULL AND tca.new_tariff_per_ton IS NOT NULL ORDER BY COALESCE(tca.effective_date, tca.amendment_date) DESC, tca.id DESC LIMIT 1), tc.tariff_per_ton)
           *
-          (
-            -- Cantitate pe contract (stocată direct) + suma cantităților din prelungiri
+          COALESCE(
+            (SELECT tca.new_estimated_quantity_tons
+             FROM tmb_contract_amendments tca
+             WHERE tca.contract_id = tc.id
+               AND tca.deleted_at IS NULL
+               AND tca.amendment_type = 'AUTO_TERMINATION'
+               AND tca.new_estimated_quantity_tons IS NOT NULL
+             ORDER BY tca.id DESC
+             LIMIT 1),
             COALESCE(tc.estimated_quantity_tons, 0)
             + COALESCE((
-              SELECT SUM(tca.new_estimated_quantity_tons)
-              FROM tmb_contract_amendments tca
-              WHERE tca.contract_id = tc.id
-                AND tca.deleted_at IS NULL
-                AND tca.new_estimated_quantity_tons IS NOT NULL
-                AND tca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
-            ), 0)
+                SELECT SUM(tca2.new_estimated_quantity_tons)
+                FROM tmb_contract_amendments tca2
+                WHERE tca2.contract_id = tc.id
+                  AND tca2.deleted_at IS NULL
+                  AND tca2.new_estimated_quantity_tons IS NOT NULL
+                  AND tca2.amendment_type IN ('PRELUNGIRE', 'INCETARE')
+              ), 0)
           )
         , 2) as effective_total_value,
 
@@ -264,15 +282,25 @@ export const getTMBContract = async (req, res) => {
         ) as effective_tariff,
 
         ROUND(
-          COALESCE(tc.estimated_quantity_tons, 0)
-          + COALESCE((
-            SELECT SUM(tca.new_estimated_quantity_tons)
-            FROM tmb_contract_amendments tca
-            WHERE tca.contract_id = tc.id
-              AND tca.deleted_at IS NULL
-              AND tca.new_estimated_quantity_tons IS NOT NULL
-              AND tca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
-          ), 0)
+          COALESCE(
+            (SELECT tca.new_estimated_quantity_tons
+             FROM tmb_contract_amendments tca
+             WHERE tca.contract_id = tc.id
+               AND tca.deleted_at IS NULL
+               AND tca.amendment_type = 'AUTO_TERMINATION'
+               AND tca.new_estimated_quantity_tons IS NOT NULL
+             ORDER BY tca.id DESC
+             LIMIT 1),
+            COALESCE(tc.estimated_quantity_tons, 0)
+            + COALESCE((
+                SELECT SUM(tca2.new_estimated_quantity_tons)
+                FROM tmb_contract_amendments tca2
+                WHERE tca2.contract_id = tc.id
+                  AND tca2.deleted_at IS NULL
+                  AND tca2.new_estimated_quantity_tons IS NOT NULL
+                  AND tca2.amendment_type IN ('PRELUNGIRE', 'INCETARE')
+              ), 0)
+          )
         , 2) as effective_quantity,
 
         ROUND(
@@ -283,16 +311,24 @@ export const getTMBContract = async (req, res) => {
             tc.tariff_per_ton
           )
           *
-          (
+          COALESCE(
+            (SELECT tca.new_estimated_quantity_tons
+             FROM tmb_contract_amendments tca
+             WHERE tca.contract_id = tc.id
+               AND tca.deleted_at IS NULL
+               AND tca.amendment_type = 'AUTO_TERMINATION'
+               AND tca.new_estimated_quantity_tons IS NOT NULL
+             ORDER BY tca.id DESC
+             LIMIT 1),
             COALESCE(tc.estimated_quantity_tons, 0)
             + COALESCE((
-              SELECT SUM(tca.new_estimated_quantity_tons)
-              FROM tmb_contract_amendments tca
-              WHERE tca.contract_id = tc.id
-                AND tca.deleted_at IS NULL
-                AND tca.new_estimated_quantity_tons IS NOT NULL
-                AND tca.amendment_type IN ('PRELUNGIRE', 'INCETARE', 'AUTO_TERMINATION')
-            ), 0)
+                SELECT SUM(tca2.new_estimated_quantity_tons)
+                FROM tmb_contract_amendments tca2
+                WHERE tca2.contract_id = tc.id
+                  AND tca2.deleted_at IS NULL
+                  AND tca2.new_estimated_quantity_tons IS NOT NULL
+                  AND tca2.amendment_type IN ('PRELUNGIRE', 'INCETARE')
+              ), 0)
           )
         , 2) as effective_total_value,
 
@@ -618,20 +654,79 @@ export const deleteTMBContract = async (req, res) => {
   try {
     const { contractId } = req.params;
 
-    const query = `
-      UPDATE tmb_contracts
-      SET deleted_at = NOW()
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING id
-    `;
+    // 1. Preia fișierele contractului (contract PDF + ordin de începere)
+    const contractData = await pool.query(
+      `SELECT id, contract_file_url, service_order_file_url
+       FROM tmb_contracts
+       WHERE id = $1 AND deleted_at IS NULL`,
+      [contractId]
+    );
 
-    const result = await pool.query(query, [contractId]);
-
-    if (result.rows.length === 0) {
+    if (contractData.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Contract TMB negăsit' });
     }
 
-    res.json({ success: true, message: 'Contract TMB șters cu succes' });
+    const contract = contractData.rows[0];
+
+    // 2. Preia toate actele adiționale cu fișierele lor
+    const amendmentsData = await pool.query(
+      `SELECT id, amendment_file_url
+       FROM tmb_contract_amendments
+       WHERE contract_id = $1 AND deleted_at IS NULL`,
+      [contractId]
+    );
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 3. Soft-delete contractul
+      await client.query(
+        `UPDATE tmb_contracts SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
+        [contractId]
+      );
+
+      // 4. Soft-delete toate actele adiționale
+      if (amendmentsData.rows.length > 0) {
+        await client.query(
+          `UPDATE tmb_contract_amendments
+           SET deleted_at = NOW()
+           WHERE contract_id = $1 AND deleted_at IS NULL`,
+          [contractId]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // 5. Șterge fișierele din Supabase Storage (după commit DB — non-blocking)
+    const contractFileUrls = [
+      contract.contract_file_url,
+      contract.service_order_file_url,
+    ];
+    const amendmentFileUrls = amendmentsData.rows
+      .map(a => a.amendment_file_url)
+      .filter(Boolean);
+
+    // Toate fișierele TMB sunt în bucket-ul 'tmb-contracts'
+    await deleteStorageFiles('tmb-contracts', [
+      ...contractFileUrls,
+      ...amendmentFileUrls,
+    ]);
+
+    const totalDeleted = 1 + amendmentsData.rows.length;
+    const totalFiles = contractFileUrls.filter(Boolean).length + amendmentFileUrls.length;
+
+    res.json({
+      success: true,
+      message: `Contract TMB șters cu succes (${amendmentsData.rows.length} acte adiționale, ${totalFiles} fișiere)`,
+    });
+
   } catch (error) {
     console.error('Delete TMB contract error:', error);
     res.status(500).json({ success: false, message: 'Eroare la ștergerea contractului TMB' });
@@ -926,17 +1021,31 @@ export const deleteTMBContractAmendment = async (req, res) => {
   try {
     const { contractId, amendmentId } = req.params;
 
-    const query = `
-      UPDATE tmb_contract_amendments
-      SET deleted_at = NOW()
-      WHERE id = $1 AND contract_id = $2 AND deleted_at IS NULL
-      RETURNING id
-    `;
+    // 1. Preia fișierul actului adițional înainte de ștergere
+    const amendData = await pool.query(
+      `SELECT id, amendment_file_url
+       FROM tmb_contract_amendments
+       WHERE id = $1 AND contract_id = $2 AND deleted_at IS NULL`,
+      [amendmentId, contractId]
+    );
 
-    const result = await pool.query(query, [amendmentId, contractId]);
-
-    if (result.rows.length === 0) {
+    if (amendData.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Act adițional TMB negăsit' });
+    }
+
+    const amendment = amendData.rows[0];
+
+    // 2. Soft-delete actul adițional
+    await pool.query(
+      `UPDATE tmb_contract_amendments
+       SET deleted_at = NOW()
+       WHERE id = $1 AND contract_id = $2 AND deleted_at IS NULL`,
+      [amendmentId, contractId]
+    );
+
+    // 3. Șterge fișierul din Storage dacă există
+    if (amendment.amendment_file_url) {
+      await deleteStorageFiles('tmb-contracts', [amendment.amendment_file_url]);
     }
 
     res.json({ success: true, message: 'Act adițional TMB șters cu succes' });
