@@ -266,6 +266,7 @@ export const getRecyclingTickets = async (req, res) => {
     // Suppliers & Clients pentru cards
     const suppliersSql = `
       SELECT 
+        sup.id as supplier_id,
         sup.name,
         wc.code as waste_code,
         COALESCE(SUM(t.delivered_quantity_tons), 0) as total_tons
@@ -273,13 +274,14 @@ export const getRecyclingTickets = async (req, res) => {
       JOIN institutions sup ON t.supplier_id = sup.id
       LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${f.whereSql}
-      GROUP BY sup.name, wc.code
+      GROUP BY sup.id, sup.name, wc.code
       ORDER BY total_tons DESC
     `;
     const suppliersRes = await pool.query(suppliersSql, f.params);
 
     const clientsSql = `
       SELECT 
+        rec.id as recipient_id,
         rec.name,
         wc.code as waste_code,
         COALESCE(SUM(t.accepted_quantity_tons), 0) as total_tons
@@ -287,7 +289,7 @@ export const getRecyclingTickets = async (req, res) => {
       JOIN institutions rec ON t.recipient_id = rec.id
       LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${f.whereSql}
-      GROUP BY rec.name, wc.code
+      GROUP BY rec.id, rec.name, wc.code
       ORDER BY total_tons DESC
     `;
     const clientsRes = await pool.query(clientsSql, f.params);
@@ -306,11 +308,13 @@ export const getRecyclingTickets = async (req, res) => {
           date_range: { from: f.startDate, to: f.endDate },
         },
         suppliers: suppliersRes.rows.map(s => ({
+          supplier_id: s.supplier_id,
           name: s.name,
           code: s.waste_code,
           total_tons: Number(s.total_tons || 0),
         })),
         clients: clientsRes.rows.map(c => ({
+          recipient_id: c.recipient_id,
           name: c.name,
           code: c.waste_code,
           total_tons: Number(c.total_tons || 0),

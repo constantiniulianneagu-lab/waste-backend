@@ -260,6 +260,7 @@ export const getTmbTickets = async (req, res) => {
     // Suppliers & Operators pentru cards
     const suppliersSql = `
       SELECT 
+        sup.id as supplier_id,
         sup.name,
         wc.code as waste_code,
         COALESCE(SUM(t.net_weight_tons), 0) as total_tons
@@ -267,19 +268,20 @@ export const getTmbTickets = async (req, res) => {
       JOIN institutions sup ON t.supplier_id = sup.id
       LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${f.whereSql}
-      GROUP BY sup.name, wc.code
+      GROUP BY sup.id, sup.name, wc.code
       ORDER BY total_tons DESC
     `;
     const suppliersRes = await pool.query(suppliersSql, f.params);
 
     const operatorsSql = `
       SELECT 
+        op.id as operator_id,
         op.name,
         COALESCE(SUM(t.net_weight_tons), 0) as total_tons
       FROM waste_tickets_tmb t
       JOIN institutions op ON t.operator_id = op.id
       WHERE ${f.whereSql}
-      GROUP BY op.name
+      GROUP BY op.id, op.name
       ORDER BY total_tons DESC
     `;
     const operatorsRes = await pool.query(operatorsSql, f.params);
@@ -301,11 +303,13 @@ export const getTmbTickets = async (req, res) => {
           date_range: { from: f.startDate, to: f.endDate },
         },
         suppliers: suppliersRes.rows.map(s => ({
+          supplier_id: s.supplier_id,
           name: s.name,
           code: s.waste_code,
           total_tons: Number(s.total_tons || 0),
         })),
         operators: operatorsRes.rows.map(o => ({
+          operator_id: o.operator_id,
           name: o.name,
           total_tons: Number(o.total_tons || 0),
         })),
