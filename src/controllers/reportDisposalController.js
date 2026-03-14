@@ -277,6 +277,21 @@ export const getDisposalTickets = async (req, res) => {
     `;
     const clientsRes = await pool.query(clientsSql, f.params);
 
+    // Coduri deșeuri unice din perioada filtrată
+    const wasteCodesSql = `
+      SELECT
+        wc.id::text as waste_code_id,
+        wc.code,
+        wc.description,
+        COALESCE(SUM(t.delivered_quantity_tons), 0) as total_tons
+      FROM waste_tickets_disposal t
+      JOIN waste_codes wc ON t.waste_code_id = wc.id
+      WHERE ${f.whereSql}
+      GROUP BY wc.id, wc.code, wc.description
+      ORDER BY total_tons DESC
+    `;
+    const wasteCodesRes = await pool.query(wasteCodesSql, f.params);
+
     return res.json({
       success: true,
       data: {
@@ -306,6 +321,12 @@ export const getDisposalTickets = async (req, res) => {
           sector_id: s.sector_id,
           sector_number: s.sector_number,
           sector_name: s.sector_name,
+        })),
+        waste_codes: wasteCodesRes.rows.map(wc => ({
+          id: wc.waste_code_id,
+          code: wc.code,
+          description: wc.description,
+          total_tons: Number(wc.total_tons || 0),
         })),
         available_years: availableYears,
       },
