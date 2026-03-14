@@ -186,9 +186,9 @@ export const login = async (req, res) => {
       });
     }
 
-    // Parolă corectă — resetează contorul
+    // Parolă corectă — resetează contorul + actualizează last_login_at
     await pool.query(
-      `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1`,
+      `UPDATE users SET failed_login_attempts = 0, locked_until = NULL, last_login_at = NOW() WHERE id = $1`,
       [user.id]
     );
 

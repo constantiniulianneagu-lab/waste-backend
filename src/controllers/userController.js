@@ -1,8 +1,31 @@
 // src/controllers/userController.js
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import pool from '../config/database.js';
 import { ROLES } from '../constants/roles.js';
 import { writeAuditLog } from '../utils/auditLog.js';
+import { sendWelcomeEmail } from '../services/emailService.js';
+
+// ── Generator parolă temporară ──────────────────────────────────────────────
+const generateTemporaryPassword = () => {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghjkmnpqrstuvwxyz';
+  const digits = '23456789';
+  const special = '!@#$%';
+  const all = upper + lower + digits + special;
+  // Garantăm cel puțin un caracter din fiecare categorie
+  const mandatory = [
+    upper[randomBytes(1)[0] % upper.length],
+    lower[randomBytes(1)[0] % lower.length],
+    digits[randomBytes(1)[0] % digits.length],
+    special[randomBytes(1)[0] % special.length],
+  ];
+  const rest = Array.from({ length: 8 }, () => all[randomBytes(1)[0] % all.length]);
+  // Amestecăm
+  return [...mandatory, ...rest]
+    .sort(() => randomBytes(1)[0] - 128)
+    .join('');
+};
 
 // ============================================================================
 // HELPERS (AUTHZ)
@@ -154,6 +177,9 @@ export const getAllUsers = async (req, res) => {
         u.is_active,
         u.created_at,
         u.updated_at,
+        u.credentials_sent_at,
+        u.last_login_at,
+        u.must_change_password,
         
         jsonb_build_object(
           'id', i.id,
@@ -379,13 +405,13 @@ export const createUser = async (req, res) => {
 };
 
 const _createUserInternal = async (req, res, data) => {
-  const { email, password, firstName, lastName, phone, position, department, role, isActive, institutionIds } = data;
+  const { email, firstName, lastName, phone, position, department, role, isActive, institutionIds } = data;
 
-  // Validate required
-  if (!email || !password || !firstName || !lastName || !role || !Array.isArray(institutionIds) || institutionIds.length === 0) {
+  // Validate required — parola NU mai vine din frontend, se generează automat
+  if (!email || !firstName || !lastName || !role || !Array.isArray(institutionIds) || institutionIds.length === 0) {
     return res.status(400).json({
       success: false,
-      message: 'Câmpuri lipsă: email, password, firstName, lastName, role, institutionIds[]',
+      message: 'Câmpuri lipsă: email, firstName, lastName, role, institutionIds[]',
     });
   }
 
@@ -395,31 +421,31 @@ const _createUserInternal = async (req, res, data) => {
     return res.status(409).json({ success: false, message: 'Email deja existent' });
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  // Generăm parola temporară automat
+  const temporaryPassword = generateTemporaryPassword();
+  const passwordHash = await bcrypt.hash(temporaryPassword, 10);
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const userResult = await client.query(
-      `
-      INSERT INTO users (email, password_hash, first_name, last_name, phone, position, department, role, is_active)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-      RETURNING id, email, first_name, last_name, role, is_active
-      `,
+      `INSERT INTO users (email, password_hash, first_name, last_name, phone, position, department, role, is_active, must_change_password)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true)
+       RETURNING id, email, first_name, last_name, role, is_active, must_change_password`,
       [email, passwordHash, firstName, lastName, phone || null, position || null, department || null, role, isActive !== false]
     );
 
     const newUser = userResult.rows[0];
 
-    // Link to first institution (your schema has UNIQUE user_id in user_institutions)
+    // Link to institution
     await client.query(
       `INSERT INTO user_institutions (user_id, institution_id) VALUES ($1,$2)
        ON CONFLICT (user_id) DO UPDATE SET institution_id = EXCLUDED.institution_id, updated_at = CURRENT_TIMESTAMP`,
       [newUser.id, institutionIds[0]]
     );
 
-    // Ensure permissions row exists (optional default)
+    // Permissions row default
     await client.query(
       `INSERT INTO user_permissions (user_id, can_edit_data, access_type, sector_id, operator_institution_id)
        VALUES ($1,false,NULL,NULL,NULL)
@@ -429,7 +455,7 @@ const _createUserInternal = async (req, res, data) => {
 
     await client.query('COMMIT');
 
-    // Audit log — user creat
+    // Audit log
     await writeAuditLog({
       userId: req.user?.id ?? null,
       action: 'USER_CREATED',
@@ -437,33 +463,106 @@ const _createUserInternal = async (req, res, data) => {
       entityId: newUser.id,
       ip: req.ip,
       userAgent: req.headers?.['user-agent'],
-      details: {
-        email: newUser.email,
-        role: newUser.role,
-        createdBy: req.user?.id,
-        createdByRole: req.user?.role,
-      },
+      details: { email: newUser.email, role: newUser.role, createdBy: req.user?.id },
     });
 
     return res.status(201).json({
       success: true,
       message: 'Utilizator creat cu succes',
-      data: { user: newUser },
+      data: {
+        user: newUser,
+        temporaryPassword, // returnat frontend-ului pentru afișare/email manual dacă e nevoie
+      },
     });
 
   } catch (e) {
     await client.query('ROLLBACK');
-    console.error('_createUserInternal DB error:', {
-      message: e.message,
-      code: e.code,
-      detail: e.detail,
-      constraint: e.constraint,
-      table: e.table,
-      column: e.column,
-    });
+    console.error('_createUserInternal DB error:', e.message);
     throw e;
   } finally {
     client.release();
+  }
+};
+
+// ── SEND CREDENTIALS ────────────────────────────────────────────────────────
+export const sendCredentials = async (req, res) => {
+  try {
+    const targetUserId = Number(req.params.id);
+
+    // ADMIN_INSTITUTION poate trimite credențiale doar pentru userii din instituția sa
+    if (isInstitutionAdmin(req)) {
+      const check = await assertInstitutionAdminCanManageTarget(req, targetUserId);
+      if (!check.ok) return res.status(check.status).json({ success: false, message: check.message });
+    }
+
+    // Obținem datele userului
+    const result = await pool.query(
+      `SELECT id, email, first_name, last_name, is_active, deleted_at
+       FROM users WHERE id = $1 AND deleted_at IS NULL`,
+      [targetUserId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Utilizator negăsit' });
+    }
+
+    const user = result.rows[0];
+
+    if (!user.is_active) {
+      return res.status(400).json({ success: false, message: 'Contul este dezactivat' });
+    }
+
+    // Generăm o parolă temporară nouă
+    const temporaryPassword = generateTemporaryPassword();
+    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+
+    // Actualizăm parola + must_change_password + credentials_sent_at
+    await pool.query(
+      `UPDATE users
+       SET password_hash = $1,
+           must_change_password = true,
+           credentials_sent_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $2`,
+      [passwordHash, targetUserId]
+    );
+
+    // Trimitem emailul
+    try {
+      await sendWelcomeEmail({
+        to: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        email: user.email,
+        temporaryPassword,
+      });
+    } catch (emailErr) {
+      console.error('[sendCredentials] Eroare email:', emailErr.message);
+      return res.status(500).json({
+        success: false,
+        message: 'Parola a fost resetată dar emailul nu a putut fi trimis. Verificați configurarea Resend.',
+      });
+    }
+
+    await writeAuditLog({
+      userId: req.user?.id ?? null,
+      action: 'CREDENTIALS_SENT',
+      entityType: 'user',
+      entityId: targetUserId,
+      ip: req.ip,
+      userAgent: req.headers?.['user-agent'],
+      details: { targetEmail: user.email, sentBy: req.user?.id },
+    });
+
+    return res.json({
+      success: true,
+      message: `Credențiale trimise la ${user.email}`,
+      data: { credentials_sent_at: new Date().toISOString() },
+    });
+
+  } catch (error) {
+    console.error('sendCredentials error:', error);
+    res.status(500).json({ success: false, message: 'Eroare la trimiterea credențialelor' });
   }
 };
 

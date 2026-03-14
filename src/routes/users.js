@@ -10,6 +10,7 @@ import {
   getUserProfile,
   updateUserProfile,
   getProfileOperators,
+  sendCredentials,
 } from '../controllers/userController.js';
 
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
@@ -66,6 +67,13 @@ router.delete(
   '/:id',
   authorizeRoles(ROLES.PLATFORM_ADMIN, ROLES.ADMIN_INSTITUTION),
   deleteUser
+);
+
+// Trimite / retrimite credențiale la utilizator
+router.post(
+  '/:id/send-credentials',
+  authorizeRoles(ROLES.PLATFORM_ADMIN, ROLES.ADMIN_INSTITUTION),
+  sendCredentials
 );
 
 export default router;
