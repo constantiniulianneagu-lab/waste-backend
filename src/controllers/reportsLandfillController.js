@@ -271,6 +271,7 @@ export const getLandfillReports = async (req, res) => {
     // ========================================================================
     const suppliersSql = `
       SELECT 
+        i.id as supplier_id,
         i.name,
         wc.code as waste_code,
         COALESCE(SUM(t.net_weight_tons), 0) as total_tons
@@ -278,7 +279,7 @@ export const getLandfillReports = async (req, res) => {
       JOIN institutions i ON t.supplier_id = i.id
       LEFT JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${filters.whereSql}
-      GROUP BY i.name, wc.code
+      GROUP BY i.id, i.name, wc.code
       ORDER BY total_tons DESC
     `;
     const suppliersRes = await pool.query(suppliersSql, filters.params);
@@ -364,6 +365,7 @@ export const getLandfillReports = async (req, res) => {
         })),
         waste_codes: wasteCodesWithPercent,
         suppliers: suppliersRes.rows.map(s => ({
+          supplier_id: s.supplier_id,
           name: s.name,
           code: s.waste_code,
           total_tons: Number(s.total_tons || 0),
