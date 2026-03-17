@@ -245,7 +245,6 @@ export const getLandfillReports = async (req, res) => {
     // ========================================================================
     const wasteCodesSql = `
       SELECT
-        wc.id::text as waste_code_id,
         wc.code as waste_code,
         wc.description as waste_description,
         COALESCE(SUM(t.net_weight_tons), 0) as total_tons,
@@ -253,13 +252,14 @@ export const getLandfillReports = async (req, res) => {
       FROM waste_tickets_landfill t
       JOIN waste_codes wc ON t.waste_code_id = wc.id
       WHERE ${filters.whereSql}
-      GROUP BY wc.id, wc.code, wc.description
+      GROUP BY wc.code, wc.description
       ORDER BY total_tons DESC
     `;
     const wasteCodesRes = await pool.query(wasteCodesSql, filters.params);
 
     const totalTons = Number(summaryRes.rows[0]?.total_tons || 0);
     const wasteCodesWithPercent = wasteCodesRes.rows.map(row => ({
+      id: row.waste_code_id,   // ✅ UUID pentru filtru dropdown
       code: row.waste_code,
       description: row.waste_description,
       total_tons: Number(row.total_tons || 0),
