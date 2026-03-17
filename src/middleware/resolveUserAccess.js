@@ -47,6 +47,7 @@ export const resolveUserAccess = async (req, res, next) => {
 
     // Helper: fetch sectors mapped to institution (if institution exists)
     let institutionSectorIds = [];
+    let institutionSectorNumbers = [];
     if (institutionId) {
       const sectorsQ = await pool.query(
         `SELECT s.id, s.sector_number
@@ -59,6 +60,7 @@ export const resolveUserAccess = async (req, res, next) => {
         [institutionId]
       );
       institutionSectorIds = sectorsQ.rows.map((r) => r.id);
+      institutionSectorNumbers = sectorsQ.rows.map((r) => r.sector_number);
     }
 
     // PMB detection (best effort):
@@ -75,6 +77,7 @@ export const resolveUserAccess = async (req, res, next) => {
         sectorIdsAll,
         sectorIds: sectorIdsAll, // backward compatible
         institutionSectorIds: sectorIdsAll,
+        institutionSectorNumbers: [1,2,3,4,5,6],
         visibleSectorIds: sectorIdsAll,
         institutionId: institutionId || null,
         institutionName: institutionName || "ADIGIDMB",
@@ -108,6 +111,7 @@ export const resolveUserAccess = async (req, res, next) => {
         sectorIdsAll,
         sectorIds: sectorIdsAll, // backward compatible
         institutionSectorIds: sectorIdsAll,
+        institutionSectorNumbers: [1,2,3,4,5,6],
         visibleSectorIds: sectorIdsAll, // for filtering queries
         institutionId,
         institutionName: institutionName ?? "Autoritate Publică",
@@ -148,6 +152,7 @@ export const resolveUserAccess = async (req, res, next) => {
           sectorIdsAll,
           sectorIds: sectorIdsAll,
           institutionSectorIds,        // Institution's mapped sectors (all 6 for PMB)
+          institutionSectorNumbers,      // sector_number values (1-6) for frontend filters
           visibleSectorIds: sectorIdsAll, // Always see all sectors
           institutionId,
           institutionName,
@@ -183,6 +188,7 @@ export const resolveUserAccess = async (req, res, next) => {
           sectorIdsAll,
           sectorIds: institutionSectorIds, // Only their sector(s)
           institutionSectorIds,
+          institutionSectorNumbers,
           visibleSectorIds: institutionSectorIds, // Filter by their sector
           institutionId,
           institutionName,
